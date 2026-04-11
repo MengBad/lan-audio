@@ -1,0 +1,29 @@
+﻿[package]
+name = "lan_audio_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+futures-util.workspace = true
+lan_audio_protocol = { path = "../lan_audio_protocol" }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[features]
+default = []
+real-opus = []
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_Media_Audio",
+] }

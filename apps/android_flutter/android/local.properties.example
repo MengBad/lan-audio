@@ -1,0 +1,5 @@
+﻿# Example local.properties (do not commit real SDK paths)
+# Copy to local.properties and adjust path.
+
+sdk.dir=C:\\Android\\Sdk
+flutter.sdk=C:\\src\\flutter

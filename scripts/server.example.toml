@@ -1,0 +1,20 @@
+﻿# Example Config (for future parser integration)
+
+server_name = "windows-desktop"
+discovery_bind = "0.0.0.0:39990"
+discovery_broadcast = "255.255.255.255:39990"
+ws_bind = "0.0.0.0:39991"
+udp_bind = "0.0.0.0:39992"
+sample_rate = 48000
+channels = 2
+frames_per_packet = 480
+packet_interval_ms = 10
+audio_source = "synthetic" # synthetic | windows_loopback
+audio_source_fallback_to_synthetic = true
+synthetic_signal = "sine" # sine | silence
+synthetic_frequency_hz = 440.0
+capture_debug_dump_wav = false
+capture_debug_dump_seconds = 5
+capture_debug_dump_dir = "debug_captures"
+
+# TODO(config): load from this file in ServerConfig.

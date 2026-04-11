@@ -1,0 +1,28 @@
+﻿{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LAN Audio Desktop",
+  "version": "0.1.0",
+  "identifier": "com.example.lanaudio.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LAN Audio Desktop MVP",
+        "width": 900,
+        "height": 620
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}

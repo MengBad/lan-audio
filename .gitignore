@@ -1,0 +1,29 @@
+﻿# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub/
+build/
+
+# Tauri / frontend
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug audio dumps
+debug_captures/
+
+# Android crash dumps
+*.hprof
+apps/android_flutter/android/.gradle/

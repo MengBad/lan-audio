@@ -1,0 +1,43 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LAN Audio Desktop MVP</title>
+    <style>
+      body { font-family: Segoe UI, sans-serif; padding: 20px; background: #f6f8fa; }
+      .card { background: white; border-radius: 8px; padding: 16px; max-width: 720px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+      button { margin-right: 10px; padding: 8px 14px; }
+      pre { background: #111; color: #9fe870; padding: 12px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>LAN Audio Desktop MVP</h2>
+      <p>当前仅提供最小调试壳。真实系统音频采集仍为 TODO。</p>
+      <button id="refresh">刷新 Metrics</button>
+      <button id="stop">停止服务</button>
+      <pre id="out">loading...</pre>
+    </div>
+    <script>
+      const out = document.getElementById('out');
+      async function invoke(cmd) {
+        return window.__TAURI__.core.invoke(cmd);
+      }
+      async function refresh() {
+        try {
+          const metrics = await invoke('get_metrics');
+          out.textContent = JSON.stringify(metrics, null, 2);
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+      document.getElementById('refresh').addEventListener('click', refresh);
+      document.getElementById('stop').addEventListener('click', async () => {
+        await invoke('stop_service');
+        await refresh();
+      });
+      refresh();
+    </script>
+  </body>
+</html>

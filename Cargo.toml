@@ -1,0 +1,29 @@
+﻿[workspace]
+members = [
+  "crates/lan_audio_protocol",
+  "crates/lan_audio_server",
+  "apps/desktop/src-tauri"
+]
+default-members = [
+  "crates/lan_audio_protocol",
+  "crates/lan_audio_server"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["LAN Audio MVP Team"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "time", "signal"] }
+tokio-tungstenite = "0.23"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
