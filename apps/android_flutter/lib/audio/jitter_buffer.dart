@@ -1,4 +1,4 @@
-﻿import 'dart:collection';
+import 'dart:collection';
 import 'dart:typed_data';
 
 import 'las_packet.dart';
@@ -44,10 +44,14 @@ class JitterBuffer {
     _playoutStarted = false;
     _expectedSequence = null;
     stats.bufferedFrames = 0;
+    stats.underrunCount = 0;
+    stats.droppedFrames = 0;
+    stats.lateFrames = 0;
   }
 
   void push(LasPacket packet) {
-    _frameDurationMs = packet.frameDurationMs <= 0 ? 10 : packet.frameDurationMs;
+    _frameDurationMs =
+        packet.frameDurationMs <= 0 ? 10 : packet.frameDurationMs;
     final frame = PcmFrame(
       sequence: packet.sequence,
       payload: packet.payload,
@@ -61,7 +65,8 @@ class JitterBuffer {
       return;
     }
 
-    if (_expectedSequence != null && _isOlder(frame.sequence, _expectedSequence!)) {
+    if (_expectedSequence != null &&
+        _isOlder(frame.sequence, _expectedSequence!)) {
       stats.lateFrames += 1;
       return;
     }
@@ -88,22 +93,51 @@ class JitterBuffer {
     }
 
     final frame = _frames.remove(expected);
-    if (frame == null) {
+    if (frame != null) {
+      _expectedSequence = _nextSeq(expected);
+      stats.bufferedFrames = _frames.length;
+      return frame;
+    }
+
+    // Recover from sequence hole by jumping to the oldest available frame,
+    // instead of spinning forever on a missing exact sequence.
+    final oldestKey = _frames.firstKey();
+    if (oldestKey == null) {
+      stats.underrunCount += 1;
+      // When the queue runs dry, do not keep advancing the expected sequence.
+      // Advancing here makes later valid packets look "late" forever after a
+      // short network/UI scheduling gap. Reset to the initial buffering state
+      // and let the next packets establish a fresh playout point.
+      _playoutStarted = false;
+      _expectedSequence = null;
+      stats.bufferedFrames = _frames.length;
+      return null;
+    }
+
+    final gap = (oldestKey - expected) & 0xFFFFFFFF;
+    if (gap > 0) {
+      stats.droppedFrames += gap;
+    }
+    final recovered = _frames.remove(oldestKey);
+    if (recovered == null) {
       stats.underrunCount += 1;
       _expectedSequence = _nextSeq(expected);
       stats.bufferedFrames = _frames.length;
       return null;
     }
 
-    _expectedSequence = _nextSeq(expected);
+    _expectedSequence = _nextSeq(oldestKey);
     stats.bufferedFrames = _frames.length;
-    return frame;
+    return recovered;
   }
 
   int get bufferedMs => _frames.length * _frameDurationMs;
 
+  int get queuedFrames => _frames.length;
+
   void _trimIfNeeded() {
-    final maxFrames = (maxBufferMs / _frameDurationMs).ceil().clamp(8, 2000) as int;
+    final maxFrames =
+        (maxBufferMs / _frameDurationMs).ceil().clamp(8, 2000) as int;
     while (_frames.length > maxFrames) {
       _frames.remove(_frames.firstKey());
       stats.droppedFrames += 1;

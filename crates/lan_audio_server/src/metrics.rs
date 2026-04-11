@@ -1,4 +1,4 @@
-﻿use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Default)]
@@ -93,7 +93,8 @@ impl Metrics {
     }
 
     pub fn inc_capture_non_silent_frames(&self) {
-        self.capture_non_silent_frames.fetch_add(1, Ordering::Relaxed);
+        self.capture_non_silent_frames
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_capture_no_packet_count(&self) {

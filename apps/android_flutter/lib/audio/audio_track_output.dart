@@ -1,4 +1,4 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
@@ -23,6 +23,13 @@ class AudioTrackOutput {
 
   Future<void> writePcm16(Uint8List bytes) async {
     await _channel.invokeMethod('writePcm16', bytes);
+  }
+
+  Future<Map<String, int>> stats() async {
+    final raw = await _channel.invokeMapMethod<String, dynamic>('stats');
+    final values = raw ?? const <String, dynamic>{};
+    return values
+        .map((key, value) => MapEntry(key, (value as num?)?.toInt() ?? 0));
   }
 
   Future<void> stop() async {

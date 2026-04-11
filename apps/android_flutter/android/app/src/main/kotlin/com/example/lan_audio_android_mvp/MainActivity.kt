@@ -4,17 +4,31 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.wifi.WifiManager
+import android.content.Context
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class MainActivity : FlutterActivity() {
     private val channelName = "lan_audio/audio_track"
+    private val platformChannelName = "lan_audio/platform"
     private var audioTrack: AudioTrack? = null
     private var sampleRate: Int = 48000
     private var channels: Int = 2
+    private var frameBytesPerPacket: Int = 1920
+    private var writeQueue: ArrayBlockingQueue<ByteArray>? = null
+    @Volatile private var writerRunning: Boolean = false
+    @Volatile private var writeFrames: Long = 0
+    @Volatile private var shortWriteCount: Long = 0
+    private var writerThread: Thread? = null
+    @Volatile private var writerStoppedSignal: CountDownLatch? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -24,6 +38,24 @@ class MainActivity : FlutterActivity() {
                     handleCall(call, result)
                 } catch (e: Exception) {
                     result.error("audio_track_error", e.message, null)
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, platformChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "acquireMulticastLock" -> {
+                            acquireMulticastLock()
+                            result.success(null)
+                        }
+                        "releaseMulticastLock" -> {
+                            releaseMulticastLock()
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    result.error("platform_error", e.message, null)
                 }
             }
     }
@@ -46,18 +78,29 @@ class MainActivity : FlutterActivity() {
             "writePcm16" -> {
                 val data = call.arguments as? ByteArray
                     ?: throw IllegalArgumentException("writePcm16 expects ByteArray")
-                val track = audioTrack ?: throw IllegalStateException("AudioTrack is not initialized")
-                track.write(data, 0, data.size, AudioTrack.WRITE_BLOCKING)
+                enqueuePcm(data)
                 result.success(null)
             }
 
+            "stats" -> {
+                result.success(
+                    mapOf(
+                        "nativeQueuedFrames" to (writeQueue?.size ?: 0),
+                        "audioTrackWriteFrames" to writeFrames,
+                        "audioTrackShortWriteCount" to shortWriteCount,
+                    )
+                )
+            }
+
             "stop" -> {
+                writeQueue?.clear()
                 audioTrack?.pause()
                 audioTrack?.flush()
                 result.success(null)
             }
 
             "release" -> {
+                stopWriter()
                 audioTrack?.release()
                 audioTrack = null
                 result.success(null)
@@ -68,10 +111,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun initAudioTrack(sr: Int, ch: Int, frameSamplesPerChannel: Int) {
+        stopWriter()
         audioTrack?.release()
 
         sampleRate = sr
         channels = ch
+        writeFrames = 0
+        shortWriteCount = 0
 
         val channelConfig = if (ch == 1) {
             AudioFormat.CHANNEL_OUT_MONO
@@ -89,7 +135,9 @@ class MainActivity : FlutterActivity() {
         }
 
         val frameBytes = frameSamplesPerChannel * channels * 2
-        val desiredBuffer = maxOf(minBuffer, frameBytes * 6)
+        frameBytesPerPacket = frameBytes
+        // Keep a larger stream buffer to reduce jitter-induced starvation spikes.
+        val desiredBuffer = maxOf(minBuffer, frameBytes * 12)
 
         val track = AudioTrack(
             AudioAttributes.Builder()
@@ -112,5 +160,91 @@ class MainActivity : FlutterActivity() {
         }
 
         audioTrack = track
+        startWriter()
+    }
+
+    private fun startWriter() {
+        val queue = ArrayBlockingQueue<ByteArray>(240)
+        writeQueue = queue
+        writerRunning = true
+        val stopped = CountDownLatch(1)
+        writerStoppedSignal = stopped
+        writerThread = Thread({
+            try {
+                while (writerRunning || queue.isNotEmpty()) {
+                    val data = try {
+                        queue.poll(50, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        break
+                    } ?: continue
+                    val track = audioTrack ?: continue
+                    writeFully(track, data)
+                }
+            } finally {
+                stopped.countDown()
+            }
+        }, "lan-audio-track-writer").also { it.start() }
+    }
+
+    private fun stopWriter() {
+        writerRunning = false
+        writeQueue?.clear()
+        writerThread?.interrupt()
+        writerStoppedSignal?.await(100, TimeUnit.MILLISECONDS)
+        writerThread = null
+        writeQueue = null
+        writerStoppedSignal = null
+    }
+
+    private fun enqueuePcm(data: ByteArray) {
+        audioTrack ?: throw IllegalStateException("AudioTrack is not initialized")
+        val queue = writeQueue ?: throw IllegalStateException("AudioTrack writer is not initialized")
+        val copy = data.copyOf()
+        if (!queue.offer(copy)) {
+            queue.poll()
+            queue.offer(copy)
+        }
+    }
+
+    private fun writeFully(track: AudioTrack, data: ByteArray) {
+        var offset = 0
+        var shortWrite = false
+        while (offset < data.size) {
+            val wrote = track.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
+            if (wrote <= 0) {
+                throw IllegalStateException("AudioTrack.write failed: $wrote")
+            }
+            if (wrote < data.size - offset) {
+                shortWrite = true
+            }
+            offset += wrote
+        }
+        if (shortWrite) {
+            shortWriteCount += 1
+        }
+        val perFrame = frameBytesPerPacket.coerceAtLeast(1)
+        val framesInWrite = (data.size / perFrame).coerceAtLeast(1)
+        writeFrames += framesInWrite.toLong()
+    }
+
+    private fun acquireMulticastLock() {
+        if (multicastLock?.isHeld == true) {
+            return
+        }
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: throw IllegalStateException("WifiManager unavailable")
+        val lock = wifiManager.createMulticastLock("lan_audio_discovery_lock")
+        lock.setReferenceCounted(false)
+        lock.acquire()
+        multicastLock = lock
+    }
+
+    private fun releaseMulticastLock() {
+        multicastLock?.let {
+            if (it.isHeld) {
+                it.release()
+            }
+        }
+        multicastLock = null
     }
 }

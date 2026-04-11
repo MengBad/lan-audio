@@ -1,18 +1,17 @@
-﻿use std::net::SocketAddr;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use lan_audio_protocol::UdpAudioPacket;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::audio_capture::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
-    CaptureSourceState, PacketKind,
-    SyntheticAudioSource, WindowsLoopbackCapture,
+    CaptureSourceState, PacketKind, SyntheticAudioSource, WindowsLoopbackCapture,
 };
 use crate::config::{AudioSourceKind, ServerConfig, SyntheticSignalKind};
 use crate::metrics::Metrics;
@@ -56,20 +55,23 @@ impl UdpTransport {
 
         self.metrics.inc_capture_start_attempts();
         self.metrics.set_current_audio_source(source_name.clone());
-        self.metrics.set_capture_source_state(source.state().as_str());
+        self.metrics
+            .set_capture_source_state(source.state().as_str());
         self.metrics
             .set_capture_device_name(source.device_name().unwrap_or_else(|| "n/a".to_string()));
 
         if let Err(err) = source.start().await {
             self.metrics.inc_capture_start_failures();
-            self.metrics.set_capture_source_state(CaptureSourceState::Failed.as_str());
+            self.metrics
+                .set_capture_source_state(CaptureSourceState::Failed.as_str());
             return Err(anyhow!(err.to_string()));
         }
 
         let active_format = source.format();
         self.metrics
             .set_capture_format(active_format.sample_rate_hz, active_format.channels);
-        self.metrics.set_capture_source_state(source.state().as_str());
+        self.metrics
+            .set_capture_source_state(source.state().as_str());
         self.metrics
             .set_capture_device_name(source.device_name().unwrap_or_else(|| "n/a".to_string()));
 
@@ -115,11 +117,11 @@ impl UdpTransport {
                                     match frame.packet_kind {
                                         PacketKind::NoPacket => {
                                             capture_metrics.inc_capture_no_packet_count();
-                                            debug!("capture frame kind=no_packet");
+                                            trace!("capture frame kind=no_packet");
                                         }
                                         PacketKind::SilentPacket => {
                                             capture_metrics.inc_capture_silent_frames();
-                                            debug!("capture frame kind=silent_packet");
+                                            trace!("capture frame kind=silent_packet");
                                         }
                                         PacketKind::AudioPacket | PacketKind::Mixed | PacketKind::Synthetic => {
                                             if frame.is_silence {
@@ -127,7 +129,7 @@ impl UdpTransport {
                                             } else {
                                                 capture_metrics.inc_capture_non_silent_frames();
                                             }
-                                            debug!(
+                                            trace!(
                                                 packet_kind = ?frame.packet_kind,
                                                 peak = frame.peak,
                                                 rms = frame.rms,
@@ -179,6 +181,7 @@ impl UdpTransport {
             });
 
             let mut sequence: u32 = 0;
+            let mut tx_stats = TxStats::new();
             loop {
                 tokio::select! {
                     _ = shutdown.recv() => {
@@ -199,7 +202,11 @@ impl UdpTransport {
                             };
                             let bytes = packet.encode();
                             match socket.send_to(&bytes, target).await {
-                                Ok(_) => metrics.inc_packets(bytes.len()),
+                                Ok(_) => {
+                                    metrics.inc_packets(bytes.len());
+                                    tx_stats.observe(&packet);
+                                    tx_stats.maybe_log(sequence);
+                                }
                                 Err(err) => warn!(session = %session_id, error = %err, "udp send failed"),
                             }
                             sequence = sequence.wrapping_add(1);
@@ -232,7 +239,10 @@ impl UdpTransport {
                             error = %err,
                             "windows_loopback init failed, fallback to synthetic"
                         );
-                        Ok((self.build_synthetic_source(), "synthetic(fallback)".to_string()))
+                        Ok((
+                            self.build_synthetic_source(),
+                            "synthetic(fallback)".to_string(),
+                        ))
                     } else {
                         Err(err)
                     }
@@ -249,9 +259,10 @@ impl UdpTransport {
         };
         match self.cfg.synthetic_signal {
             SyntheticSignalKind::Silence => Box::new(SyntheticAudioSource::silence(format)),
-            SyntheticSignalKind::Sine => {
-                Box::new(SyntheticAudioSource::sine(format, self.cfg.synthetic_frequency_hz))
-            }
+            SyntheticSignalKind::Sine => Box::new(SyntheticAudioSource::sine(
+                format,
+                self.cfg.synthetic_frequency_hz,
+            )),
         }
     }
 
@@ -269,24 +280,164 @@ impl UdpTransport {
                 output_dir: self.cfg.capture_debug_dump_dir.clone(),
             },
         )
-            .map_err(|err: CaptureError| anyhow!(err.to_string()))?;
+        .map_err(|err: CaptureError| anyhow!(err.to_string()))?;
         Ok(Box::new(source))
+    }
+}
+
+struct TxStats {
+    started_at: Instant,
+    frames: u64,
+    last_peak: f32,
+    last_rms: f32,
+    last_frame_bytes: usize,
+    last_sample_rate: u32,
+    last_channels: u8,
+    last_frame_duration_ms: u32,
+}
+
+impl TxStats {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            frames: 0,
+            last_peak: 0.0,
+            last_rms: 0.0,
+            last_frame_bytes: 0,
+            last_sample_rate: 48_000,
+            last_channels: 2,
+            last_frame_duration_ms: 10,
+        }
+    }
+
+    fn observe(&mut self, packet: &UdpAudioPacket) {
+        self.frames += 1;
+        self.last_frame_bytes = packet.payload.len();
+        self.last_sample_rate = packet.sample_rate;
+        self.last_channels = packet.channels;
+        self.last_frame_duration_ms = if packet.sample_rate == 0 {
+            0
+        } else {
+            (u32::from(packet.frames_per_packet) * 1000) / packet.sample_rate
+        };
+
+        let mut peak = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        let mut samples = 0usize;
+        for chunk in packet.payload.chunks_exact(2) {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / i16::MAX as f32;
+            peak = peak.max(sample.abs());
+            sum_sq += sample * sample;
+            samples += 1;
+        }
+        self.last_peak = peak;
+        self.last_rms = if samples == 0 {
+            0.0
+        } else {
+            (sum_sq / samples as f32).sqrt()
+        };
+    }
+
+    fn maybe_log(&mut self, seq: u32) {
+        let elapsed = self.started_at.elapsed();
+        if elapsed < Duration::from_secs(1) {
+            return;
+        }
+
+        let tx_frames_per_sec = self.frames as f64 / elapsed.as_secs_f64();
+        info!(
+            tx_peak = self.last_peak,
+            tx_rms = self.last_rms,
+            tx_frame_bytes = self.last_frame_bytes,
+            tx_frames_per_sec,
+            sample_rate = self.last_sample_rate,
+            channels = self.last_channels,
+            frame_duration_ms = self.last_frame_duration_ms,
+            seq,
+            "tx summary"
+        );
+
+        self.started_at = Instant::now();
+        self.frames = 0;
     }
 }
 
 fn encode_passthrough(frame: AudioFrame) -> EncodedFrame {
     // TODO(real-opus): replace this stage with actual Opus encoder output.
-    let mut payload = Vec::with_capacity(frame.samples_f32.len() * 2);
-    for sample in &frame.samples_f32 {
+    // v7 intentionally performs no loudness normalization, AGC, or limiter.
+    // Network payload is fixed for Android diagnostics: 48kHz stereo PCM16 LE, 10ms.
+    let samples = to_fixed_48k_stereo_10ms(&frame);
+    let mut payload = Vec::with_capacity(samples.len() * 2);
+    for sample in &samples {
         let v = sample.clamp(-1.0, 1.0);
         let s = (v * i16::MAX as f32) as i16;
         payload.extend_from_slice(&s.to_le_bytes());
     }
     EncodedFrame {
         pts_ms: frame.pts_ms,
-        sample_rate: frame.format.sample_rate_hz,
-        channels: frame.format.channels as u8,
-        frames_per_packet: frame.format.samples_per_channel_per_frame() as u16,
+        sample_rate: 48_000,
+        channels: 2,
+        frames_per_packet: 480,
         payload,
+    }
+}
+
+fn to_fixed_48k_stereo_10ms(frame: &AudioFrame) -> Vec<f32> {
+    const OUT_RATE: u32 = 48_000;
+    const OUT_CHANNELS: usize = 2;
+    const OUT_FRAMES: usize = 480;
+
+    let in_rate = frame.format.sample_rate_hz.max(1);
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    if in_frames == 0 {
+        return vec![0.0; OUT_FRAMES * OUT_CHANNELS];
+    }
+
+    let mut out = Vec::with_capacity(OUT_FRAMES * OUT_CHANNELS);
+    for out_frame in 0..OUT_FRAMES {
+        let src_frame = ((out_frame as u64 * in_rate as u64) / OUT_RATE as u64)
+            .min((in_frames - 1) as u64) as usize;
+        let base = src_frame * in_channels;
+        let left = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let right = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(left)
+        } else {
+            left
+        };
+        out.push(left);
+        out.push(right);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_capture::SampleFormat;
+
+    #[test]
+    fn encode_passthrough_outputs_fixed_android_pcm_shape() {
+        let frame = AudioFrame {
+            pts_ms: 123,
+            format: AudioFormat {
+                sample_rate_hz: 96_000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                frame_duration_ms: 10,
+            },
+            samples_f32: vec![0.25; 960 * 2],
+            is_silence: false,
+            packet_kind: PacketKind::AudioPacket,
+            peak: 0.25,
+            rms: 0.25,
+            source_buffer_frames: None,
+        };
+
+        let encoded = encode_passthrough(frame);
+        assert_eq!(encoded.sample_rate, 48_000);
+        assert_eq!(encoded.channels, 2);
+        assert_eq!(encoded.frames_per_packet, 480);
+        assert_eq!(encoded.payload.len(), 1920);
     }
 }

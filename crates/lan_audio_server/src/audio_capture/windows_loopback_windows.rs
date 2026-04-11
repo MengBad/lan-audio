@@ -1,4 +1,4 @@
-﻿use std::fs::{self, File};
+use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::ptr;
@@ -9,11 +9,11 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    MMDeviceEnumerator, WAVEFORMATEX,
+    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED, CLSCTX_ALL,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
 use super::pcm_accumulator::{PacketKind, PcmFrameAccumulator};
@@ -98,21 +98,25 @@ impl WindowsLoopbackCapture {
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
-                .map_err(|e| self.set_failed(CaptureError::DeviceActivationFailed(e.to_string())))?;
+                .map_err(|e| {
+                    self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
+                })?;
 
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .map_err(|e| self.set_failed(CaptureError::DeviceActivationFailed(e.to_string())))?;
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| {
+                    self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
+                })?;
 
             let device = enumerator
                 .GetDefaultAudioEndpoint(eRender, eConsole)
                 .map_err(|_| self.set_failed(CaptureError::DefaultDeviceNotFound))?;
 
-            let id = device
-                .GetId()
-                .map_err(|e| self.set_failed(CaptureError::DeviceActivationFailed(e.to_string())))?;
-            let id_text = id
-                .to_string()
-                .map_err(|e| self.set_failed(CaptureError::DeviceActivationFailed(e.to_string())))?;
+            let id = device.GetId().map_err(|e| {
+                self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
+            })?;
+            let id_text = id.to_string().map_err(|e| {
+                self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
+            })?;
             self.device_name = Some(id_text.clone());
             // TODO(wasapi): query friendly display name via property store.
 
@@ -129,7 +133,9 @@ impl WindowsLoopbackCapture {
         unsafe {
             let audio_client: IAudioClient = device
                 .Activate::<IAudioClient>(CLSCTX_ALL, None)
-                .map_err(|e| self.set_failed(CaptureError::DeviceActivationFailed(e.to_string())))?;
+                .map_err(|e| {
+                    self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
+                })?;
 
             let mix_format_ptr = audio_client
                 .GetMixFormat()
@@ -142,9 +148,82 @@ impl WindowsLoopbackCapture {
             }
 
             let mix = *mix_format_ptr;
-            let sample_kind = match mix.wFormatTag as u32 {
-                3 => DeviceSampleKind::F32,
-                1 => DeviceSampleKind::I16,
+            let sample_rate_hz = mix.nSamplesPerSec;
+            let channels = mix.nChannels;
+            let bits_per_sample = mix.wBitsPerSample;
+            let format_tag = mix.wFormatTag;
+            let cb_size = mix.cbSize;
+            let mut sub_format = None;
+            let sample_kind = match format_tag as u32 {
+                3 => {
+                    if bits_per_sample != 32 {
+                        return Err(self.set_failed(CaptureError::UnsupportedMixFormat(format!(
+                            "unsupported float bits_per_sample={}; expected 32",
+                            bits_per_sample
+                        ))));
+                    }
+                    DeviceSampleKind::F32
+                }
+                1 => {
+                    if bits_per_sample != 16 {
+                        return Err(self.set_failed(CaptureError::UnsupportedMixFormat(format!(
+                            "unsupported PCM bits_per_sample={}; expected 16 for wFormatTag=1",
+                            bits_per_sample
+                        ))));
+                    }
+                    DeviceSampleKind::I16
+                }
+                65534 => {
+                    if cb_size < 22 {
+                        return Err(self.set_failed(CaptureError::UnsupportedMixFormat(format!(
+                            "WAVE_FORMAT_EXTENSIBLE cbSize too small: {}",
+                            cb_size
+                        ))));
+                    }
+
+                    // Parse common WAVE_FORMAT_EXTENSIBLE subformats:
+                    // SubFormat.Data1 == 3 => IEEE float
+                    // SubFormat.Data1 == 1 => PCM integer
+                    // TODO(wasapi): compare full SubFormat GUID for stricter validation.
+                    let ext_ptr = mix_format_ptr as *const u8;
+                    let sub_guid_ptr =
+                        ext_ptr.add(std::mem::size_of::<WAVEFORMATEX>() + 2 + 4) as *const [u8; 16];
+                    let sub_guid = std::ptr::read_unaligned(sub_guid_ptr);
+                    sub_format = Some(format!("{:02X?}", sub_guid));
+                    let sub_data1 =
+                        u32::from_le_bytes([sub_guid[0], sub_guid[1], sub_guid[2], sub_guid[3]]);
+
+                    match sub_data1 {
+                        3 => {
+                            if bits_per_sample != 32 {
+                                return Err(self.set_failed(CaptureError::UnsupportedMixFormat(
+                                    format!(
+                                    "extensible float bits_per_sample={} unsupported; expected 32",
+                                    bits_per_sample
+                                ),
+                                )));
+                            }
+                            DeviceSampleKind::F32
+                        }
+                        1 => {
+                            if bits_per_sample != 16 {
+                                return Err(self.set_failed(CaptureError::UnsupportedMixFormat(
+                                    format!(
+                                    "extensible PCM bits_per_sample={} unsupported; expected 16",
+                                    bits_per_sample
+                                ),
+                                )));
+                            }
+                            DeviceSampleKind::I16
+                        }
+                        other => {
+                            return Err(self.set_failed(CaptureError::UnsupportedMixFormat(format!(
+                                "unsupported WAVE_FORMAT_EXTENSIBLE SubFormat.Data1={other}; subformat={}",
+                                sub_format.clone().unwrap_or_else(|| "n/a".to_string())
+                            ))));
+                        }
+                    }
+                }
                 other => {
                     return Err(self.set_failed(CaptureError::UnsupportedMixFormat(format!(
                         "unsupported wFormatTag={other}; subformat=n/a"
@@ -153,12 +232,12 @@ impl WindowsLoopbackCapture {
             };
 
             let format_info = DeviceFormatInfo {
-                sample_rate_hz: mix.nSamplesPerSec,
-                channels: mix.nChannels,
+                sample_rate_hz,
+                channels,
                 sample_kind,
-                bits_per_sample: mix.wBitsPerSample,
-                format_tag: mix.wFormatTag,
-                sub_format: None,
+                bits_per_sample,
+                format_tag,
+                sub_format,
             };
 
             info!(
@@ -187,7 +266,9 @@ impl WindowsLoopbackCapture {
 
             let capture_client: IAudioCaptureClient = audio_client
                 .GetService::<IAudioCaptureClient>()
-                .map_err(|e| self.set_failed(CaptureError::CaptureClientInitFailed(e.to_string())))?;
+                .map_err(|e| {
+                    self.set_failed(CaptureError::CaptureClientInitFailed(e.to_string()))
+                })?;
 
             let sample_rate_hz = format_info.sample_rate_hz;
             let channels = format_info.channels;
@@ -200,7 +281,10 @@ impl WindowsLoopbackCapture {
             };
             self.accumulator = PcmFrameAccumulator::new(self.target_format);
             if let Some(writer) = &mut self.debug_wav {
-                writer.set_format(self.target_format.sample_rate_hz, self.target_format.channels);
+                writer.set_format(
+                    self.target_format.sample_rate_hz,
+                    self.target_format.channels,
+                );
             }
             self.audio_client = Some(audio_client);
             self.capture_client = Some(capture_client);
@@ -211,10 +295,11 @@ impl WindowsLoopbackCapture {
     }
 
     fn do_start(&mut self) -> Result<(), CaptureError> {
-        let client = self
-            .audio_client
-            .clone()
-            .ok_or_else(|| self.set_failed(CaptureError::StartFailed("audio client missing".to_string())))?;
+        let client = self.audio_client.clone().ok_or_else(|| {
+            self.set_failed(CaptureError::StartFailed(
+                "audio client missing".to_string(),
+            ))
+        })?;
         unsafe {
             client
                 .Start()
@@ -229,14 +314,16 @@ impl WindowsLoopbackCapture {
     }
 
     fn fill_accumulator_from_packets(&mut self) -> Result<PacketReadStatus, CaptureError> {
-        let capture = self
-            .capture_client
-            .clone()
-            .ok_or_else(|| self.set_failed(CaptureError::ReadBufferFailed("capture client missing".to_string())))?;
-        let fmt = self
-            .device_format
-            .clone()
-            .ok_or_else(|| self.set_failed(CaptureError::UnsupportedMixFormat("device format missing".to_string())))?;
+        let capture = self.capture_client.clone().ok_or_else(|| {
+            self.set_failed(CaptureError::ReadBufferFailed(
+                "capture client missing".to_string(),
+            ))
+        })?;
+        let fmt = self.device_format.clone().ok_or_else(|| {
+            self.set_failed(CaptureError::UnsupportedMixFormat(
+                "device format missing".to_string(),
+            ))
+        })?;
 
         let mut saw_packet = false;
         let mut saw_silent_packet = false;
@@ -258,13 +345,7 @@ impl WindowsLoopbackCapture {
                 let mut flags = 0u32;
 
                 capture
-                    .GetBuffer(
-                        &mut data_ptr,
-                        &mut num_frames,
-                        &mut flags,
-                        None,
-                        None,
-                    )
+                    .GetBuffer(&mut data_ptr, &mut num_frames, &mut flags, None, None)
                     .map_err(|e| self.set_failed(CaptureError::ReadBufferFailed(e.to_string())))?;
 
                 let is_silence = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
@@ -285,11 +366,13 @@ impl WindowsLoopbackCapture {
 
                     match fmt.sample_kind {
                         DeviceSampleKind::F32 => {
-                            let src = std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
+                            let src =
+                                std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
                             self.accumulator.push_samples(src, false);
                         }
                         DeviceSampleKind::I16 => {
-                            let src = std::slice::from_raw_parts(data_ptr as *const i16, sample_count);
+                            let src =
+                                std::slice::from_raw_parts(data_ptr as *const i16, sample_count);
                             let mut tmp = Vec::with_capacity(sample_count);
                             tmp.extend(src.iter().map(|v| (*v as f32) / i16::MAX as f32));
                             self.accumulator.push_samples(&tmp, false);
@@ -456,7 +539,12 @@ struct PcmDebugWavWriter {
 }
 
 impl PcmDebugWavWriter {
-    fn new(sample_rate: u32, channels: u16, seconds: u32, output_dir: &str) -> Result<Self, CaptureError> {
+    fn new(
+        sample_rate: u32,
+        channels: u16,
+        seconds: u32,
+        output_dir: &str,
+    ) -> Result<Self, CaptureError> {
         let out_dir = PathBuf::from(output_dir);
         fs::create_dir_all(&out_dir)
             .map_err(|e| CaptureError::StartFailed(format!("create dump dir failed: {e}")))?;
@@ -486,7 +574,8 @@ impl PcmDebugWavWriter {
     fn set_format(&mut self, sample_rate: u32, channels: u16) {
         self.sample_rate = sample_rate;
         self.channels = channels;
-        self.max_samples = (sample_rate as usize) * (channels as usize) * (self.max_seconds as usize);
+        self.max_samples =
+            (sample_rate as usize) * (channels as usize) * (self.max_seconds as usize);
     }
 
     fn write_samples(&mut self, samples: &[f32]) -> Result<(), CaptureError> {
@@ -498,9 +587,9 @@ impl PcmDebugWavWriter {
         for sample in &samples[..take] {
             let v = sample.clamp(-1.0, 1.0);
             let s = (v * i16::MAX as f32) as i16;
-            self.file
-                .write_all(&s.to_le_bytes())
-                .map_err(|e| CaptureError::ReadBufferFailed(format!("write dump wav failed: {e}")))?;
+            self.file.write_all(&s.to_le_bytes()).map_err(|e| {
+                CaptureError::ReadBufferFailed(format!("write dump wav failed: {e}"))
+            })?;
         }
         self.written_samples += take;
         if self.written_samples >= self.max_samples {

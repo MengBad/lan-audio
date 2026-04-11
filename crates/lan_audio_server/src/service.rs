@@ -1,4 +1,4 @@
-﻿use std::sync::Arc;
+use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -38,11 +38,8 @@ impl LanAudioService {
 
     pub async fn run_until_shutdown(&self) -> anyhow::Result<()> {
         let transport = UdpTransport::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics)).await?;
-        let session_server = SessionServer::new(
-            Arc::clone(&self.cfg),
-            Arc::clone(&self.metrics),
-            transport,
-        );
+        let session_server =
+            SessionServer::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics), transport);
 
         let discovery_cfg = DiscoveryConfig {
             server_id: Uuid::new_v4(),
@@ -56,7 +53,9 @@ impl LanAudioService {
         let mut handles = Vec::new();
         {
             let rx = self.shutdown_tx.subscribe();
-            handles.push(tokio::spawn(async move { run_discovery_broadcast(discovery_cfg, rx).await }));
+            handles.push(tokio::spawn(async move {
+                run_discovery_broadcast(discovery_cfg, rx).await
+            }));
         }
         {
             let rx = self.shutdown_tx.subscribe();

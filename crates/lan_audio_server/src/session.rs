@@ -1,11 +1,13 @@
-﻿use std::net::{IpAddr, SocketAddr};
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{ClientControlMessage, ServerControlMessage};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -19,14 +21,22 @@ pub struct SessionServer {
     cfg: Arc<ServerConfig>,
     metrics: Arc<Metrics>,
     transport: UdpTransport,
+    active_streams: Arc<Mutex<HashMap<IpAddr, ActiveStream>>>,
+}
+
+struct ActiveStream {
+    session_id: Uuid,
+    abort: tokio::task::AbortHandle,
 }
 
 impl SessionServer {
+    const UDP_STREAM_GRACE_AFTER_WS_CLOSE_SECS: u64 = 30;
     pub fn new(cfg: Arc<ServerConfig>, metrics: Arc<Metrics>, transport: UdpTransport) -> Self {
         Self {
             cfg,
             metrics,
             transport,
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -72,8 +82,9 @@ impl SessionServer {
             .ok_or_else(|| anyhow!("client disconnected before hello"))??;
 
         let client_hello = match hello_msg {
-            Message::Text(text) => serde_json::from_str::<ClientControlMessage>(&text)
-                .context("invalid hello json")?,
+            Message::Text(text) => {
+                serde_json::from_str::<ClientControlMessage>(&text).context("invalid hello json")?
+            }
             _ => return Err(anyhow!("expected text hello message")),
         };
 
@@ -128,7 +139,20 @@ impl SessionServer {
                 return Err(err);
             }
         };
+        if let Some(previous) = self
+            .replace_active_stream(peer.ip(), session_id, stream_task.abort_handle())
+            .await
+        {
+            warn!(
+                peer_ip = %peer.ip(),
+                old_session = %previous.session_id,
+                new_session = %session_id,
+                "replaced previous active stream for same client ip"
+            );
+            previous.abort.abort();
+        }
 
+        let mut ws_stream_closed = false;
         loop {
             tokio::select! {
                 _ = shutdown.recv() => {
@@ -149,7 +173,10 @@ impl SessionServer {
                                 ws_tx.send(Message::Text(serde_json::to_string(&metrics_msg)?.into())).await?;
                             }
                         }
-                        Some(Ok(Message::Close(_))) | None => break,
+                        Some(Ok(Message::Close(_))) | None => {
+                            ws_stream_closed = true;
+                            break;
+                        }
                         Some(Ok(_)) => {}
                         Some(Err(err)) => return Err(anyhow!(err)),
                     }
@@ -157,10 +184,50 @@ impl SessionServer {
             }
         }
 
+        if ws_stream_closed {
+            warn!(
+                session = %session_id,
+                grace_secs = Self::UDP_STREAM_GRACE_AFTER_WS_CLOSE_SECS,
+                "ws control channel closed; keep udp stream alive for grace period"
+            );
+            tokio::select! {
+                _ = shutdown.recv() => {}
+                _ = tokio::time::sleep(Duration::from_secs(Self::UDP_STREAM_GRACE_AFTER_WS_CLOSE_SECS)) => {}
+            }
+        }
+
         stream_task.abort();
+        self.remove_active_stream_if_owner(peer.ip(), session_id).await;
         self.metrics.dec_sessions();
         info!(session = %session_id, "session closed");
         Ok(())
+    }
+
+    async fn replace_active_stream(
+        &self,
+        peer_ip: IpAddr,
+        session_id: Uuid,
+        new_abort: tokio::task::AbortHandle,
+    ) -> Option<ActiveStream> {
+        let mut guard = self.active_streams.lock().await;
+        guard.insert(
+            peer_ip,
+            ActiveStream {
+                session_id,
+                abort: new_abort,
+            },
+        )
+    }
+
+    async fn remove_active_stream_if_owner(&self, peer_ip: IpAddr, session_id: Uuid) {
+        let mut guard = self.active_streams.lock().await;
+        let should_remove = guard
+            .get(&peer_ip)
+            .map(|active| active.session_id == session_id)
+            .unwrap_or(false);
+        if should_remove {
+            guard.remove(&peer_ip);
+        }
     }
 }
 

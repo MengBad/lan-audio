@@ -1,4 +1,4 @@
-﻿//! Audio capture source abstraction for server-side media input.
+//! Audio capture source abstraction for server-side media input.
 //!
 //! This module defines the pluggable media input interface used by the desktop
 //! service before encoding/packetization. The default internal format is:
@@ -28,9 +28,9 @@ mod windows_loopback_impl;
 #[path = "windows_loopback_non_windows.rs"]
 mod windows_loopback_impl;
 
-pub use windows_loopback_impl::WindowsLoopbackCapture;
 use pcm_accumulator::compute_peak_rms;
 pub use pcm_accumulator::PacketKind;
+pub use windows_loopback_impl::WindowsLoopbackCapture;
 
 #[derive(Debug, Clone)]
 pub struct CaptureDebugDumpConfig {
@@ -114,7 +114,11 @@ pub struct AudioFrame {
 }
 
 impl AudioFrame {
-    pub fn new(pts_ms: u64, format: AudioFormat, samples_f32: Vec<f32>) -> Result<Self, CaptureError> {
+    pub fn new(
+        pts_ms: u64,
+        format: AudioFormat,
+        samples_f32: Vec<f32>,
+    ) -> Result<Self, CaptureError> {
         Self::new_with_meta(
             pts_ms,
             format,
@@ -265,7 +269,8 @@ impl AudioCaptureSource for SyntheticAudioSource {
         if current_tick > now {
             sleep_until(current_tick).await;
         }
-        self.next_tick = Some(current_tick + Duration::from_millis(self.format.frame_duration_ms as u64));
+        self.next_tick =
+            Some(current_tick + Duration::from_millis(self.format.frame_duration_ms as u64));
 
         let pts_ms = now_ms();
         let mut samples = vec![0.0_f32; self.format.total_samples_per_frame()];
@@ -369,7 +374,10 @@ mod tests {
             Box::new(SyntheticAudioSource::sine(AudioFormat::default(), 220.0));
         source.start().await.expect("start");
         let frame = source.read_frame().await.expect("frame");
-        assert_eq!(frame.samples_f32.len(), source.format().total_samples_per_frame());
+        assert_eq!(
+            frame.samples_f32.len(),
+            source.format().total_samples_per_frame()
+        );
         source.stop().await.expect("stop");
     }
 

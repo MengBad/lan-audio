@@ -1,4 +1,4 @@
-﻿use std::net::SocketAddr;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -17,7 +17,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let (beacon, server_addr) = wait_for_beacon().await?;
-    println!("discovered server {} ({})", beacon.server_name, beacon.server_id);
+    println!(
+        "discovered server {} ({})",
+        beacon.server_name, beacon.server_id
+    );
 
     let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
     let udp_port = udp_socket.local_addr()?.port();
@@ -66,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let mut buf = vec![0_u8; 1500];
     let mut rx_packets = 0_u64;
     let mut rx_bytes = 0_u64;
-    let mut last_seq = None;
+    let mut last_seq: Option<u32> = None;
     let mut losses = 0_u64;
     let mut window_start = Instant::now();
 
