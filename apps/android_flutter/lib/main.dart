@@ -11,7 +11,7 @@ import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 
-const String kUiBuildTag = 'UI build: playback-diagnostics-v28';
+const String kUiBuildTag = 'UI build: playback-diagnostics-v29';
 const bool kUseBackgroundPlaybackService = true;
 
 void main() {

@@ -36,6 +36,7 @@ class PlaybackSessionController(
     private var audioInit = false
     private var lastSeq: Long? = null
     private var udpLoss: Int = 0
+    private var streamGeneration: Long = 0
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -49,7 +50,9 @@ class PlaybackSessionController(
         Log.i(logTag, "startPlayback target=${target.serverName} host=${target.host} ws=${target.wsPort} udp=${target.udpPort}")
         currentTarget = target
         reconnectFuture?.cancel(false)
+        reconnectFuture = null
         stopStreamAndAudio()
+        val generation = ++streamGeneration
 
         if (!requestAudioFocus()) {
             Log.w(logTag, "audio focus denied")
@@ -87,11 +90,15 @@ class PlaybackSessionController(
         streamManager = StreamSessionManager(target, options.pingIntervalMs, callback = object :
             StreamSessionManager.Callback {
             override fun onLog(message: String) {
+                if (generation != streamGeneration) return
                 stateStore.update { it.copy(recentLog = message) }
             }
 
             override fun onWsConnected() {
+                if (generation != streamGeneration) return
                 Log.i(logTag, "ws connected")
+                reconnectFuture?.cancel(false)
+                reconnectFuture = null
                 stateStore.update {
                     it.copy(
                         connectionState = "connected",
@@ -103,6 +110,7 @@ class PlaybackSessionController(
             }
 
             override fun onWsDisconnected(reason: String) {
+                if (generation != streamGeneration) return
                 Log.w(logTag, "ws disconnected: $reason")
                 if (currentTarget == null) {
                     return
@@ -118,10 +126,12 @@ class PlaybackSessionController(
             }
 
             override fun onUdpPacket(packet: LasPacket) {
+                if (generation != streamGeneration) return
                 handleUdpPacket(packet)
             }
 
             override fun onError(code: String, message: String) {
+                if (generation != streamGeneration) return
                 Log.e(logTag, "stream error code=$code message=$message")
                 publishError(code, message)
                 scheduleReconnect(code)
@@ -133,6 +143,7 @@ class PlaybackSessionController(
     fun stopPlayback(reason: String = "user_stop") {
         Log.i(logTag, "stopPlayback reason=$reason")
         reconnectFuture?.cancel(false)
+        reconnectFuture = null
         stateStore.update {
             it.copy(
                 serviceState = "stopping",
@@ -269,7 +280,11 @@ class PlaybackSessionController(
         val target = currentTarget ?: return
         Log.w(logTag, "scheduleReconnect reason=$reason immediate=$immediate")
         reconnectFuture?.cancel(false)
+        val generation = ++streamGeneration
         reconnectFuture = controlExecutor.schedule({
+            if (generation != streamGeneration) {
+                return@schedule
+            }
             stateStore.update {
                 it.copy(
                     serviceState = "running",
@@ -287,24 +302,31 @@ class PlaybackSessionController(
             jitterBuffer.clear()
             streamManager = StreamSessionManager(target, options.pingIntervalMs, object : StreamSessionManager.Callback {
                 override fun onLog(message: String) {
+                    if (generation != streamGeneration) return
                     stateStore.update { it.copy(recentLog = message) }
                 }
 
                 override fun onWsConnected() {
+                    if (generation != streamGeneration) return
+                    reconnectFuture?.cancel(false)
+                    reconnectFuture = null
                     stateStore.update {
                         it.copy(connectionState = "connected", playbackState = "buffering", recentLog = "ws_reconnected")
                     }
                 }
 
                 override fun onWsDisconnected(reason: String) {
+                    if (generation != streamGeneration) return
                     scheduleReconnect(reason)
                 }
 
                 override fun onUdpPacket(packet: LasPacket) {
+                    if (generation != streamGeneration) return
                     handleUdpPacket(packet)
                 }
 
                 override fun onError(code: String, message: String) {
+                    if (generation != streamGeneration) return
                     publishError(code, message)
                     scheduleReconnect(code)
                 }
@@ -315,6 +337,7 @@ class PlaybackSessionController(
     }
 
     private fun stopStreamAndAudio() {
+        streamGeneration += 1
         streamManager?.stop()
         streamManager = null
         playoutFuture?.cancel(true)

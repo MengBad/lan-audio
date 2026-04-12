@@ -122,7 +122,6 @@ class StreamSessionManager(
                     }
                     Log.e(logTag, "ws failure: ${t.message}")
                     callback.onError("ws_failure", t.message ?: "ws failure")
-                    callback.onWsDisconnected("ws_failure")
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {

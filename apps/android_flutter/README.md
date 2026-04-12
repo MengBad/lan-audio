@@ -15,6 +15,7 @@ v25 新增后台播放改造骨架：
 - Dart 侧迁移开关：`kUseBackgroundPlaybackService`（v26 默认 `true`，可手动回退 legacy）
 - v27 修复服务事件线程崩溃：EventChannel 状态推送统一在主线程执行。
 - v28 修复后台服务 `ws://` 明文连接拦截：启用 `usesCleartextTraffic=true`。
+- v29 修复后台重连竞态：移除重复重连触发，增加回调代际隔离，连接成功后取消挂起重连任务。
 
 ## 目标链路
 

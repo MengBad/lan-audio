@@ -164,7 +164,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_android_client.ps1
 
 当前 Android UI 版本号应显示：
 
-- `UI build: playback-diagnostics-v28`
+- `UI build: playback-diagnostics-v29`
 
 v8 在 v7 纯 PCM 诊断基础上修复了一个播放端状态机问题：当 jitter buffer 已经空队列 underrun 时，不再继续推进 expected sequence，避免后续正常到达的新 UDP 包被持续误判为 late packet。
 
@@ -235,6 +235,11 @@ v27 崩溃修复（本轮）：
 v28 连接修复（本轮）：
 - 修复后台服务 `OkHttp` 被系统明文策略拦截的问题：`AndroidManifest` 增加 `android:usesCleartextTraffic="true"`。
 - 目的：允许当前 MVP 的局域网 `ws://` 控制链路正常连接（不涉及 TLS）。
+
+v29 缓冲卡死修复（本轮）：
+- 修复后台会话重连竞态：`ws failure` 不再重复触发双重重连调度。
+- 增加流回调代际保护（generation guard），忽略过期连接回调，避免旧失败事件打断新连接。
+- `ws connected` 后会主动取消挂起中的重连任务，降低“刚连上又回缓冲”的概率。
 
 v11 增加播放写入批处理：Dart 侧把 2~4 个连续 10ms PCM 帧合并后一次写入 AudioTrack，降低 MethodChannel 高频调用开销。
 
