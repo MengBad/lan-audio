@@ -100,6 +100,8 @@ impl SessionServer {
 
         let session_id = Uuid::new_v4();
         let target = SocketAddr::new(resolve_ip(peer.ip()), udp_port);
+        self.metrics
+            .note_client_connected(&client_name, &peer.ip().to_string());
         self.metrics.inc_sessions();
 
         let welcome = ServerControlMessage::ServerWelcome {
@@ -197,7 +199,8 @@ impl SessionServer {
         }
 
         stream_task.abort();
-        self.remove_active_stream_if_owner(peer.ip(), session_id).await;
+        self.remove_active_stream_if_owner(peer.ip(), session_id)
+            .await;
         self.metrics.dec_sessions();
         info!(session = %session_id, "session closed");
         Ok(())

@@ -9,6 +9,7 @@ import android.content.Context
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.ArrayBlockingQueue
@@ -18,6 +19,8 @@ import java.util.concurrent.TimeUnit
 class MainActivity : FlutterActivity() {
     private val channelName = "lan_audio/audio_track"
     private val platformChannelName = "lan_audio/platform"
+    private val playbackServiceChannelName = PlaybackChannels.METHOD_PLAYBACK_SERVICE
+    private val playbackEventChannelName = PlaybackChannels.EVENT_PLAYBACK_EVENTS
     private var audioTrack: AudioTrack? = null
     private var sampleRate: Int = 48000
     private var channels: Int = 2
@@ -58,6 +61,82 @@ class MainActivity : FlutterActivity() {
                     result.error("platform_error", e.message, null)
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, playbackServiceChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    handlePlaybackServiceCall(call, result)
+                } catch (e: Exception) {
+                    result.error("playback_service_error", e.message, null)
+                }
+            }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, playbackEventChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    PlaybackEventBus.attachSink(events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    PlaybackEventBus.detachSink()
+                }
+            })
+    }
+
+    private fun handlePlaybackServiceCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "startPlayback" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val host = args["host"] as? String ?: ""
+                val wsPort = (args["wsPort"] as? Number)?.toInt() ?: 39991
+                val udpPort = (args["udpPort"] as? Number)?.toInt() ?: 39992
+                val serverName = args["serverName"] as? String ?: "manual:$host"
+                if (host.isBlank()) {
+                    result.error("invalid_args", "host is required", null)
+                    return
+                }
+                PlaybackForegroundService.startPlayback(
+                    applicationContext,
+                    PlaybackTarget(
+                        host = host,
+                        wsPort = wsPort,
+                        udpPort = udpPort,
+                        serverName = serverName,
+                    ),
+                )
+                result.success(null)
+            }
+
+            "stopPlayback" -> {
+                PlaybackForegroundService.stopPlayback(applicationContext)
+                result.success(null)
+            }
+
+            "disconnect" -> {
+                PlaybackForegroundService.stopPlayback(applicationContext)
+                result.success(null)
+            }
+
+            "getSnapshot" -> {
+                result.success(PlaybackEventBus.snapshotMap())
+            }
+
+            "setOptions" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val startBufferMs = (args["startBufferMs"] as? Number)?.toInt() ?: 60
+                val maxBufferMs = (args["maxBufferMs"] as? Number)?.toInt() ?: 300
+                val pingIntervalMs = (args["pingIntervalMs"] as? Number)?.toInt() ?: 1000
+                PlaybackForegroundService.setOptions(
+                    applicationContext,
+                    PlaybackOptions(
+                        startBufferMs = startBufferMs,
+                        maxBufferMs = maxBufferMs,
+                        pingIntervalMs = pingIntervalMs,
+                    ),
+                )
+                result.success(null)
+            }
+
+            else -> result.notImplemented()
+        }
     }
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {

@@ -136,8 +136,7 @@ class JitterBuffer {
   int get queuedFrames => _frames.length;
 
   void _trimIfNeeded() {
-    final maxFrames =
-        (maxBufferMs / _frameDurationMs).ceil().clamp(8, 2000) as int;
+    final maxFrames = (maxBufferMs / _frameDurationMs).ceil().clamp(8, 2000);
     while (_frames.length > maxFrames) {
       _frames.remove(_frames.firstKey());
       stats.droppedFrames += 1;

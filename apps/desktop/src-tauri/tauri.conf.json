@@ -1,6 +1,6 @@
-﻿{
+{
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LAN Audio Desktop",
+  "productName": "LAN Audio Desktop Client",
   "version": "0.1.0",
   "identifier": "com.example.lanaudio.desktop",
   "build": {
@@ -9,12 +9,16 @@
     "frontendDist": "../web"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
-        "title": "LAN Audio Desktop MVP",
-        "width": 900,
-        "height": 620
+        "title": "LAN Audio Desktop Client",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 980,
+        "minHeight": 680,
+        "resizable": true
       }
     ],
     "security": {
@@ -22,7 +26,8 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
   }
 }

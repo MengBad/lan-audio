@@ -1,17 +1,18 @@
 ﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'audio/audio_track_output.dart';
+import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 
-const String kUiBuildTag = 'UI build: playback-diagnostics-v23';
+const String kUiBuildTag = 'UI build: playback-diagnostics-v28';
+const bool kUseBackgroundPlaybackService = true;
 
 void main() {
   runApp(const LanAudioApp());
@@ -78,6 +79,7 @@ class _DebugPageState extends State<DebugPage> {
   final Map<String, DiscoveryServer> _servers = {};
   final JitterBuffer _jitter = JitterBuffer(startBufferMs: 60, maxBufferMs: 300);
   final AudioTrackOutput _audioOutput = AudioTrackOutput();
+  final BackgroundPlaybackService _backgroundService = BackgroundPlaybackService();
   final TextEditingController _manualHostController = TextEditingController();
 
   RawDatagramSocket? _discoverySocket;
@@ -86,6 +88,7 @@ class _DebugPageState extends State<DebugPage> {
   Timer? _pingTimer;
   Timer? _playTimer;
   Timer? _probeTimer;
+  StreamSubscription<PlaybackServiceSnapshot>? _serviceEventsSub;
 
   String _status = 'idle';
   String _wsLog = '';
@@ -106,13 +109,22 @@ class _DebugPageState extends State<DebugPage> {
 
   int _sampleRate = 48000;
   int _channels = 2;
-  int _framesPerPacket = 480;
 
   int _udpPackets = 0;
   int _udpBytes = 0;
   int _udpLoss = 0;
   int? _lastSeq;
   final Map<String, DateTime> _recentConnectedHosts = {};
+  String? _serviceTargetHost;
+  String? _serviceTargetName;
+  int _serviceBufferedMs = 0;
+  int _serviceUnderrun = 0;
+  int _serviceDropped = 0;
+  int _serviceLate = 0;
+  int _serviceUdpPackets = 0;
+  int _serviceUdpBytes = 0;
+  int _serviceLoss = 0;
+  int? _serviceLastSeq;
 
   @override
   void initState() {
@@ -122,6 +134,13 @@ class _DebugPageState extends State<DebugPage> {
     debugPrint('ui_build $kUiBuildTag');
     _acquireMulticastLock();
     _startDiscovery();
+    if (kUseBackgroundPlaybackService) {
+      _serviceEventsSub = _backgroundService.events().listen(_onPlaybackServiceEvent);
+      _backgroundService.getSnapshot().then(_onPlaybackServiceEvent).catchError((_) {});
+      _backgroundService
+          .setOptions(startBufferMs: 60, maxBufferMs: 300, pingIntervalMs: 1000)
+          .catchError((_) {});
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowFirstUseHint();
     });
@@ -141,6 +160,53 @@ class _DebugPageState extends State<DebugPage> {
   }
 
   bool _isRecentHost(String host) => _recentConnectedHosts.containsKey(host);
+
+  void _onPlaybackServiceEvent(PlaybackServiceSnapshot snapshot) {
+    if (!mounted) {
+      return;
+    }
+    final metrics = snapshot.metrics;
+    final servicePlayback = snapshot.playbackState.toLowerCase();
+    final serviceConnection = snapshot.connectionState.toLowerCase();
+    setState(() {
+      _serviceTargetHost = snapshot.targetHost;
+      _serviceTargetName = snapshot.targetName;
+      if (snapshot.targetHost != null && snapshot.targetHost!.isNotEmpty) {
+        _recentConnectedHosts[snapshot.targetHost!] = DateTime.now();
+      }
+      _sampleRate = (metrics['sampleRate'] as num?)?.toInt() ?? _sampleRate;
+      _channels = (metrics['channels'] as num?)?.toInt() ?? _channels;
+      _serviceBufferedMs = (metrics['bufferedMs'] as num?)?.toInt() ?? _serviceBufferedMs;
+      _serviceUnderrun = (metrics['jitterUnderrun'] as num?)?.toInt() ?? _serviceUnderrun;
+      _serviceDropped = (metrics['jitterDropped'] as num?)?.toInt() ?? _serviceDropped;
+      _serviceLate = (metrics['jitterLate'] as num?)?.toInt() ?? _serviceLate;
+      _serviceUdpPackets = (metrics['udpPackets'] as num?)?.toInt() ?? _serviceUdpPackets;
+      _serviceUdpBytes = (metrics['udpBytes'] as num?)?.toInt() ?? _serviceUdpBytes;
+      _serviceLoss = (metrics['lossEstimate'] as num?)?.toInt() ?? _serviceLoss;
+      _serviceLastSeq = (metrics['lastSeq'] as num?)?.toInt();
+
+      if (servicePlayback == 'playing') {
+        _playbackState = PlaybackState.playing;
+      } else if (servicePlayback == 'buffering') {
+        _playbackState = PlaybackState.buffering;
+      } else {
+        _playbackState = PlaybackState.stopped;
+      }
+
+      _wsConnected = serviceConnection == 'connected' ||
+          serviceConnection == 'reconnecting' ||
+          servicePlayback == 'playing' ||
+          servicePlayback == 'buffering';
+
+      final serviceLabel = snapshot.targetName != null && snapshot.targetHost != null
+          ? '${snapshot.targetName} (${snapshot.targetHost})'
+          : (snapshot.targetHost ?? '');
+      _status = '${snapshot.connectionState}/${snapshot.playbackState}'
+          '${serviceLabel.isEmpty ? '' : ' $serviceLabel'}';
+      _audioLog = snapshot.recentLog.isNotEmpty ? snapshot.recentLog : _audioLog;
+      _wsLog = jsonEncode(snapshot.raw);
+    });
+  }
 
   void _maybeSelectRecentOrFirst() {
     if (_servers.isEmpty) {
@@ -202,7 +268,10 @@ class _DebugPageState extends State<DebugPage> {
 
   @override
   void dispose() {
-    _stopPlayback();
+    if (!kUseBackgroundPlaybackService) {
+      _stopPlayback();
+    }
+    _serviceEventsSub?.cancel();
     _probeTimer?.cancel();
     _pingTimer?.cancel();
     _ws?.close();
@@ -439,6 +508,33 @@ class _DebugPageState extends State<DebugPage> {
       _isConnecting = true;
       _status = '${tr('连接中', 'connecting')}: $serverName ($host)';
     });
+    if (kUseBackgroundPlaybackService) {
+      try {
+        await _backgroundService.startPlayback(
+          host: host,
+          wsPort: wsPort,
+          udpPort: udpPort,
+          serverName: serverName,
+        );
+        setState(() {
+          _recentConnectedHosts[host] = DateTime.now();
+          _serviceTargetHost = host;
+          _serviceTargetName = serverName;
+          _status = '${tr('后台服务已启动', 'background service started')}: $serverName ($host)';
+        });
+      } catch (e) {
+        setState(() {
+          _status = '${tr('后台服务启动失败', 'service start failed')}: $e';
+        });
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnecting = false;
+          });
+        }
+      }
+      return;
+    }
     try {
       await _ws?.close();
       _pingTimer?.cancel();
@@ -538,7 +634,6 @@ class _DebugPageState extends State<DebugPage> {
 
     _sampleRate = packet.sampleRate;
     _channels = packet.channels;
-    _framesPerPacket = packet.framesPerPacket;
 
     _jitter.push(packet);
 
@@ -557,6 +652,27 @@ class _DebugPageState extends State<DebugPage> {
   }
 
   Future<void> _startPlayback() async {
+    if (kUseBackgroundPlaybackService) {
+      final selected = _selectedServerId == null ? null : _servers[_selectedServerId!];
+      final manual = _manualHostController.text.trim();
+      final host = selected?.host ?? _serviceTargetHost ?? (manual.isEmpty ? null : manual);
+      if (host == null || host.isEmpty) {
+        setState(() {
+          _status = tr('请先选择服务器', 'please select server first');
+        });
+        return;
+      }
+      final wsPort = selected?.wsPort ?? 39991;
+      final udpPort = selected?.udpPort ?? 39992;
+      final serverName = selected?.serverName ?? _serviceTargetName ?? 'manual:$host';
+      await _connectToHost(
+        host: host,
+        wsPort: wsPort,
+        udpPort: udpPort,
+        serverName: serverName,
+      );
+      return;
+    }
     if (_playbackState != PlaybackState.stopped) {
       return;
     }
@@ -625,6 +741,19 @@ class _DebugPageState extends State<DebugPage> {
   }
 
   Future<void> _stopPlayback() async {
+    if (kUseBackgroundPlaybackService) {
+      try {
+        await _backgroundService.stopPlayback();
+      } catch (_) {}
+      if (mounted) {
+        setState(() {
+          _playbackState = PlaybackState.stopped;
+          _wsConnected = false;
+          _status = tr('后台播放已停止', 'background playback stopped');
+        });
+      }
+      return;
+    }
     _playTimer?.cancel();
     _playTimer = null;
     try {
@@ -683,6 +812,24 @@ class _DebugPageState extends State<DebugPage> {
     }
     return tr('连接所选', 'Connect Selected');
   }
+
+  int get _uiBufferedMs => kUseBackgroundPlaybackService ? _serviceBufferedMs : _jitter.bufferedMs;
+
+  int get _uiUnderrun =>
+      kUseBackgroundPlaybackService ? _serviceUnderrun : _jitter.stats.underrunCount;
+
+  int get _uiDropped =>
+      kUseBackgroundPlaybackService ? _serviceDropped : _jitter.stats.droppedFrames;
+
+  int get _uiLate => kUseBackgroundPlaybackService ? _serviceLate : _jitter.stats.lateFrames;
+
+  int get _uiUdpPackets => kUseBackgroundPlaybackService ? _serviceUdpPackets : _udpPackets;
+
+  int get _uiUdpBytes => kUseBackgroundPlaybackService ? _serviceUdpBytes : _udpBytes;
+
+  int get _uiUdpLoss => kUseBackgroundPlaybackService ? _serviceLoss : _udpLoss;
+
+  int? get _uiLastSeq => kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
 
   Widget _metricTile(String label, String value) {
     return Container(
@@ -982,8 +1129,8 @@ class _DebugPageState extends State<DebugPage> {
                     runSpacing: 8,
                     children: [
                       _metricTile(tr('状态', 'Status'), _playbackLabel()),
-                      _metricTile(tr('缓冲', 'Buffered'), '${_jitter.bufferedMs} ms'),
-                      _metricTile(tr('欠载', 'Underrun'), '${_jitter.stats.underrunCount}'),
+                      _metricTile(tr('缓冲', 'Buffered'), '$_uiBufferedMs ms'),
+                      _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -1002,21 +1149,21 @@ class _DebugPageState extends State<DebugPage> {
                 const SizedBox(height: 8),
                 _metricTile('channels', '$_channels'),
                 const SizedBox(height: 8),
-                _metricTile('buffered_ms', '${_jitter.bufferedMs}'),
+                _metricTile('buffered_ms', '$_uiBufferedMs'),
                 const SizedBox(height: 8),
-                _metricTile('jitter_underrun', '${_jitter.stats.underrunCount}'),
+                _metricTile('jitter_underrun', '$_uiUnderrun'),
                 const SizedBox(height: 8),
-                _metricTile('jitter_dropped', '${_jitter.stats.droppedFrames}'),
+                _metricTile('jitter_dropped', '$_uiDropped'),
                 const SizedBox(height: 8),
-                _metricTile('jitter_late', '${_jitter.stats.lateFrames}'),
+                _metricTile('jitter_late', '$_uiLate'),
                 const SizedBox(height: 8),
-                _metricTile(tr('UDP 包数', 'UDP packets'), '$_udpPackets'),
+                _metricTile(tr('UDP 包数', 'UDP packets'), '$_uiUdpPackets'),
                 const SizedBox(height: 8),
-                _metricTile('UDP bytes', '$_udpBytes'),
+                _metricTile('UDP bytes', '$_uiUdpBytes'),
                 const SizedBox(height: 8),
-                _metricTile(tr('丢包估计', 'Loss estimate'), '$_udpLoss'),
+                _metricTile(tr('丢包估计', 'Loss estimate'), '$_uiUdpLoss'),
                 const SizedBox(height: 8),
-                _metricTile(tr('最后序号', 'Last seq'), '${_lastSeq ?? '-'}'),
+                _metricTile(tr('最后序号', 'Last seq'), '${_uiLastSeq ?? '-'}'),
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
@@ -1037,6 +1184,7 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 }
+
 
 
 

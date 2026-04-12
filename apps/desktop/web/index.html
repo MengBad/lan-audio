@@ -1,43 +1,851 @@
 ﻿<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LAN Audio Desktop MVP</title>
+    <title>LAN Audio Desktop Console</title>
     <style>
-      body { font-family: Segoe UI, sans-serif; padding: 20px; background: #f6f8fa; }
-      .card { background: white; border-radius: 8px; padding: 16px; max-width: 720px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-      button { margin-right: 10px; padding: 8px 14px; }
-      pre { background: #111; color: #9fe870; padding: 12px; border-radius: 6px; }
+      :root {
+        --bg: #f3f5f7;
+        --panel: #ffffff;
+        --text: #16202a;
+        --muted: #5f6c7b;
+        --line: #d8e0e9;
+        --accent: #1461d9;
+        --ok: #127948;
+        --warn: #b45309;
+        --error: #b42318;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        max-width: 1040px;
+        margin: 22px auto;
+        padding: 0 18px 22px;
+      }
+
+      .header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 23px;
+        font-weight: 700;
+      }
+
+      .sub {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .lang-toggle {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 7px 10px;
+        color: var(--text);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+      }
+
+      .status-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 18px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #8a98a8;
+      }
+
+      .status-dot.running { background: var(--ok); }
+      .status-dot.error { background: var(--error); }
+      .status-dot.busy { background: var(--warn); }
+
+      .status-sub {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .main-control {
+        margin-top: 14px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .primary {
+        border: 0;
+        border-radius: 11px;
+        font-size: 16px;
+        font-weight: 700;
+        padding: 11px 26px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      .primary.stop {
+        background: #d22f2f;
+      }
+
+      .primary:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .health-strip {
+        margin-top: 12px;
+        border-top: 1px solid #e6ebf2;
+        padding-top: 10px;
+      }
+
+      .health-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      .health-items {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 13px;
+      }
+
+      .health-item {
+        color: var(--text);
+      }
+
+      .health-label {
+        color: var(--muted);
+        margin-right: 6px;
+      }
+
+      .layout {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .section-title {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .source-picker {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .source-btn {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      .source-btn.active {
+        border-color: #9dc0fb;
+        color: #0f4db2;
+      }
+
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        color: var(--text);
+        font-size: 14px;
+      }
+
+      .plain-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 116px 1fr;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 13px;
+      }
+
+      .row .label { color: var(--muted); }
+      .row .value { word-break: break-word; }
+
+      .address-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .address-value {
+        word-break: break-word;
+      }
+
+      .copy-btn {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--text);
+        padding: 4px 9px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .copy-btn:hover {
+        border-color: #b9c7d9;
+      }
+
+      .device-block {
+        margin-top: 10px;
+      }
+
+      .device-subtitle {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 5px;
+      }
+
+      .device-current {
+        font-size: 13px;
+        font-weight: 600;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #e6ebf2;
+        margin-bottom: 8px;
+      }
+
+      .device-recent {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+
+      .device-recent li {
+        font-size: 13px;
+        color: #2e3a47;
+      }
+
+      details {
+        margin-top: 12px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0 14px;
+      }
+
+      summary {
+        padding: 12px 0;
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 14px;
+      }
+
+      .debug-groups {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 0 0 12px;
+      }
+
+      .group-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+        font-weight: 700;
+      }
+
+      .kv {
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .kv div { margin-bottom: 3px; }
+
+      .log-pane {
+        max-height: 220px;
+        overflow: auto;
+        border-top: 1px solid var(--line);
+        padding: 9px 0 12px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .log-line {
+        white-space: pre-wrap;
+        margin-bottom: 4px;
+      }
+
+      .error-text {
+        margin-top: 8px;
+        color: var(--error);
+        font-size: 13px;
+      }
+
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+        .debug-groups { grid-template-columns: 1fr; }
+        .row { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h2>LAN Audio Desktop MVP</h2>
-      <p>当前仅提供最小调试壳。真实系统音频采集仍为 TODO。</p>
-      <button id="refresh">刷新 Metrics</button>
-      <button id="stop">停止服务</button>
-      <pre id="out">loading...</pre>
+    <div class="app">
+      <header class="header">
+        <div>
+          <h1 class="title" id="title"></h1>
+          <div class="sub" id="subtitle"></div>
+        </div>
+        <select class="lang-toggle" id="langSelect">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </header>
+
+      <section class="panel">
+        <div class="status-line">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusHeadline"></span>
+        </div>
+        <div class="status-sub" id="statusSubline"></div>
+        <div class="main-control">
+          <button id="primaryActionBtn" class="primary"></button>
+          <div class="hint" id="nextStep"></div>
+        </div>
+        <div class="health-strip">
+          <div class="health-title" id="healthTitle"></div>
+          <div class="health-items">
+            <div class="health-item"><span class="health-label" id="healthStreamLabel"></span><span id="healthStreamValue"></span></div>
+            <div class="health-item"><span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span></div>
+            <div class="health-item"><span class="health-label" id="healthSourceLabel"></span><span id="healthSourceValue"></span></div>
+          </div>
+        </div>
+        <div class="error-text" id="errorText"></div>
+      </section>
+
+      <div class="layout">
+        <section class="panel">
+          <h2 class="section-title" id="sourceTitle"></h2>
+          <div class="source-picker">
+            <button id="sourceLoopback" class="source-btn"></button>
+            <button id="sourceSynthetic" class="source-btn"></button>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="fallbackToggle" />
+            <span id="fallbackLabel"></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="dumpToggle" />
+            <span id="dumpLabel"></span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2 class="section-title" id="deviceTitle"></h2>
+          <div class="plain-list">
+            <div class="row">
+              <span class="label" id="addrLabel"></span>
+              <div class="address-actions">
+                <span class="address-value" id="addrValue"></span>
+                <button class="copy-btn" id="copyAddrBtn" type="button"></button>
+              </div>
+            </div>
+            <div class="row"><span class="label" id="sessionLabel"></span><span class="value" id="sessionValue"></span></div>
+            <div class="row"><span class="label" id="sourceLabel"></span><span class="value" id="sourceValue"></span></div>
+            <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
+          </div>
+
+          <div class="device-block">
+            <div class="device-subtitle" id="currentDeviceLabel"></div>
+            <div class="device-current" id="currentDeviceValue"></div>
+          </div>
+
+          <div class="device-block">
+            <div class="device-subtitle" id="recentDeviceLabel"></div>
+            <ul class="device-recent" id="deviceRecentList"></ul>
+          </div>
+        </section>
+      </div>
+
+      <details>
+        <summary id="debugSummary"></summary>
+        <div class="debug-groups">
+          <div>
+            <div class="group-title" id="groupTx"></div>
+            <div class="kv" id="debugTx"></div>
+          </div>
+          <div>
+            <div class="group-title" id="groupCapture"></div>
+            <div class="kv" id="debugCapture"></div>
+          </div>
+          <div>
+            <div class="group-title" id="groupStatus"></div>
+            <div class="kv" id="debugState"></div>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary id="logSummary"></summary>
+        <div class="log-pane" id="logPane"></div>
+      </details>
     </div>
+
     <script>
-      const out = document.getElementById('out');
-      async function invoke(cmd) {
-        return window.__TAURI__.core.invoke(cmd);
+      const I18N = {
+        zh: {
+          title: 'LAN Audio 音频推流控制台',
+          subtitle: 'Windows 系统音频推送到 Android 手机',
+          sourceTitle: '音频源设置',
+          deviceTitle: '设备 / 会话',
+          loopback: '系统音频',
+          synthetic: '测试音',
+          fallback: '采集失败自动回退到测试音',
+          dump: '导出 capture wav（调试）',
+          address: '连接地址',
+          copy: '复制',
+          copied: '已复制地址',
+          session: '会话状态',
+          source: '当前音频源',
+          version: '版本',
+          healthTitle: '运行健康摘要',
+          healthStream: '推流状态',
+          healthDevices: '设备',
+          healthSource: '音频源',
+          healthOk: '正常',
+          healthNotStarted: '未启动',
+          healthError: '异常',
+          noDevice: '暂无设备连接',
+          noRecentDevice: '暂无最近设备',
+          currentDevice: '当前连接设备',
+          recentDevice: '最近设备',
+          start: '启动服务',
+          stop: '停止推流',
+          busy: '处理中...',
+          state_not_started: '未启动',
+          state_starting: '启动中',
+          state_running: '运行中',
+          state_stopping: '停止中',
+          state_error: '错误',
+          session_streaming: '推流中',
+          session_waiting_for_device: '等待手机连接',
+          session_starting: '服务启动中',
+          session_stopping: '服务停止中',
+          session_error: '服务异常',
+          session_stopped: '服务未启动',
+          source_windows_loopback: '系统音频',
+          source_synthetic: '测试音',
+          headlineNoDevice: '{state} · 未连接设备',
+          headlineWithDevice: '{state} · 已连接 {count} 台设备（{ip}）',
+          subRunning: '服务在线，可在手机端发现并连接。',
+          subStopped: '服务未启动，手机暂时无法连接。',
+          subError: '服务异常，请检查日志后重新启动。',
+          nextStart: '下一步：点击“启动服务”，然后在手机端连接本机地址。',
+          nextStop: '当前正在提供推流服务，可随时停止。',
+          debugSummary: '调试信息（默认折叠）',
+          logSummary: '运行日志（默认折叠）',
+          groupTx: '发送情况',
+          groupCapture: '音频采集',
+          groupStatus: '运行状态',
+          sentPackets: '已发送包数',
+          sentBytes: '已发送字节',
+          activeSessions: '活跃会话数',
+          captureState: '采集状态',
+          captureFrames: '采集帧数',
+          captureErrors: '采集错误数',
+          captureUnderruns: '采集欠载',
+          capturePeak: '峰值',
+          captureRms: '均方根',
+          serviceStatus: '服务状态',
+          sessionStatus: '会话状态',
+          audioSource: '音频源',
+          captureDevice: '采集设备',
+          sampleRate: '采样率',
+          channels: '声道'
+        },
+        en: {
+          title: 'LAN Audio Streaming Console',
+          subtitle: 'Stream Windows system audio to Android devices',
+          sourceTitle: 'Audio Source',
+          deviceTitle: 'Devices / Session',
+          loopback: 'System Audio',
+          synthetic: 'Test Tone',
+          fallback: 'Fallback to test tone when capture fails',
+          dump: 'Export capture wav (debug)',
+          address: 'Connect Address',
+          copy: 'Copy',
+          copied: 'Address copied',
+          session: 'Session',
+          source: 'Audio Source',
+          version: 'Version',
+          healthTitle: 'Runtime Health',
+          healthStream: 'Streaming',
+          healthDevices: 'Devices',
+          healthSource: 'Source',
+          healthOk: 'Healthy',
+          healthNotStarted: 'Not started',
+          healthError: 'Abnormal',
+          noDevice: 'No device connected',
+          noRecentDevice: 'No recent devices',
+          currentDevice: 'Current Device',
+          recentDevice: 'Recent Devices',
+          start: 'Start Service',
+          stop: 'Stop Streaming',
+          busy: 'Processing...',
+          state_not_started: 'Not Started',
+          state_starting: 'Starting',
+          state_running: 'Running',
+          state_stopping: 'Stopping',
+          state_error: 'Error',
+          session_streaming: 'Streaming',
+          session_waiting_for_device: 'Waiting for mobile device',
+          session_starting: 'Service starting',
+          session_stopping: 'Service stopping',
+          session_error: 'Service error',
+          session_stopped: 'Service not started',
+          source_windows_loopback: 'System Audio',
+          source_synthetic: 'Test Tone',
+          headlineNoDevice: '{state} · No device connected',
+          headlineWithDevice: '{state} · {count} device(s) connected ({ip})',
+          subRunning: 'Service is online. Discover and connect from the phone.',
+          subStopped: 'Service is offline. Phone cannot connect yet.',
+          subError: 'Service has an error. Check logs and restart.',
+          nextStart: 'Next: click Start Service, then connect from your phone.',
+          nextStop: 'Streaming service is available. You can stop it anytime.',
+          debugSummary: 'Debug Metrics (collapsed by default)',
+          logSummary: 'Runtime Logs (collapsed by default)',
+          groupTx: 'Sending',
+          groupCapture: 'Capture',
+          groupStatus: 'State',
+          sentPackets: 'Sent packets',
+          sentBytes: 'Sent bytes',
+          activeSessions: 'Active sessions',
+          captureState: 'Capture state',
+          captureFrames: 'Captured frames',
+          captureErrors: 'Capture errors',
+          captureUnderruns: 'Capture underruns',
+          capturePeak: 'Peak',
+          captureRms: 'RMS',
+          serviceStatus: 'Service status',
+          sessionStatus: 'Session status',
+          audioSource: 'Audio source',
+          captureDevice: 'Capture device',
+          sampleRate: 'Sample rate',
+          channels: 'Channels'
+        }
+      };
+
+      const state = {
+        lang: navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en',
+        snapshot: null,
+        busy: false,
+      };
+
+      function t(key) {
+        return I18N[state.lang][key] ?? key;
       }
+
+      function trf(key, values) {
+        let text = t(key);
+        Object.entries(values).forEach(([k, v]) => {
+          text = text.replace(`{${k}}`, String(v));
+        });
+        return text;
+      }
+
+      function tauriInvoke(command, payload) {
+        const tauri = window.__TAURI__;
+        if (!tauri || !tauri.core || !tauri.core.invoke) {
+          throw new Error('Tauri bridge unavailable');
+        }
+        return tauri.core.invoke(command, payload);
+      }
+
+      function sourceName(source) {
+        return t(`source_${source}`) || source;
+      }
+
+      function formatLogLine(line) {
+        const m = line.match(/^\[(\d+)\]\s*(.*)$/);
+        if (!m) return line;
+        const ts = Number(m[1]) * 1000;
+        const d = new Date(ts);
+        if (!Number.isFinite(d.getTime())) return line;
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `[${hh}:${mm}:${ss}] ${m[2]}`;
+      }
+
+      function extractIp(entry) {
+        const m = entry && entry.match(/\(([^)]+)\)$/);
+        return m ? m[1] : '-';
+      }
+
+      function getMainAction(snapshot) {
+        if (!snapshot) return { action: null, label: t('busy'), stop: false };
+        if (state.busy || snapshot.service_status === 'starting' || snapshot.service_status === 'stopping') {
+          return { action: null, label: t('busy'), stop: false };
+        }
+        if (snapshot.service_status === 'not_started' || snapshot.service_status === 'error') {
+          return { action: 'start', label: t('start'), stop: false };
+        }
+        return { action: 'stop', label: t('stop'), stop: true };
+      }
+
+      function buildHeadline(snapshot) {
+        const stateText = t(`state_${snapshot.service_status}`);
+        if (snapshot.connected_devices > 0) {
+          const ip = extractIp(snapshot.recent_clients?.[0] || '');
+          return trf('headlineWithDevice', { state: stateText, count: snapshot.connected_devices, ip });
+        }
+        return trf('headlineNoDevice', { state: stateText });
+      }
+
+      function buildSubline(snapshot) {
+        if (snapshot.service_status === 'running') return t('subRunning');
+        if (snapshot.service_status === 'error') return t('subError');
+        return t('subStopped');
+      }
+
+      function streamHealth(snapshot) {
+        if (snapshot.service_status === 'error') return t('healthError');
+        if (snapshot.service_status !== 'running') return t('healthNotStarted');
+        return t('healthOk');
+      }
+
+      function renderText() {
+        document.documentElement.lang = state.lang === 'zh' ? 'zh-CN' : 'en';
+        document.getElementById('title').textContent = t('title');
+        document.getElementById('subtitle').textContent = t('subtitle');
+        document.getElementById('sourceTitle').textContent = t('sourceTitle');
+        document.getElementById('deviceTitle').textContent = t('deviceTitle');
+        document.getElementById('sourceLoopback').textContent = t('loopback');
+        document.getElementById('sourceSynthetic').textContent = t('synthetic');
+        document.getElementById('fallbackLabel').textContent = t('fallback');
+        document.getElementById('dumpLabel').textContent = t('dump');
+        document.getElementById('addrLabel').textContent = t('address');
+        document.getElementById('copyAddrBtn').textContent = t('copy');
+        document.getElementById('sessionLabel').textContent = t('session');
+        document.getElementById('sourceLabel').textContent = t('source');
+        document.getElementById('versionLabel').textContent = t('version');
+        document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
+        document.getElementById('recentDeviceLabel').textContent = t('recentDevice');
+        document.getElementById('healthTitle').textContent = t('healthTitle');
+        document.getElementById('healthStreamLabel').textContent = `${t('healthStream')}:`;
+        document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
+        document.getElementById('healthSourceLabel').textContent = `${t('healthSource')}:`;
+        document.getElementById('debugSummary').textContent = t('debugSummary');
+        document.getElementById('logSummary').textContent = t('logSummary');
+        document.getElementById('groupTx').textContent = t('groupTx');
+        document.getElementById('groupCapture').textContent = t('groupCapture');
+        document.getElementById('groupStatus').textContent = t('groupStatus');
+      }
+
+      function renderSnapshot(snapshot) {
+        state.snapshot = snapshot;
+        const main = getMainAction(snapshot);
+        const dot = document.getElementById('statusDot');
+        dot.className = 'status-dot';
+        if (snapshot.service_status === 'running') dot.classList.add('running');
+        else if (snapshot.service_status === 'error') dot.classList.add('error');
+        else if (snapshot.service_status === 'starting' || snapshot.service_status === 'stopping') dot.classList.add('busy');
+
+        document.getElementById('statusHeadline').textContent = buildHeadline(snapshot);
+        document.getElementById('statusSubline').textContent = buildSubline(snapshot);
+        document.getElementById('nextStep').textContent = main.action === 'start' ? t('nextStart') : t('nextStop');
+
+        const primary = document.getElementById('primaryActionBtn');
+        primary.textContent = main.label;
+        primary.disabled = !main.action;
+        primary.className = `primary${main.stop ? ' stop' : ''}`;
+        primary.dataset.action = main.action || '';
+
+        document.getElementById('healthStreamValue').textContent = streamHealth(snapshot);
+        document.getElementById('healthDevicesValue').textContent = String(snapshot.connected_devices);
+        document.getElementById('healthSourceValue').textContent = sourceName(snapshot.audio_source);
+
+        document.getElementById('addrValue').textContent = snapshot.connect_address;
+        document.getElementById('sessionValue').textContent = t(`session_${snapshot.session_status}`) || snapshot.session_status;
+        document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
+        document.getElementById('versionValue').textContent = snapshot.version;
+        document.getElementById('errorText').textContent = snapshot.error_message || '';
+
+        document.getElementById('sourceLoopback').classList.toggle('active', snapshot.audio_source === 'windows_loopback');
+        document.getElementById('sourceSynthetic').classList.toggle('active', snapshot.audio_source === 'synthetic');
+        document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
+        document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
+
+        const recent = snapshot.recent_clients || [];
+        const currentDevice = snapshot.connected_devices > 0 && recent.length > 0 ? recent[0] : t('noDevice');
+        document.getElementById('currentDeviceValue').textContent = currentDevice;
+
+        const recentList = document.getElementById('deviceRecentList');
+        recentList.innerHTML = '';
+        const recentOnly = snapshot.connected_devices > 0 ? recent.slice(1) : recent;
+        if (recentOnly.length === 0) {
+          const li = document.createElement('li');
+          li.textContent = t('noRecentDevice');
+          recentList.appendChild(li);
+        } else {
+          recentOnly.forEach((item) => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            recentList.appendChild(li);
+          });
+        }
+
+        const m = snapshot.metrics;
+        document.getElementById('debugTx').innerHTML =
+          `<div>${t('sentPackets')}: ${m.tx_packets}</div>` +
+          `<div>${t('sentBytes')}: ${m.tx_bytes}</div>` +
+          `<div>${t('activeSessions')}: ${m.active_sessions}</div>`;
+
+        document.getElementById('debugCapture').innerHTML =
+          `<div>${t('captureState')}: ${m.capture_source_state}</div>` +
+          `<div>${t('captureFrames')}: ${m.capture_frames_produced}</div>` +
+          `<div>${t('captureErrors')}: ${m.capture_read_errors}</div>` +
+          `<div>${t('captureUnderruns')}: ${m.capture_underruns}</div>` +
+          `<div>${t('capturePeak')}: ${Number(m.capture_last_peak || 0).toFixed(3)}</div>` +
+          `<div>${t('captureRms')}: ${Number(m.capture_last_rms || 0).toFixed(3)}</div>`;
+
+        document.getElementById('debugState').innerHTML =
+          `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
+          `<div>${t('sessionStatus')}: ${snapshot.session_status}</div>` +
+          `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
+          `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
+          `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
+          `<div>${t('channels')}: ${m.capture_channels}</div>`;
+
+        const logPane = document.getElementById('logPane');
+        logPane.innerHTML = '';
+        (snapshot.logs || []).forEach((line) => {
+          const div = document.createElement('div');
+          div.className = 'log-line';
+          div.textContent = formatLogLine(line);
+          logPane.appendChild(div);
+        });
+
+        const disabled = state.busy;
+        document.getElementById('sourceLoopback').disabled = disabled;
+        document.getElementById('sourceSynthetic').disabled = disabled;
+        document.getElementById('fallbackToggle').disabled = disabled;
+        document.getElementById('dumpToggle').disabled = disabled;
+        document.getElementById('copyAddrBtn').disabled = disabled;
+      }
+
       async function refresh() {
         try {
-          const metrics = await invoke('get_metrics');
-          out.textContent = JSON.stringify(metrics, null, 2);
-        } catch (e) {
-          out.textContent = String(e);
+          const snapshot = await tauriInvoke('get_desktop_snapshot');
+          renderSnapshot(snapshot);
+        } catch (error) {
+          document.getElementById('errorText').textContent = String(error);
         }
       }
-      document.getElementById('refresh').addEventListener('click', refresh);
-      document.getElementById('stop').addEventListener('click', async () => {
-        await invoke('stop_service');
+
+      async function call(command, payload) {
+        state.busy = true;
+        if (state.snapshot) renderSnapshot(state.snapshot);
+        try {
+          await tauriInvoke(command, payload);
+        } finally {
+          state.busy = false;
+          await refresh();
+        }
+      }
+
+      async function applySettings(nextAudioSource = null) {
+        if (!state.snapshot) return;
+        await call('update_service_settings', {
+          settings: {
+            audio_source: nextAudioSource || state.snapshot.audio_source,
+            fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
+            capture_dump_wav: document.getElementById('dumpToggle').checked,
+          }
+        });
+      }
+
+      async function copyAddress() {
+        if (!state.snapshot) return;
+        try {
+          await navigator.clipboard.writeText(state.snapshot.connect_address);
+          document.getElementById('statusSubline').textContent = t('copied');
+        } catch {
+          document.getElementById('errorText').textContent = state.snapshot.connect_address;
+        }
+      }
+
+      function bindEvents() {
+        document.getElementById('langSelect').addEventListener('change', (e) => {
+          state.lang = e.target.value;
+          renderText();
+          if (state.snapshot) renderSnapshot(state.snapshot);
+        });
+
+        document.getElementById('primaryActionBtn').addEventListener('click', async () => {
+          const action = document.getElementById('primaryActionBtn').dataset.action;
+          if (action === 'start') await call('start_service');
+          if (action === 'stop') await call('stop_service');
+        });
+
+        document.getElementById('sourceLoopback').addEventListener('click', () => applySettings('windows_loopback'));
+        document.getElementById('sourceSynthetic').addEventListener('click', () => applySettings('synthetic'));
+        document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
+        document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
+        document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
+      }
+
+      async function init() {
+        document.getElementById('langSelect').value = state.lang;
+        renderText();
+        bindEvents();
         await refresh();
-      });
-      refresh();
+        setInterval(refresh, 2000);
+      }
+
+      init();
     </script>
   </body>
 </html>

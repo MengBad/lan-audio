@@ -23,6 +23,7 @@ pub struct Metrics {
     current_audio_source: RwLock<String>,
     capture_source_state: RwLock<String>,
     capture_device_name: RwLock<String>,
+    recent_clients: RwLock<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +48,7 @@ pub struct MetricsSnapshot {
     pub capture_last_peak: f32,
     pub capture_last_rms: f32,
     pub last_capture_pts_ms: u64,
+    pub recent_clients: Vec<String>,
 }
 
 impl Metrics {
@@ -144,6 +146,25 @@ impl Metrics {
         self.last_capture_pts_ms.store(pts_ms, Ordering::Relaxed);
     }
 
+    pub fn note_client_connected(&self, client_name: &str, client_ip: &str) {
+        let normalized_name = if client_name.trim().is_empty() {
+            "Unknown Client"
+        } else {
+            client_name.trim()
+        };
+        let normalized_ip = client_ip.trim();
+        let label = if normalized_ip.is_empty() {
+            normalized_name.to_string()
+        } else {
+            format!("{normalized_name} ({normalized_ip})")
+        };
+        if let Ok(mut lock) = self.recent_clients.write() {
+            lock.retain(|v| v != &label);
+            lock.insert(0, label);
+            lock.truncate(8);
+        }
+    }
+
     pub fn snapshot(&self) -> MetricsSnapshot {
         let current_audio_source = self
             .current_audio_source
@@ -162,6 +183,11 @@ impl Metrics {
             .unwrap_or_else(|_| "unknown".to_string());
         let capture_last_peak = self.capture_last_peak.read().map(|v| *v).unwrap_or(0.0);
         let capture_last_rms = self.capture_last_rms.read().map(|v| *v).unwrap_or(0.0);
+        let recent_clients = self
+            .recent_clients
+            .read()
+            .map(|v| v.clone())
+            .unwrap_or_default();
 
         MetricsSnapshot {
             tx_packets: self.tx_packets.load(Ordering::Relaxed),
@@ -184,6 +210,7 @@ impl Metrics {
             capture_last_peak,
             capture_last_rms,
             last_capture_pts_ms: self.last_capture_pts_ms.load(Ordering::Relaxed),
+            recent_clients,
         }
     }
 }
@@ -213,6 +240,7 @@ mod tests {
         m.inc_capture_non_silent_frames();
         m.inc_capture_no_packet_count();
         m.set_last_capture_pts_ms(1234);
+        m.note_client_connected("Pixel 8", "192.168.1.10");
         let s = m.snapshot();
         assert_eq!(s.active_sessions, 1);
         assert_eq!(s.tx_packets, 2);
@@ -234,5 +262,6 @@ mod tests {
         assert!((s.capture_last_peak - 0.8).abs() < 1e-6);
         assert!((s.capture_last_rms - 0.2).abs() < 1e-6);
         assert_eq!(s.last_capture_pts_ms, 1234);
+        assert_eq!(s.recent_clients, vec!["Pixel 8 (192.168.1.10)"]);
     }
 }
