@@ -32,6 +32,7 @@
 - [x] v27 修复后台服务事件线程崩溃（EventChannel 回调统一主线程）
 - [x] v28 修复后台服务明文策略拦截（允许 LAN `ws://` cleartext）
 - [x] v29 修复后台重连竞态（去重重连 + 过期回调隔离）
+- [x] 首次使用提示改为持久化只提示一次（不再因 App 进程重启重复弹出）
 - [ ] 稳定性优化：v26 后台链路实机验收（锁屏/切后台/熄屏连续播放，多机型）
 - [ ] 稳定性优化：多机型 AudioTrack 稳定性与延迟调优（当前已实现基础可播放路径）
 - [ ] 稳定性优化：jitter buffer 自适应策略（当前固定起播缓冲）
@@ -40,6 +41,38 @@
 ## Opus
 
 - [ ] replace PCM passthrough with real Opus encoder/decoder
+
+## Protocol Evolution (v2)
+
+- [x] Protocol v2 草案文档（控制面/数据面/capabilities/迁移策略）
+- [x] Rust 协议结构骨架（AudioMode、Capabilities、ControlMessageV2、UdpAudioHeaderV2）
+- [x] 控制面联动已接通：`hello/hello_ack + client_info/server_info + set_audio_mode/audio_mode_changed`
+- [x] 数据面双栈灰度准备：服务端可选 `legacy_las1/v2_header`（默认 legacy）+ 客户端 `LAS1/LAV2` 双栈识别
+- [x] config_changed/discontinuity 最小处理：服务端打 flag + 客户端最小重同步
+- [x] loopback + v2_header 显式灰度开关：默认关闭，未带 `--allow-loopback-v2-header-gray` 时自动回退 `legacy_las1`
+- [x] synthetic + v2_header 本地灰度验收（LAV2 识别、模式切换、flags 与重同步联调通过）
+- [x] synthetic + v2_header 真机灰度验收（真实 Android 设备完成播放、模式切换、指标采样，结论：通过）
+- [x] 双端模式状态联动：服务端持有 `current_audio_mode`，Android + Windows 可显示并同步（默认 `balanced`）
+- [ ] 下一阶段：修复 Windows loopback 采集节奏后，重新执行 `loopback + v2_header` 完整真机灰度（当前结论：未通过）
+- [ ] 灰度启用：双端协商后按连接动态切换到 v2 数据面 header（当前仍以配置开关为主）
+- [ ] 全量启用：默认路径切换到 v2，并保留 v1 回退策略
+
+## loopback + v2_header 小流量灰度结论
+
+- 结论：当前未通过
+- 已到位：
+  - `windows_loopback + v2_header` 仅在显式灰度开关下允许启用
+  - 默认主路径仍是 `legacy_las1`
+  - 可回滚到 `windows_loopback + legacy_las1` 与 `synthetic + v2_header`
+- 主要问题：
+  - Android 真机已连通，但客户端长期停留在 `buffering`
+  - `rx_frames_per_sec` 仅约 `6 fps`，`jitter_underrun` 持续上升
+  - 服务端 Windows loopback 采集端出现大量 `no_packet / underrun`，`capture_last_peak/rms` 大多数时间近似 `0`
+- 主阻塞点：
+  - Windows 采集端
+- 额外说明：
+  - `balanced -> low_latency` 的 `config_changed/discontinuity` 已打通
+  - 后续模式切换阶段被真机 `adb` 掉线打断，仍需回补
 
 ## Productization
 

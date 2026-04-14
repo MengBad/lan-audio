@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
-use lan_audio_protocol::{ClientControlMessage, ServerControlMessage};
+use lan_audio_protocol::{
+    AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo, ControlMessageV2, ErrorMessage,
+    Hello, HelloAck, ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode,
+    PROTOCOL_VERSION_V2,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
 use tokio_tungstenite::tungstenite::Message;
@@ -22,6 +26,7 @@ pub struct SessionServer {
     metrics: Arc<Metrics>,
     transport: UdpTransport,
     active_streams: Arc<Mutex<HashMap<IpAddr, ActiveStream>>>,
+    current_audio_mode: Arc<StdMutex<AudioMode>>,
 }
 
 struct ActiveStream {
@@ -31,12 +36,18 @@ struct ActiveStream {
 
 impl SessionServer {
     const UDP_STREAM_GRACE_AFTER_WS_CLOSE_SECS: u64 = 30;
-    pub fn new(cfg: Arc<ServerConfig>, metrics: Arc<Metrics>, transport: UdpTransport) -> Self {
+    pub fn new(
+        cfg: Arc<ServerConfig>,
+        metrics: Arc<Metrics>,
+        transport: UdpTransport,
+        current_audio_mode: Arc<StdMutex<AudioMode>>,
+    ) -> Self {
         Self {
             cfg,
             metrics,
             transport,
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            current_audio_mode,
         }
     }
 
@@ -81,24 +92,77 @@ impl SessionServer {
             .context("hello timeout")?
             .ok_or_else(|| anyhow!("client disconnected before hello"))??;
 
-        let client_hello = match hello_msg {
-            Message::Text(text) => {
-                serde_json::from_str::<ClientControlMessage>(&text).context("invalid hello json")?
-            }
+        let hello_text = match hello_msg {
+            Message::Text(text) => text.to_string(),
             _ => return Err(anyhow!("expected text hello message")),
         };
 
-        let (client_name, udp_port, desired_sample_rate, channels) = match client_hello {
-            ClientControlMessage::ClientHello {
-                client_name,
-                udp_port,
-                desired_sample_rate,
-                channels,
-            } => (client_name, udp_port, desired_sample_rate, channels),
-            _ => return Err(anyhow!("first message must be client_hello")),
+        let mut current_audio_mode = self.read_current_audio_mode();
+        let session_id = Uuid::new_v4();
+        let (client_name, udp_port, desired_sample_rate, channels, v2_session, client_id) =
+            match parse_session_hello(&hello_text)? {
+                SessionHello::Legacy {
+                    client_name,
+                    udp_port,
+                    desired_sample_rate,
+                    channels,
+                } => (
+                    client_name,
+                    udp_port,
+                    desired_sample_rate,
+                    channels,
+                    false,
+                    "legacy-client".to_string(),
+                ),
+                SessionHello::V2(hello) => {
+                    info!(
+                        session = %session_id,
+                        client_id = %hello.client_id,
+                        device_name = %hello.device_name,
+                        protocol_version = hello.protocol_version,
+                        preferred_audio_mode = ?hello.preferred_audio_mode,
+                        capabilities = ?hello.capabilities,
+                        "protocol v2 hello received"
+                    );
+                    (
+                        hello.device_name,
+                        hello.udp_port,
+                        hello.desired_sample_rate,
+                        hello.channels,
+                        true,
+                        hello.client_id,
+                    )
+                }
+            };
+
+        if v2_session {
+            let hello_ack = ControlMessageV2::HelloAck(HelloAck {
+                protocol_version: PROTOCOL_VERSION_V2,
+                accepted: true,
+                session_id,
+                current_audio_mode,
+                capabilities: default_server_capabilities(),
+                message: "hello_ack".to_string(),
+            });
+            ws_tx
+                .send(Message::Text(serde_json::to_string(&hello_ack)?.into()))
+                .await?;
+
+            let server_info = ControlMessageV2::ServerInfo(ServerInfo {
+                server_id: session_id,
+                server_name: self.cfg.server_name.clone(),
+                platform: "windows".to_string(),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                ws_port: self.cfg.ws_bind.port(),
+                udp_port: self.cfg.udp_bind.port(),
+                protocol_version: PROTOCOL_VERSION_V2,
+                current_audio_mode,
+            });
+            ws_tx
+                .send(Message::Text(serde_json::to_string(&server_info)?.into()))
+                .await?;
         };
 
-        let session_id = Uuid::new_v4();
         let target = SocketAddr::new(resolve_ip(peer.ip()), udp_port);
         self.metrics
             .note_client_connected(&client_name, &peer.ip().to_string());
@@ -119,6 +183,7 @@ impl SessionServer {
             session = %session_id,
             peer = %peer,
             client = %client_name,
+            client_id = %client_id,
             udp_target = %target,
             "session established"
         );
@@ -163,16 +228,68 @@ impl SessionServer {
                 msg = ws_rx.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            if let Ok(ClientControlMessage::ClientPing { seq, ts_unix_ms }) = serde_json::from_str::<ClientControlMessage>(&text) {
+                            if let Ok(ClientControlMessage::ClientPing { seq, ts_unix_ms }) =
+                                serde_json::from_str::<ClientControlMessage>(&text)
+                            {
                                 let pong = ServerControlMessage::ServerPong { seq, ts_unix_ms };
-                                ws_tx.send(Message::Text(serde_json::to_string(&pong)?.into())).await?;
+                                ws_tx
+                                    .send(Message::Text(serde_json::to_string(&pong)?.into()))
+                                    .await?;
                                 let snapshot = self.metrics.snapshot();
                                 let metrics_msg = ServerControlMessage::ServerMetrics {
                                     tx_packets: snapshot.tx_packets,
                                     tx_bytes: snapshot.tx_bytes,
                                     sessions: snapshot.active_sessions,
                                 };
-                                ws_tx.send(Message::Text(serde_json::to_string(&metrics_msg)?.into())).await?;
+                                ws_tx
+                                    .send(Message::Text(serde_json::to_string(&metrics_msg)?.into()))
+                                    .await?;
+                                continue;
+                            }
+
+                            if v2_session {
+                                match serde_json::from_str::<ControlMessageV2>(&text) {
+                                    Ok(v2_msg) => {
+                                        match v2_msg {
+                                            ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason }) => {
+                                                current_audio_mode = mode;
+                                                self.write_current_audio_mode(mode);
+                                                let changed = ControlMessageV2::AudioModeChanged(AudioModeChanged {
+                                                    mode,
+                                                    applied: true,
+                                                    reason,
+                                                });
+                                                ws_tx.send(Message::Text(serde_json::to_string(&changed)?.into())).await?;
+                                                info!(session = %session_id, mode = ?current_audio_mode, "audio mode updated by client");
+                                            }
+                                            ControlMessageV2::ClientInfo(ClientInfo { client_name, platform, app_version, udp_port }) => {
+                                                info!(
+                                                    session = %session_id,
+                                                    client = %client_name,
+                                                    platform = %platform,
+                                                    app_version = %app_version,
+                                                    udp_port,
+                                                    "protocol v2 client info received"
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            session = %session_id,
+                                            error = %err,
+                                            payload = %text,
+                                            "failed to parse protocol v2 control message"
+                                        );
+                                        let error = ControlMessageV2::Error(ErrorMessage {
+                                            code: "bad_control_message".to_string(),
+                                            message: format!("invalid v2 message: {err}"),
+                                            recoverable: true,
+                                        });
+                                        ws_tx.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
+                                    }
+                                }
                             }
                         }
                         Some(Ok(Message::Close(_))) | None => {
@@ -234,6 +351,151 @@ impl SessionServer {
     }
 }
 
+impl SessionServer {
+    fn read_current_audio_mode(&self) -> AudioMode {
+        *self
+            .current_audio_mode
+            .lock()
+            .expect("current_audio_mode lock")
+    }
+
+    fn write_current_audio_mode(&self, mode: AudioMode) {
+        *self
+            .current_audio_mode
+            .lock()
+            .expect("current_audio_mode lock") = mode;
+    }
+}
+
 fn resolve_ip(ip: IpAddr) -> IpAddr {
     ip
+}
+
+#[derive(Debug)]
+enum SessionHello {
+    Legacy {
+        client_name: String,
+        udp_port: u16,
+        desired_sample_rate: u32,
+        channels: u8,
+    },
+    V2(Hello),
+}
+
+fn parse_session_hello(text: &str) -> anyhow::Result<SessionHello> {
+    if let Ok(ControlMessageV2::Hello(hello)) = serde_json::from_str::<ControlMessageV2>(text) {
+        if hello.protocol_version != PROTOCOL_VERSION_V2 {
+            return Err(anyhow!(
+                "unsupported protocol version: {}",
+                hello.protocol_version
+            ));
+        }
+        return Ok(SessionHello::V2(hello));
+    }
+
+    let legacy =
+        serde_json::from_str::<ClientControlMessage>(text).context("invalid hello json")?;
+    match legacy {
+        ClientControlMessage::ClientHello {
+            client_name,
+            udp_port,
+            desired_sample_rate,
+            channels,
+        } => Ok(SessionHello::Legacy {
+            client_name,
+            udp_port,
+            desired_sample_rate,
+            channels,
+        }),
+        _ => Err(anyhow!("first message must be client_hello or hello")),
+    }
+}
+
+pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
+    ProtocolCapabilities {
+        supports_pcm16: true,
+        supports_f32: false,
+        supports_modes: true,
+        supports_metrics: true,
+        supports_opus_future: false,
+        supports_low_latency: true,
+        supports_high_quality: true,
+        supports_native_audio_track: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lan_audio_protocol::{AudioMode, ControlMessageV2, Hello, PROTOCOL_VERSION_V2};
+
+    #[test]
+    fn parse_session_hello_accepts_legacy_hello() {
+        let json = r#"{
+            "type":"client_hello",
+            "client_name":"pixel",
+            "udp_port":54000,
+            "desired_sample_rate":48000,
+            "channels":2
+        }"#;
+
+        let parsed = parse_session_hello(json).expect("parse legacy");
+        match parsed {
+            SessionHello::Legacy {
+                client_name,
+                udp_port,
+                desired_sample_rate,
+                channels,
+            } => {
+                assert_eq!(client_name, "pixel");
+                assert_eq!(udp_port, 54000);
+                assert_eq!(desired_sample_rate, 48000);
+                assert_eq!(channels, 2);
+            }
+            SessionHello::V2(_) => panic!("expected legacy hello"),
+        }
+    }
+
+    #[test]
+    fn parse_session_hello_accepts_v2_hello() {
+        let msg = ControlMessageV2::Hello(Hello {
+            protocol_version: PROTOCOL_VERSION_V2,
+            device_name: "pixel-8".to_string(),
+            client_id: "android-1".to_string(),
+            udp_port: 55000,
+            desired_sample_rate: 48_000,
+            channels: 2,
+            capabilities: default_server_capabilities(),
+            preferred_audio_mode: AudioMode::Balanced,
+        });
+        let json = serde_json::to_string(&msg).expect("serialize");
+
+        let parsed = parse_session_hello(&json).expect("parse v2");
+        match parsed {
+            SessionHello::V2(hello) => {
+                assert_eq!(hello.udp_port, 55000);
+                assert_eq!(hello.preferred_audio_mode, AudioMode::Balanced);
+                assert!(hello.capabilities.supports_modes);
+                assert!(hello.capabilities.supports_native_audio_track);
+            }
+            SessionHello::Legacy { .. } => panic!("expected v2 hello"),
+        }
+    }
+
+    #[test]
+    fn parse_session_hello_rejects_unsupported_v2_version() {
+        let msg = ControlMessageV2::Hello(Hello {
+            protocol_version: 99,
+            device_name: "pixel-8".to_string(),
+            client_id: "android-1".to_string(),
+            udp_port: 55000,
+            desired_sample_rate: 48_000,
+            channels: 2,
+            capabilities: default_server_capabilities(),
+            preferred_audio_mode: AudioMode::Balanced,
+        });
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let err = parse_session_hello(&json).expect_err("must reject unsupported version");
+        assert!(err.to_string().contains("unsupported protocol version"));
+    }
 }

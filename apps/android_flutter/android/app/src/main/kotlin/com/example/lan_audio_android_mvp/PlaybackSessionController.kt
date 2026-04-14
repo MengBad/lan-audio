@@ -8,10 +8,14 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Process
+import android.os.SystemClock
 import android.util.Log
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 
 class PlaybackSessionController(
@@ -21,7 +25,8 @@ class PlaybackSessionController(
     private val logTag = "lan_audio_session"
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val audioTrackController = AudioTrackController()
-    private val controlExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val controlExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
     private var reconnectFuture: ScheduledFuture<*>? = null
     private var streamManager: StreamSessionManager? = null
@@ -37,6 +42,12 @@ class PlaybackSessionController(
     private var lastSeq: Long? = null
     private var udpLoss: Int = 0
     private var streamGeneration: Long = 0
+    private var silenceFillCount: Int = 0
+    private var cfgChangedCount: Int = 0
+    private var discontinuityCount: Int = 0
+    private var lastMetricsLogAtMs: Long = 0
+    private var lastLoggedUdpPackets: Int = 0
+    private var lastLoggedAudioTrackWriteFrames: Long = 0
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -64,6 +75,12 @@ class PlaybackSessionController(
         jitterBuffer = PlaybackJitterBuffer(options.startBufferMs, options.maxBufferMs)
         lastSeq = null
         udpLoss = 0
+        silenceFillCount = 0
+        cfgChangedCount = 0
+        discontinuityCount = 0
+        lastMetricsLogAtMs = 0
+        lastLoggedUdpPackets = 0
+        lastLoggedAudioTrackWriteFrames = 0
 
         stateStore.update {
             it.copy(
@@ -83,6 +100,11 @@ class PlaybackSessionController(
                     udpBytes = 0,
                     lossEstimate = 0,
                     lastSeq = null,
+                    silenceFillCount = 0,
+                    rxFramesPerSec = 0.0,
+                    audioTrackWriteFramesPerSec = 0.0,
+                    cfgChangedCount = 0,
+                    discontinuityCount = 0,
                 ),
             )
         }
@@ -130,6 +152,43 @@ class PlaybackSessionController(
                 handleUdpPacket(packet)
             }
 
+            override fun onControlHelloAck(
+                protocolVersion: Int,
+                currentAudioMode: String,
+                capabilities: Map<String, Boolean>,
+            ) {
+                if (generation != streamGeneration) return
+                stateStore.update {
+                    it.copy(
+                        protocolVersion = protocolVersion,
+                        currentAudioMode = normalizeAudioMode(currentAudioMode),
+                        negotiatedCapabilities = capabilities,
+                        recentLog = "hello_ack_v2",
+                    )
+                }
+            }
+
+            override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
+                if (generation != streamGeneration) return
+                stateStore.update {
+                    it.copy(
+                        serverPlatform = platform,
+                        serverAppVersion = appVersion,
+                        currentAudioMode = normalizeAudioMode(currentAudioMode),
+                    )
+                }
+            }
+
+            override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
+                if (generation != streamGeneration) return
+                stateStore.update {
+                    it.copy(
+                        currentAudioMode = normalizeAudioMode(mode),
+                        recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
+                    )
+                }
+            }
+
             override fun onError(code: String, message: String) {
                 if (generation != streamGeneration) return
                 Log.e(logTag, "stream error code=$code message=$message")
@@ -171,15 +230,55 @@ class PlaybackSessionController(
     }
 
     fun setOptions(next: PlaybackOptions) {
+        val snapshot = stateStore.current()
+        Log.i(
+            logTag,
+            "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
+        )
         options = next
         jitterBuffer = PlaybackJitterBuffer(options.startBufferMs, options.maxBufferMs)
         stateStore.update { it.copy(recentLog = "options_updated") }
+    }
+
+    fun setAudioMode(mode: String, reason: String = "user_selected") {
+        val normalized = normalizeAudioMode(mode)
+        val sent = streamManager?.setAudioMode(normalized, reason) ?: false
+        stateStore.update {
+            it.copy(recentLog = if (sent) "set_audio_mode:$normalized" else "set_audio_mode_pending:$normalized")
+        }
+    }
+
+    fun dumpMetrics(reason: String = "manual_request") {
+        maybeLogMetrics(force = true, reason = reason)
     }
 
     fun destroy() {
         reconnectFuture?.cancel(true)
         controlExecutor.shutdownNow()
         stopPlayback("controller_destroy")
+    }
+
+    private fun playoutThreadFactory(): ThreadFactory {
+        return ThreadFactory { runnable ->
+            Thread({
+                val threadName = Thread.currentThread().name
+                val threadId = Process.myTid()
+                try {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+                    val effectivePriority = Process.getThreadPriority(threadId)
+                    Log.i(
+                        logTag,
+                        "playout executor thread priority set name=$threadName tid=$threadId requested=THREAD_PRIORITY_AUDIO(${Process.THREAD_PRIORITY_AUDIO}) effective=$effectivePriority",
+                    )
+                } catch (t: Throwable) {
+                    Log.w(
+                        logTag,
+                        "playout executor thread priority set failed name=$threadName tid=$threadId requested=THREAD_PRIORITY_AUDIO(${Process.THREAD_PRIORITY_AUDIO}) error=${t.message}",
+                    )
+                }
+                runnable.run()
+            }, "lan-audio-service-playout")
+        }
     }
 
     private fun ensurePlayoutLoop() {
@@ -196,6 +295,22 @@ class PlaybackSessionController(
     }
 
     private fun handleUdpPacket(packet: LasPacket) {
+        if (packet.hasDiscontinuity) {
+            discontinuityCount += 1
+            jitterBuffer.clear()
+            lastSeq = null
+            stateStore.update { it.copy(recentLog = "udp_discontinuity_reset") }
+        }
+
+        if (packet.hasConfigChanged) {
+            cfgChangedCount += 1
+            audioTrackController.stop()
+            audioTrackController.release()
+            audioInit = false
+            audioStarted = false
+            stateStore.update { it.copy(recentLog = "udp_config_changed_resync") }
+        }
+
         if (lastSeq != null) {
             val expected = ((lastSeq!! + 1L) and 0xFFFFFFFFL).toInt()
             if (packet.sequence != expected) {
@@ -217,12 +332,16 @@ class PlaybackSessionController(
                     jitterDropped = stats.droppedFrames,
                     jitterLate = stats.lateFrames,
                     udpPackets = current.udpPackets + 1,
-                    udpBytes = current.udpBytes + packet.payload.size + 27,
+                    udpBytes = current.udpBytes + packet.payload.size + packet.headerSize,
                     lossEstimate = udpLoss,
                     lastSeq = lastSeq,
+                    silenceFillCount = silenceFillCount,
+                    cfgChangedCount = cfgChangedCount,
+                    discontinuityCount = discontinuityCount,
                 ),
             )
         }
+        maybeLogMetrics()
     }
 
     private fun playoutTick() {
@@ -237,9 +356,13 @@ class PlaybackSessionController(
                         jitterUnderrun = stats.underrunCount,
                         jitterDropped = stats.droppedFrames,
                         jitterLate = stats.lateFrames,
+                        silenceFillCount = silenceFillCount,
+                        cfgChangedCount = cfgChangedCount,
+                        discontinuityCount = discontinuityCount,
                     ),
                 )
             }
+            maybeLogMetrics()
             return
         }
 
@@ -271,9 +394,13 @@ class PlaybackSessionController(
                     nativeQueuedFrames = audioStats.nativeQueuedFrames,
                     audioTrackWriteFrames = audioStats.audioTrackWriteFrames,
                     audioTrackShortWriteCount = audioStats.audioTrackShortWriteCount,
+                    silenceFillCount = silenceFillCount,
+                    cfgChangedCount = cfgChangedCount,
+                    discontinuityCount = discontinuityCount,
                 ),
             )
         }
+        maybeLogMetrics()
     }
 
     private fun scheduleReconnect(reason: String, immediate: Boolean = false) {
@@ -323,6 +450,43 @@ class PlaybackSessionController(
                 override fun onUdpPacket(packet: LasPacket) {
                     if (generation != streamGeneration) return
                     handleUdpPacket(packet)
+                }
+
+                override fun onControlHelloAck(
+                    protocolVersion: Int,
+                    currentAudioMode: String,
+                    capabilities: Map<String, Boolean>,
+                ) {
+                    if (generation != streamGeneration) return
+                    stateStore.update {
+                        it.copy(
+                            protocolVersion = protocolVersion,
+                            currentAudioMode = normalizeAudioMode(currentAudioMode),
+                            negotiatedCapabilities = capabilities,
+                            recentLog = "hello_ack_v2",
+                        )
+                    }
+                }
+
+                override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
+                    if (generation != streamGeneration) return
+                    stateStore.update {
+                        it.copy(
+                            serverPlatform = platform,
+                            serverAppVersion = appVersion,
+                            currentAudioMode = normalizeAudioMode(currentAudioMode),
+                        )
+                    }
+                }
+
+                override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
+                    if (generation != streamGeneration) return
+                    stateStore.update {
+                        it.copy(
+                            currentAudioMode = normalizeAudioMode(mode),
+                            recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
+                        )
+                    }
                 }
 
                 override fun onError(code: String, message: String) {
@@ -432,5 +596,75 @@ class PlaybackSessionController(
         legacyFocusListener = null
         audioFocusAcquired = false
         Log.i(logTag, "audio focus released")
+    }
+
+    private fun normalizeAudioMode(mode: String): String {
+        return when (mode.lowercase()) {
+            "low_latency" -> "low_latency"
+            "high_quality" -> "high_quality"
+            else -> "balanced"
+        }
+    }
+
+    private fun maybeLogMetrics(force: Boolean = false, reason: String = "periodic") {
+        val now = SystemClock.elapsedRealtime()
+        val snapshot = stateStore.current()
+        val metrics = snapshot.metrics
+        if (lastMetricsLogAtMs == 0L) {
+            lastMetricsLogAtMs = now
+            lastLoggedUdpPackets = metrics.udpPackets
+            lastLoggedAudioTrackWriteFrames = metrics.audioTrackWriteFrames
+            if (!force) {
+                return
+            }
+        }
+
+        val elapsedMs = (now - lastMetricsLogAtMs).coerceAtLeast(1L)
+        if (!force && elapsedMs < 1000L) {
+            return
+        }
+
+        val rxFramesPerSec =
+            ((metrics.udpPackets - lastLoggedUdpPackets).coerceAtLeast(0) * 1000.0) / elapsedMs.toDouble()
+        val audioTrackWriteFramesPerSec =
+            ((metrics.audioTrackWriteFrames - lastLoggedAudioTrackWriteFrames).coerceAtLeast(0L) * 1000.0) /
+                elapsedMs.toDouble()
+
+        stateStore.update {
+            it.copy(
+                metrics = it.metrics.copy(
+                    rxFramesPerSec = rxFramesPerSec,
+                    audioTrackWriteFramesPerSec = audioTrackWriteFramesPerSec,
+                    silenceFillCount = silenceFillCount,
+                    cfgChangedCount = cfgChangedCount,
+                    discontinuityCount = discontinuityCount,
+                ),
+            )
+        }
+
+        Log.i(
+            logTag,
+            String.format(
+                Locale.US,
+                "playback_summary reason=%s playback=%s buffered_ms=%d jitter_underrun=%d dropped_late_frames=%d/%d silence_fill_count=%d rx_frames_per_sec=%.1f audio_track_write_frames_per_sec=%.1f cfg_changed=%d discontinuity=%d mode=%s recent=%s",
+                reason,
+                snapshot.playbackState,
+                metrics.bufferedMs,
+                metrics.jitterUnderrun,
+                metrics.jitterDropped,
+                metrics.jitterLate,
+                silenceFillCount,
+                rxFramesPerSec,
+                audioTrackWriteFramesPerSec,
+                cfgChangedCount,
+                discontinuityCount,
+                snapshot.currentAudioMode,
+                snapshot.recentLog,
+            ),
+        )
+
+        lastMetricsLogAtMs = now
+        lastLoggedUdpPackets = metrics.udpPackets
+        lastLoggedAudioTrackWriteFrames = metrics.audioTrackWriteFrames
     }
 }

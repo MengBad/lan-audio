@@ -1,0 +1,68 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lan_audio_android_mvp/audio/las_packet.dart';
+
+void main() {
+  test('parse legacy LAS1 packet', () {
+    final payload = Uint8List.fromList([1, 2, 3, 4]);
+    final bytes = BytesBuilder()
+      ..add('LAS1'.codeUnits)
+      ..add([1]) // version
+      ..add([0]) // flags
+      ..add(_u32(7))
+      ..add(_u64(123))
+      ..add(_u32(48000))
+      ..add([2]) // channels
+      ..add(_u16(480))
+      ..add(_u16(payload.length))
+      ..add(payload);
+
+    final packet = LasPacket.parse(bytes.toBytes());
+    expect(packet, isNotNull);
+    expect(packet!.version, 1);
+    expect(packet.sequence, 7);
+    expect(packet.payload.length, 4);
+  });
+
+  test('parse v2 LAV2 packet', () {
+    final payload = Uint8List.fromList([5, 6, 7, 8]);
+    const headerSize = 33;
+    final bytes = BytesBuilder()
+      ..add('LAV2'.codeUnits)
+      ..add([2]) // protocol_version
+      ..add(_u16(headerSize))
+      ..add(_u16(0x06)) // config_changed + discontinuity
+      ..add(_u32(9))
+      ..add(_u64(456))
+      ..add([1]) // codec pcm16
+      ..add([2]) // channels
+      ..add(_u32(48000))
+      ..add(_u16(10)) // frame_duration_ms
+      ..add(_u16(payload.length))
+      ..add(_u16(0)) // reserved
+      ..add(payload);
+
+    final packet = LasPacket.parse(bytes.toBytes());
+    expect(packet, isNotNull);
+    expect(packet!.version, 2);
+    expect(packet.hasConfigChanged, isTrue);
+    expect(packet.hasDiscontinuity, isTrue);
+    expect(packet.sequence, 9);
+  });
+}
+
+List<int> _u16(int value) {
+  final b = ByteData(2)..setUint16(0, value, Endian.little);
+  return b.buffer.asUint8List();
+}
+
+List<int> _u32(int value) {
+  final b = ByteData(4)..setUint32(0, value, Endian.little);
+  return b.buffer.asUint8List();
+}
+
+List<int> _u64(int value) {
+  final b = ByteData(8)..setUint64(0, value, Endian.little);
+  return b.buffer.asUint8List();
+}

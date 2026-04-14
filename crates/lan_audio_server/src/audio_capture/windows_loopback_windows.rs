@@ -2,10 +2,10 @@ use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::ptr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use tokio::time::sleep;
+use tokio::task::yield_now;
 use tracing::{debug, info, warn};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
@@ -38,6 +38,206 @@ struct DeviceFormatInfo {
     sub_format: Option<String>,
 }
 
+#[derive(Debug)]
+struct CaptureStatsWindow {
+    started_at: Instant,
+    last_callback_at: Option<Instant>,
+    callbacks: u64,
+    silent_callbacks: u64,
+    non_silent_callbacks: u64,
+    total_callback_frames: u64,
+    emitted_frames: u64,
+    no_packet_polls: u64,
+    total_samples: u64,
+    non_zero_samples: u64,
+    sum_sq: f64,
+    peak: f32,
+    interval_count: u64,
+    interval_total_ms: f64,
+    interval_max_ms: f64,
+    last_accumulator_buffered_samples: usize,
+}
+
+impl CaptureStatsWindow {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            last_callback_at: None,
+            callbacks: 0,
+            silent_callbacks: 0,
+            non_silent_callbacks: 0,
+            total_callback_frames: 0,
+            emitted_frames: 0,
+            no_packet_polls: 0,
+            total_samples: 0,
+            non_zero_samples: 0,
+            sum_sq: 0.0,
+            peak: 0.0,
+            interval_count: 0,
+            interval_total_ms: 0.0,
+            interval_max_ms: 0.0,
+            last_accumulator_buffered_samples: 0,
+        }
+    }
+
+    fn record_silent_callback(
+        &mut self,
+        frames: u32,
+        sample_count: usize,
+        accumulator_buffered_samples: usize,
+    ) {
+        self.record_callback(
+            frames,
+            sample_count as u64,
+            0,
+            0.0,
+            0.0,
+            true,
+            accumulator_buffered_samples,
+        );
+    }
+
+    fn record_pcm_callback(
+        &mut self,
+        frames: u32,
+        samples: &[f32],
+        accumulator_buffered_samples: usize,
+    ) {
+        let mut peak = 0.0_f32;
+        let mut sum_sq = 0.0_f64;
+        let mut non_zero_samples = 0_u64;
+
+        for sample in samples {
+            let abs = sample.abs();
+            if abs > peak {
+                peak = abs;
+            }
+            if abs > 1e-6 {
+                non_zero_samples += 1;
+            }
+            let sample64 = *sample as f64;
+            sum_sq += sample64 * sample64;
+        }
+
+        self.record_callback(
+            frames,
+            samples.len() as u64,
+            non_zero_samples,
+            peak,
+            sum_sq,
+            false,
+            accumulator_buffered_samples,
+        );
+    }
+
+    fn record_no_packet_poll(&mut self, accumulator_buffered_samples: usize) {
+        self.no_packet_polls += 1;
+        self.last_accumulator_buffered_samples = accumulator_buffered_samples;
+    }
+
+    fn record_emitted_frame(&mut self, accumulator_buffered_samples: usize) {
+        self.emitted_frames += 1;
+        self.last_accumulator_buffered_samples = accumulator_buffered_samples;
+    }
+
+    fn maybe_log(&mut self, source_buffer_frames: u32) {
+        let elapsed = self.started_at.elapsed();
+        if elapsed < Duration::from_secs(1) {
+            return;
+        }
+
+        let elapsed_secs = elapsed.as_secs_f64().max(f64::EPSILON);
+        let callbacks_per_sec = self.callbacks as f64 / elapsed_secs;
+        let avg_frames_per_callback = if self.callbacks == 0 {
+            0.0
+        } else {
+            self.total_callback_frames as f64 / self.callbacks as f64
+        };
+        let frames_per_sec = self.total_callback_frames as f64 / elapsed_secs;
+        let emitted_frames_per_sec = self.emitted_frames as f64 / elapsed_secs;
+        let rms = if self.total_samples == 0 {
+            0.0
+        } else {
+            (self.sum_sq / self.total_samples as f64).sqrt()
+        };
+        let non_zero_sample_ratio = if self.total_samples == 0 {
+            0.0
+        } else {
+            self.non_zero_samples as f64 / self.total_samples as f64
+        };
+        let callback_interval_avg_ms = if self.interval_count == 0 {
+            0.0
+        } else {
+            self.interval_total_ms / self.interval_count as f64
+        };
+
+        info!(
+            callbacks_per_sec,
+            avg_frames_per_callback,
+            frames_per_sec,
+            emitted_frames_per_sec,
+            peak = self.peak,
+            rms,
+            non_zero_sample_ratio,
+            callback_interval_avg_ms,
+            callback_interval_max_ms = self.interval_max_ms,
+            no_packet_polls = self.no_packet_polls,
+            accumulator_buffered_samples = self.last_accumulator_buffered_samples as u64,
+            source_buffer_frames,
+            silent_callbacks = self.silent_callbacks,
+            non_silent_callbacks = self.non_silent_callbacks,
+            "capture summary"
+        );
+
+        self.reset_window();
+    }
+
+    fn record_callback(
+        &mut self,
+        frames: u32,
+        sample_count: u64,
+        non_zero_samples: u64,
+        peak: f32,
+        sum_sq: f64,
+        is_silence: bool,
+        accumulator_buffered_samples: usize,
+    ) {
+        let now = Instant::now();
+        if let Some(prev) = self.last_callback_at {
+            let interval_ms = now.duration_since(prev).as_secs_f64() * 1000.0;
+            self.interval_count += 1;
+            self.interval_total_ms += interval_ms;
+            if interval_ms > self.interval_max_ms {
+                self.interval_max_ms = interval_ms;
+            }
+        }
+        self.last_callback_at = Some(now);
+
+        self.callbacks += 1;
+        if is_silence {
+            self.silent_callbacks += 1;
+        } else {
+            self.non_silent_callbacks += 1;
+        }
+        self.total_callback_frames += u64::from(frames);
+        self.total_samples += sample_count;
+        self.non_zero_samples += non_zero_samples;
+        self.sum_sq += sum_sq;
+        if peak > self.peak {
+            self.peak = peak;
+        }
+        self.last_accumulator_buffered_samples = accumulator_buffered_samples;
+    }
+
+    fn reset_window(&mut self) {
+        let last_callback_at = self.last_callback_at;
+        let last_accumulator_buffered_samples = self.last_accumulator_buffered_samples;
+        *self = Self::new();
+        self.last_callback_at = last_callback_at;
+        self.last_accumulator_buffered_samples = last_accumulator_buffered_samples;
+    }
+}
+
 pub struct WindowsLoopbackCapture {
     target_format: AudioFormat,
     state: CaptureSourceState,
@@ -51,6 +251,7 @@ pub struct WindowsLoopbackCapture {
     mix_format_ptr: Option<*mut WAVEFORMATEX>,
     source_buffer_frames: u32,
     debug_wav: Option<PcmDebugWavWriter>,
+    capture_stats: CaptureStatsWindow,
 }
 
 unsafe impl Send for WindowsLoopbackCapture {}
@@ -84,6 +285,7 @@ impl WindowsLoopbackCapture {
             mix_format_ptr: None,
             source_buffer_frames: 0,
             debug_wav,
+            capture_stats: CaptureStatsWindow::new(),
         })
     }
 
@@ -355,6 +557,11 @@ impl WindowsLoopbackCapture {
                 if is_silence {
                     saw_silent_packet = true;
                     self.accumulator.push_silence_samples(sample_count);
+                    self.capture_stats.record_silent_callback(
+                        num_frames,
+                        sample_count,
+                        self.accumulator.buffered_samples(),
+                    );
                 } else {
                     saw_non_silent_packet = true;
                     if data_ptr.is_null() {
@@ -369,6 +576,11 @@ impl WindowsLoopbackCapture {
                             let src =
                                 std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
                             self.accumulator.push_samples(src, false);
+                            self.capture_stats.record_pcm_callback(
+                                num_frames,
+                                src,
+                                self.accumulator.buffered_samples(),
+                            );
                         }
                         DeviceSampleKind::I16 => {
                             let src =
@@ -376,6 +588,11 @@ impl WindowsLoopbackCapture {
                             let mut tmp = Vec::with_capacity(sample_count);
                             tmp.extend(src.iter().map(|v| (*v as f32) / i16::MAX as f32));
                             self.accumulator.push_samples(&tmp, false);
+                            self.capture_stats.record_pcm_callback(
+                                num_frames,
+                                &tmp,
+                                self.accumulator.buffered_samples(),
+                            );
                         }
                     }
                 }
@@ -401,12 +618,16 @@ impl WindowsLoopbackCapture {
                             warn!(error = %err, "capture debug wav write failed");
                         }
                     }
+                    self.capture_stats
+                        .record_emitted_frame(self.accumulator.buffered_samples());
                     return Ok(PacketReadStatus::Frame(frame));
                 }
             }
         }
 
         if !saw_packet {
+            self.capture_stats
+                .record_no_packet_poll(self.accumulator.buffered_samples());
             return Ok(PacketReadStatus::NoPacket);
         }
         Ok(PacketReadStatus::PacketButNotEnough)
@@ -459,8 +680,14 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
             return Err(CaptureError::NotStarted);
         }
 
+        // On Windows the default timer granularity is often about 15.6ms, so
+        // `sleep(1ms)`/`sleep(2ms)` can stretch a 10-iteration poll loop into
+        // roughly 150ms and collapse playout to ~6fps. Keep polling within one
+        // frame-sized deadline and yield the runtime instead of sleeping.
+        let deadline = Instant::now()
+            + Duration::from_millis(u64::from(self.frame_duration_ms).saturating_add(2));
         let mut no_packet_observed = false;
-        for _ in 0..10 {
+        loop {
             match self.fill_accumulator_from_packets()? {
                 PacketReadStatus::Frame(frame) => {
                     debug!(
@@ -469,14 +696,21 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
                         rms = frame.rms,
                         "loopback produced frame"
                     );
+                    self.capture_stats.maybe_log(self.source_buffer_frames);
                     return Ok(frame);
                 }
                 PacketReadStatus::NoPacket => {
                     no_packet_observed = true;
-                    sleep(Duration::from_millis(2)).await;
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    yield_now().await;
                 }
                 PacketReadStatus::PacketButNotEnough => {
-                    sleep(Duration::from_millis(1)).await;
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    yield_now().await;
                 }
             }
         }
@@ -487,6 +721,7 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
         } else {
             PacketKind::SilentPacket
         };
+        self.capture_stats.maybe_log(self.source_buffer_frames);
         Ok(frame)
     }
 

@@ -1,0 +1,52 @@
+﻿name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/android_flutter/**'
+      - '.github/workflows/build-android.yml'
+  pull_request:
+    paths:
+      - 'apps/android_flutter/**'
+      - '.github/workflows/build-android.yml'
+
+jobs:
+  android-debug-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android_flutter
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Flutter Analyze
+        run: flutter analyze
+
+      - name: Flutter Build Debug APK
+        run: flutter build apk --debug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: apps/android_flutter/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error

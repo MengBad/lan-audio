@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use lan_audio_protocol::AudioMode;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -13,6 +14,7 @@ use crate::transport::UdpTransport;
 pub struct LanAudioService {
     cfg: Arc<ServerConfig>,
     metrics: Arc<Metrics>,
+    current_audio_mode: Arc<Mutex<AudioMode>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
@@ -24,10 +26,12 @@ impl LanAudioService {
         metrics.set_capture_source_state("created");
         metrics.set_capture_device_name("n/a");
         metrics.set_capture_format(cfg.sample_rate, cfg.channels as u16);
+        let current_audio_mode = Arc::new(Mutex::new(cfg.current_audio_mode));
         let (shutdown_tx, _) = broadcast::channel(16);
         Ok(Self {
             cfg,
             metrics,
+            current_audio_mode,
             shutdown_tx,
         })
     }
@@ -36,10 +40,33 @@ impl LanAudioService {
         self.metrics.snapshot()
     }
 
+    pub fn current_audio_mode(&self) -> AudioMode {
+        *self
+            .current_audio_mode
+            .lock()
+            .expect("current_audio_mode lock")
+    }
+
+    pub fn set_current_audio_mode(&self, mode: AudioMode) {
+        *self
+            .current_audio_mode
+            .lock()
+            .expect("current_audio_mode lock") = mode;
+    }
+
     pub async fn run_until_shutdown(&self) -> anyhow::Result<()> {
-        let transport = UdpTransport::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics)).await?;
-        let session_server =
-            SessionServer::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics), transport);
+        let transport = UdpTransport::new(
+            Arc::clone(&self.cfg),
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.current_audio_mode),
+        )
+        .await?;
+        let session_server = SessionServer::new(
+            Arc::clone(&self.cfg),
+            Arc::clone(&self.metrics),
+            transport,
+            Arc::clone(&self.current_audio_mode),
+        );
 
         let discovery_cfg = DiscoveryConfig {
             server_id: Uuid::new_v4(),

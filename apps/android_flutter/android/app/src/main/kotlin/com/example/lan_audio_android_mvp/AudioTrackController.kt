@@ -4,6 +4,8 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Process
+import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -15,6 +17,7 @@ data class AudioTrackStats(
 )
 
 class AudioTrackController {
+    private val logTag = "lan_audio_track"
     private var audioTrack: AudioTrack? = null
     private var frameBytesPerPacket: Int = 1920
     private var writeQueue: ArrayBlockingQueue<ByteArray>? = null
@@ -33,6 +36,10 @@ class AudioTrackController {
     private var writerStoppedSignal: CountDownLatch? = null
 
     fun init(sampleRate: Int, channels: Int, frameSamplesPerChannel: Int) {
+        Log.i(
+            logTag,
+            "audio writer init sampleRate=$sampleRate channels=$channels frameSamplesPerChannel=$frameSamplesPerChannel"
+        )
         stopWriter()
         audioTrack?.release()
         writeFrames = 0
@@ -79,6 +86,7 @@ class AudioTrackController {
     }
 
     fun start() {
+        Log.i(logTag, "audio writer start")
         audioTrack?.play() ?: throw IllegalStateException("AudioTrack is not initialized")
     }
 
@@ -96,12 +104,14 @@ class AudioTrackController {
     }
 
     fun stop() {
+        Log.i(logTag, "audio writer stop")
         writeQueue?.clear()
         audioTrack?.pause()
         audioTrack?.flush()
     }
 
     fun release() {
+        Log.i(logTag, "audio writer release")
         stopWriter()
         audioTrack?.release()
         audioTrack = null
@@ -121,7 +131,23 @@ class AudioTrackController {
         writerRunning = true
         val stopped = CountDownLatch(1)
         writerStoppedSignal = stopped
+        Log.i(logTag, "audio writer thread started")
         writerThread = Thread({
+            val threadName = Thread.currentThread().name
+            val threadId = Process.myTid()
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                val effectivePriority = Process.getThreadPriority(threadId)
+                Log.i(
+                    logTag,
+                    "audio writer thread priority set name=$threadName tid=$threadId requested=THREAD_PRIORITY_URGENT_AUDIO(${Process.THREAD_PRIORITY_URGENT_AUDIO}) effective=$effectivePriority",
+                )
+            } catch (t: Throwable) {
+                Log.w(
+                    logTag,
+                    "audio writer thread priority set failed name=$threadName tid=$threadId requested=THREAD_PRIORITY_URGENT_AUDIO(${Process.THREAD_PRIORITY_URGENT_AUDIO}) error=${t.message}",
+                )
+            }
             try {
                 while (writerRunning || queue.isNotEmpty()) {
                     val data = try {
@@ -139,6 +165,7 @@ class AudioTrackController {
     }
 
     private fun stopWriter() {
+        Log.i(logTag, "audio writer thread stopping")
         writerRunning = false
         writeQueue?.clear()
         writerThread?.interrupt()
@@ -146,6 +173,7 @@ class AudioTrackController {
         writerThread = null
         writeQueue = null
         writerStoppedSignal = null
+        Log.i(logTag, "audio writer thread stopped")
     }
 
     private fun writeFully(track: AudioTrack, data: ByteArray) {

@@ -3,7 +3,8 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lan_audio_server::config::{AudioSourceKind, ServerConfig};
+use lan_audio_protocol::{AudioMode, ProtocolCapabilities, PROTOCOL_VERSION_V2};
+use lan_audio_server::config::{AudioSourceKind, DataPlaneFormat, ServerConfig};
 use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,8 @@ struct DesktopSnapshot {
     service_status: ServiceStatus,
     error_message: Option<String>,
     audio_source: String,
+    data_plane_format: String,
+    loopback_v2_header_gray_enabled: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
     local_ip: String,
@@ -89,6 +92,9 @@ struct DesktopSnapshot {
     recent_clients: Vec<String>,
     connection_status: String,
     session_status: String,
+    current_audio_mode: String,
+    protocol_version: u8,
+    capabilities: ProtocolCapabilities,
     version: String,
     metrics: DesktopMetrics,
     logs: Vec<String>,
@@ -97,10 +103,13 @@ struct DesktopSnapshot {
 #[derive(Debug, Clone)]
 struct DesktopServiceConfig {
     audio_source: AudioSourceKind,
+    data_plane_format: DataPlaneFormat,
+    allow_loopback_v2_header_gray: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
     ws_port: u16,
     udp_port: u16,
+    current_audio_mode: AudioMode,
 }
 
 impl Default for DesktopServiceConfig {
@@ -108,10 +117,13 @@ impl Default for DesktopServiceConfig {
         let cfg = ServerConfig::default();
         Self {
             audio_source: cfg.audio_source,
+            data_plane_format: cfg.data_plane_format,
+            allow_loopback_v2_header_gray: cfg.allow_loopback_v2_header_gray,
             fallback_to_synthetic: cfg.audio_source_fallback_to_synthetic,
             capture_dump_wav: cfg.capture_debug_dump_wav,
             ws_port: cfg.ws_bind.port(),
             udp_port: cfg.udp_bind.port(),
+            current_audio_mode: cfg.current_audio_mode,
         }
     }
 }
@@ -119,6 +131,8 @@ impl Default for DesktopServiceConfig {
 #[derive(Debug, Deserialize)]
 struct ServiceSettingsInput {
     audio_source: String,
+    data_plane_format: String,
+    allow_loopback_v2_header_gray: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
 }
@@ -156,9 +170,15 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
     };
 
     let metrics = service
+        .as_ref()
         .map(|svc| svc.metrics_snapshot())
         .map(DesktopMetrics::from)
         .unwrap_or_else(|| empty_metrics(cfg.audio_source.as_str()));
+
+    let current_audio_mode = service
+        .as_ref()
+        .map(|svc| svc.current_audio_mode())
+        .unwrap_or(cfg.current_audio_mode);
 
     let local_ip = detect_local_ip();
     let connected_devices = metrics.active_sessions;
@@ -193,6 +213,8 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         service_status: status,
         error_message: last_error,
         audio_source: cfg.audio_source.as_str().to_string(),
+        data_plane_format: cfg.data_plane_format.as_str().to_string(),
+        loopback_v2_header_gray_enabled: cfg.allow_loopback_v2_header_gray,
         fallback_to_synthetic: cfg.fallback_to_synthetic,
         capture_dump_wav: cfg.capture_dump_wav,
         local_ip: local_ip.clone(),
@@ -203,6 +225,9 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         recent_clients,
         connection_status,
         session_status,
+        current_audio_mode: format!("{:?}", current_audio_mode).to_lowercase(),
+        protocol_version: PROTOCOL_VERSION_V2,
+        capabilities: default_protocol_capabilities(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         metrics,
         logs,
@@ -234,9 +259,13 @@ fn update_service_settings(
     settings: ServiceSettingsInput,
 ) -> Result<DesktopSnapshot, String> {
     let source = AudioSourceKind::parse(&settings.audio_source).map_err(|e| e.to_string())?;
+    let data_plane =
+        DataPlaneFormat::parse(&settings.data_plane_format).map_err(|e| e.to_string())?;
     let restart_needed = {
         let mut guard = state.inner.lock().expect("state lock");
         guard.config.audio_source = source;
+        guard.config.data_plane_format = data_plane;
+        guard.config.allow_loopback_v2_header_gray = settings.allow_loopback_v2_header_gray;
         guard.config.fallback_to_synthetic = settings.fallback_to_synthetic;
         guard.config.capture_dump_wav = settings.capture_dump_wav;
         matches!(
@@ -248,8 +277,10 @@ fn update_service_settings(
     push_log(
         &state.logs,
         format!(
-            "settings updated: source={}, fallback={}, dump_wav={}",
+            "settings updated: source={}, data_plane={}, loopback_v2_gray={}, fallback={}, dump_wav={}",
             source.as_str(),
+            data_plane.as_str(),
+            settings.allow_loopback_v2_header_gray,
             settings.fallback_to_synthetic,
             settings.capture_dump_wav
         ),
@@ -329,8 +360,10 @@ fn start_service_impl(state: &State<'_, AppState>) -> Result<(), String> {
     push_log(
         &state.logs,
         format!(
-            "service started (audio_source={})",
-            cfg.audio_source.as_str()
+            "service started (audio_source={}, data_plane={}, loopback_v2_gray={})",
+            cfg.audio_source.as_str(),
+            cfg.data_plane_format.as_str(),
+            cfg.allow_loopback_v2_header_gray
         ),
     );
     Ok(())
@@ -368,8 +401,11 @@ fn stop_service_impl(state: &State<'_, AppState>, wait: bool) -> Result<(), Stri
 fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, String> {
     let mut server = ServerConfig::default();
     server.audio_source = cfg.audio_source;
+    server.data_plane_format = cfg.data_plane_format;
+    server.allow_loopback_v2_header_gray = cfg.allow_loopback_v2_header_gray;
     server.audio_source_fallback_to_synthetic = cfg.fallback_to_synthetic;
     server.capture_debug_dump_wav = cfg.capture_dump_wav;
+    server.current_audio_mode = cfg.current_audio_mode;
     server.ws_bind = parse_bind(cfg.ws_port)?;
     server.udp_bind = parse_bind(cfg.udp_port)?;
     Ok(server)
@@ -418,6 +454,19 @@ fn empty_metrics(audio_source: &str) -> DesktopMetrics {
         capture_last_rms: 0.0,
         last_capture_pts_ms: 0,
         recent_clients: Vec::new(),
+    }
+}
+
+fn default_protocol_capabilities() -> ProtocolCapabilities {
+    ProtocolCapabilities {
+        supports_pcm16: true,
+        supports_f32: false,
+        supports_modes: true,
+        supports_metrics: true,
+        supports_opus_future: false,
+        supports_low_latency: true,
+        supports_high_quality: true,
+        supports_native_audio_track: true,
     }
 }
 

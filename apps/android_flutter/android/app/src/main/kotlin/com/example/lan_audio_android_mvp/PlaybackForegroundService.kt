@@ -104,6 +104,17 @@ class PlaybackForegroundService : MediaSessionService() {
                     ),
                 )
             }
+
+            PlaybackActions.ACTION_SET_AUDIO_MODE -> {
+                val mode = intent.getStringExtra(PlaybackActions.EXTRA_AUDIO_MODE) ?: "balanced"
+                val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "ui_request"
+                sessionController.setAudioMode(mode, reason)
+            }
+
+            PlaybackActions.ACTION_DUMP_METRICS -> {
+                val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "adb_request"
+                sessionController.dumpMetrics(reason)
+            }
         }
         return START_STICKY
     }
@@ -113,7 +124,11 @@ class PlaybackForegroundService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        Log.i(logTag, "onDestroy")
+        val snapshot = stateStore.current()
+        Log.i(
+            logTag,
+            "onDestroy serviceState=${snapshot.serviceState} connectionState=${snapshot.connectionState} playbackState=${snapshot.playbackState}"
+        )
         stateStore.removeListener(storeListener)
         sessionController.destroy()
         releasePlaybackLocks()
@@ -127,12 +142,25 @@ class PlaybackForegroundService : MediaSessionService() {
     private fun updateNotification(snapshot: PlaybackSnapshot) {
         val notification = buildNotification(snapshot)
         if (!foregroundStarted) {
+            Log.i(
+                logTag,
+                "service entered foreground target=${snapshot.targetName ?: snapshot.targetHost ?: "LAN Audio"} state=${snapshot.connectionState}/${snapshot.playbackState}"
+            )
             startForeground(NOTIFICATION_ID, notification)
             foregroundStarted = true
             return
         }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, notification)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val snapshot = stateStore.current()
+        Log.w(
+            logTag,
+            "onTaskRemoved foregroundStarted=$foregroundStarted serviceState=${snapshot.serviceState} connectionState=${snapshot.connectionState} playbackState=${snapshot.playbackState}"
+        )
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun buildNotification(snapshot: PlaybackSnapshot): Notification {
@@ -275,6 +303,21 @@ class PlaybackForegroundService : MediaSessionService() {
                 .putExtra(PlaybackActions.EXTRA_START_BUFFER_MS, options.startBufferMs)
                 .putExtra(PlaybackActions.EXTRA_MAX_BUFFER_MS, options.maxBufferMs)
                 .putExtra(PlaybackActions.EXTRA_PING_INTERVAL_MS, options.pingIntervalMs)
+            context.startService(intent)
+        }
+
+        fun setAudioMode(context: Context, mode: String, reason: String = "ui_request") {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_SET_AUDIO_MODE)
+                .putExtra(PlaybackActions.EXTRA_AUDIO_MODE, mode)
+                .putExtra(PlaybackActions.EXTRA_REASON, reason)
+            context.startService(intent)
+        }
+
+        fun dumpMetrics(context: Context, reason: String = "manual_request") {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_DUMP_METRICS)
+                .putExtra(PlaybackActions.EXTRA_REASON, reason)
             context.startService(intent)
         }
     }

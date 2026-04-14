@@ -9,6 +9,13 @@ class PlaybackServiceSnapshot {
     required this.playbackState,
     required this.targetHost,
     required this.targetName,
+    required this.protocolVersion,
+    required this.currentAudioMode,
+    required this.negotiatedCapabilities,
+    required this.clientPlatform,
+    required this.clientAppVersion,
+    required this.serverPlatform,
+    required this.serverAppVersion,
     required this.metrics,
     required this.recentLog,
     required this.error,
@@ -20,6 +27,13 @@ class PlaybackServiceSnapshot {
   final String playbackState;
   final String? targetHost;
   final String? targetName;
+  final int? protocolVersion;
+  final String currentAudioMode;
+  final Map<String, bool> negotiatedCapabilities;
+  final String clientPlatform;
+  final String clientAppVersion;
+  final String? serverPlatform;
+  final String? serverAppVersion;
   final Map<String, dynamic> metrics;
   final String recentLog;
   final Map<String, dynamic>? error;
@@ -35,6 +49,17 @@ class PlaybackServiceSnapshot {
       playbackState: '${normalized['playbackState'] ?? 'stopped'}',
       targetHost: normalized['targetHost']?.toString(),
       targetName: normalized['targetName']?.toString(),
+      protocolVersion: (normalized['protocolVersion'] as num?)?.toInt(),
+      currentAudioMode: '${normalized['currentAudioMode'] ?? 'balanced'}',
+      negotiatedCapabilities:
+          (normalized['negotiatedCapabilities'] as Map?)?.map(
+                (key, value) => MapEntry('$key', value == true),
+              ) ??
+              const <String, bool>{},
+      clientPlatform: '${normalized['clientPlatform'] ?? 'android'}',
+      clientAppVersion: '${normalized['clientAppVersion'] ?? ''}',
+      serverPlatform: normalized['serverPlatform']?.toString(),
+      serverAppVersion: normalized['serverAppVersion']?.toString(),
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
@@ -57,8 +82,7 @@ class BackgroundPlaybackService {
   Stream<PlaybackServiceSnapshot>? _events;
 
   Stream<PlaybackServiceSnapshot> events() {
-    _events ??=
-        _eventChannel.receiveBroadcastStream().map((dynamic event) {
+    _events ??= _eventChannel.receiveBroadcastStream().map((dynamic event) {
       if (event is Map) {
         return PlaybackServiceSnapshot.fromMap(event);
       }
@@ -100,6 +124,16 @@ class BackgroundPlaybackService {
       'startBufferMs': startBufferMs,
       'maxBufferMs': maxBufferMs,
       'pingIntervalMs': pingIntervalMs,
+    });
+  }
+
+  Future<void> setAudioMode({
+    required String mode,
+    String reason = 'ui_request',
+  }) async {
+    await _methodChannel.invokeMethod<void>('setAudioMode', <String, dynamic>{
+      'mode': mode,
+      'reason': reason,
     });
   }
 

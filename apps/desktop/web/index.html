@@ -372,9 +372,18 @@
             <button id="sourceLoopback" class="source-btn"></button>
             <button id="sourceSynthetic" class="source-btn"></button>
           </div>
+          <div class="device-subtitle" id="dataPlaneTitle"></div>
+          <div class="source-picker">
+            <button id="dataPlaneLegacy" class="source-btn"></button>
+            <button id="dataPlaneV2Header" class="source-btn"></button>
+          </div>
           <label class="toggle">
             <input type="checkbox" id="fallbackToggle" />
             <span id="fallbackLabel"></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="loopbackV2GrayToggle" />
+            <span id="loopbackV2GrayLabel"></span>
           </label>
           <label class="toggle">
             <input type="checkbox" id="dumpToggle" />
@@ -394,6 +403,9 @@
             </div>
             <div class="row"><span class="label" id="sessionLabel"></span><span class="value" id="sessionValue"></span></div>
             <div class="row"><span class="label" id="sourceLabel"></span><span class="value" id="sourceValue"></span></div>
+            <div class="row"><span class="label" id="dataPlaneLabel"></span><span class="value" id="dataPlaneValue"></span></div>
+            <div class="row"><span class="label" id="modeLabel"></span><span class="value" id="modeValue"></span></div>
+            <div class="row"><span class="label" id="protocolLabel"></span><span class="value" id="protocolValue"></span></div>
             <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
           </div>
 
@@ -439,16 +451,23 @@
           title: 'LAN Audio 音频推流控制台',
           subtitle: 'Windows 系统音频推送到 Android 手机',
           sourceTitle: '音频源设置',
+          dataPlaneTitle: '数据面',
           deviceTitle: '设备 / 会话',
           loopback: '系统音频',
           synthetic: '测试音',
+          legacy: 'Legacy LAS1',
+          v2Header: 'V2 Header',
           fallback: '采集失败自动回退到测试音',
+          loopbackV2Gray: '仅在显式灰度下允许 loopback 使用 v2_header',
           dump: '导出 capture wav（调试）',
           address: '连接地址',
           copy: '复制',
           copied: '已复制地址',
           session: '会话状态',
           source: '当前音频源',
+          dataPlane: '数据面',
+          mode: '当前模式',
+          protocol: '协议',
           version: '版本',
           healthTitle: '运行健康摘要',
           healthStream: '推流状态',
@@ -477,6 +496,8 @@
           session_stopped: '服务未启动',
           source_windows_loopback: '系统音频',
           source_synthetic: '测试音',
+          data_plane_legacy_las1: 'Legacy LAS1',
+          data_plane_v2_header: 'V2 Header',
           headlineNoDevice: '{state} · 未连接设备',
           headlineWithDevice: '{state} · 已连接 {count} 台设备（{ip}）',
           subRunning: '服务在线，可在手机端发现并连接。',
@@ -509,16 +530,23 @@
           title: 'LAN Audio Streaming Console',
           subtitle: 'Stream Windows system audio to Android devices',
           sourceTitle: 'Audio Source',
+          dataPlaneTitle: 'Data Plane',
           deviceTitle: 'Devices / Session',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
+          legacy: 'Legacy LAS1',
+          v2Header: 'V2 Header',
           fallback: 'Fallback to test tone when capture fails',
+          loopbackV2Gray: 'Allow loopback to use v2_header only behind explicit gray switch',
           dump: 'Export capture wav (debug)',
           address: 'Connect Address',
           copy: 'Copy',
           copied: 'Address copied',
           session: 'Session',
           source: 'Audio Source',
+          dataPlane: 'Data Plane',
+          mode: 'Current Mode',
+          protocol: 'Protocol',
           version: 'Version',
           healthTitle: 'Runtime Health',
           healthStream: 'Streaming',
@@ -547,6 +575,8 @@
           session_stopped: 'Service not started',
           source_windows_loopback: 'System Audio',
           source_synthetic: 'Test Tone',
+          data_plane_legacy_las1: 'Legacy LAS1',
+          data_plane_v2_header: 'V2 Header',
           headlineNoDevice: '{state} · No device connected',
           headlineWithDevice: '{state} · {count} device(s) connected ({ip})',
           subRunning: 'Service is online. Discover and connect from the phone.',
@@ -607,6 +637,10 @@
         return t(`source_${source}`) || source;
       }
 
+      function dataPlaneName(dataPlane) {
+        return t(`data_plane_${dataPlane}`) || dataPlane;
+      }
+
       function formatLogLine(line) {
         const m = line.match(/^\[(\d+)\]\s*(.*)$/);
         if (!m) return line;
@@ -661,15 +695,22 @@
         document.getElementById('title').textContent = t('title');
         document.getElementById('subtitle').textContent = t('subtitle');
         document.getElementById('sourceTitle').textContent = t('sourceTitle');
+        document.getElementById('dataPlaneTitle').textContent = t('dataPlaneTitle');
         document.getElementById('deviceTitle').textContent = t('deviceTitle');
         document.getElementById('sourceLoopback').textContent = t('loopback');
         document.getElementById('sourceSynthetic').textContent = t('synthetic');
+        document.getElementById('dataPlaneLegacy').textContent = t('legacy');
+        document.getElementById('dataPlaneV2Header').textContent = t('v2Header');
         document.getElementById('fallbackLabel').textContent = t('fallback');
+        document.getElementById('loopbackV2GrayLabel').textContent = t('loopbackV2Gray');
         document.getElementById('dumpLabel').textContent = t('dump');
         document.getElementById('addrLabel').textContent = t('address');
         document.getElementById('copyAddrBtn').textContent = t('copy');
         document.getElementById('sessionLabel').textContent = t('session');
         document.getElementById('sourceLabel').textContent = t('source');
+        document.getElementById('dataPlaneLabel').textContent = t('dataPlane');
+        document.getElementById('modeLabel').textContent = t('mode');
+        document.getElementById('protocolLabel').textContent = t('protocol');
         document.getElementById('versionLabel').textContent = t('version');
         document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
         document.getElementById('recentDeviceLabel').textContent = t('recentDevice');
@@ -710,12 +751,18 @@
         document.getElementById('addrValue').textContent = snapshot.connect_address;
         document.getElementById('sessionValue').textContent = t(`session_${snapshot.session_status}`) || snapshot.session_status;
         document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
+        document.getElementById('dataPlaneValue').textContent = dataPlaneName(snapshot.data_plane_format);
+        document.getElementById('modeValue').textContent = snapshot.current_audio_mode || 'balanced';
+        document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
         document.getElementById('errorText').textContent = snapshot.error_message || '';
 
         document.getElementById('sourceLoopback').classList.toggle('active', snapshot.audio_source === 'windows_loopback');
         document.getElementById('sourceSynthetic').classList.toggle('active', snapshot.audio_source === 'synthetic');
+        document.getElementById('dataPlaneLegacy').classList.toggle('active', snapshot.data_plane_format === 'legacy_las1');
+        document.getElementById('dataPlaneV2Header').classList.toggle('active', snapshot.data_plane_format === 'v2_header');
         document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
+        document.getElementById('loopbackV2GrayToggle').checked = snapshot.loopback_v2_header_gray_enabled;
         document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
 
         const recent = snapshot.recent_clients || [];
@@ -754,7 +801,11 @@
         document.getElementById('debugState').innerHTML =
           `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
           `<div>${t('sessionStatus')}: ${snapshot.session_status}</div>` +
+          `<div>${t('protocol')}: v${snapshot.protocol_version}</div>` +
           `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
+          `<div>${t('dataPlane')}: ${snapshot.data_plane_format}</div>` +
+          `<div>${t('mode')}: ${snapshot.current_audio_mode}</div>` +
+          `<div>capabilities: ${Object.entries(snapshot.capabilities || {}).filter(([, v]) => v).map(([k]) => k).join(', ')}</div>` +
           `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
           `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
           `<div>${t('channels')}: ${m.capture_channels}</div>`;
@@ -771,7 +822,10 @@
         const disabled = state.busy;
         document.getElementById('sourceLoopback').disabled = disabled;
         document.getElementById('sourceSynthetic').disabled = disabled;
+        document.getElementById('dataPlaneLegacy').disabled = disabled;
+        document.getElementById('dataPlaneV2Header').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
+        document.getElementById('loopbackV2GrayToggle').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
       }
@@ -801,6 +855,9 @@
         await call('update_service_settings', {
           settings: {
             audio_source: nextAudioSource || state.snapshot.audio_source,
+            data_plane_format:
+              document.getElementById('dataPlaneV2Header').classList.contains('active') ? 'v2_header' : 'legacy_las1',
+            allow_loopback_v2_header_gray: document.getElementById('loopbackV2GrayToggle').checked,
             fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
             capture_dump_wav: document.getElementById('dumpToggle').checked,
           }
@@ -832,7 +889,18 @@
 
         document.getElementById('sourceLoopback').addEventListener('click', () => applySettings('windows_loopback'));
         document.getElementById('sourceSynthetic').addEventListener('click', () => applySettings('synthetic'));
+        document.getElementById('dataPlaneLegacy').addEventListener('click', async () => {
+          document.getElementById('dataPlaneLegacy').classList.add('active');
+          document.getElementById('dataPlaneV2Header').classList.remove('active');
+          await applySettings();
+        });
+        document.getElementById('dataPlaneV2Header').addEventListener('click', async () => {
+          document.getElementById('dataPlaneLegacy').classList.remove('active');
+          document.getElementById('dataPlaneV2Header').classList.add('active');
+          await applySettings();
+        });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
+        document.getElementById('loopbackV2GrayToggle').addEventListener('change', () => applySettings());
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
       }

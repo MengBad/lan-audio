@@ -1,6 +1,7 @@
-﻿use std::net::SocketAddr;
+use std::net::SocketAddr;
 
 use anyhow::{anyhow, Result};
+use lan_audio_protocol::AudioMode;
 use lan_audio_protocol::{DISCOVERY_PORT, UDP_AUDIO_PORT, WS_PORT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,29 @@ pub enum SyntheticSignalKind {
     Sine,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataPlaneFormat {
+    LegacyLas1,
+    V2Header,
+}
+
+impl DataPlaneFormat {
+    pub fn parse(input: &str) -> Result<Self> {
+        match input {
+            "legacy_las1" | "legacy" | "v1" => Ok(Self::LegacyLas1),
+            "v2_header" | "v2" => Ok(Self::V2Header),
+            other => Err(anyhow!("unsupported data plane format: {other}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyLas1 => "legacy_las1",
+            Self::V2Header => "v2_header",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub server_name: String,
@@ -50,13 +74,16 @@ pub struct ServerConfig {
     pub capture_debug_dump_wav: bool,
     pub capture_debug_dump_seconds: u32,
     pub capture_debug_dump_dir: String,
+    pub current_audio_mode: AudioMode,
+    pub data_plane_format: DataPlaneFormat,
+    pub allow_loopback_v2_header_gray: bool,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             server_name: whoami_fallback(),
-            discovery_bind: format!("0.0.0.0:{DISCOVERY_PORT}").parse().expect("addr"),
+            discovery_bind: "0.0.0.0:0".parse().expect("addr"),
             discovery_broadcast: format!("255.255.255.255:{DISCOVERY_PORT}")
                 .parse()
                 .expect("addr"),
@@ -73,6 +100,9 @@ impl Default for ServerConfig {
             capture_debug_dump_wav: false,
             capture_debug_dump_seconds: 5,
             capture_debug_dump_dir: "debug_captures".to_string(),
+            current_audio_mode: AudioMode::Balanced,
+            data_plane_format: DataPlaneFormat::LegacyLas1,
+            allow_loopback_v2_header_gray: false,
         }
     }
 }
@@ -128,6 +158,26 @@ impl ServerConfig {
                         .next()
                         .ok_or_else(|| anyhow!("missing value for --capture-dump-dir"))?;
                 }
+                "--audio-mode" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("missing value for --audio-mode"))?;
+                    self.current_audio_mode = match value.as_str() {
+                        "low_latency" => AudioMode::LowLatency,
+                        "balanced" => AudioMode::Balanced,
+                        "high_quality" => AudioMode::HighQuality,
+                        _ => return Err(anyhow!("unsupported audio mode: {value}")),
+                    };
+                }
+                "--data-plane" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("missing value for --data-plane"))?;
+                    self.data_plane_format = DataPlaneFormat::parse(&value)?;
+                }
+                "--allow-loopback-v2-header-gray" | "--enable-loopback-v2-header-gray" => {
+                    self.allow_loopback_v2_header_gray = true;
+                }
                 _ => {}
             }
         }
@@ -172,5 +222,26 @@ mod tests {
         assert!(cfg.capture_debug_dump_wav);
         assert_eq!(cfg.capture_debug_dump_seconds, 9);
         assert_eq!(cfg.capture_debug_dump_dir, "tmp_out");
+    }
+
+    #[test]
+    fn parse_data_plane_format() {
+        assert!(matches!(
+            DataPlaneFormat::parse("legacy_las1"),
+            Ok(DataPlaneFormat::LegacyLas1)
+        ));
+        assert!(matches!(
+            DataPlaneFormat::parse("v2_header"),
+            Ok(DataPlaneFormat::V2Header)
+        ));
+        assert!(DataPlaneFormat::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn apply_args_enables_loopback_v2_gray_only_with_explicit_flag() {
+        let mut cfg = ServerConfig::default();
+        cfg.apply_args(vec!["--allow-loopback-v2-header-gray".to_string()])
+            .expect("apply args");
+        assert!(cfg.allow_loopback_v2_header_gray);
     }
 }

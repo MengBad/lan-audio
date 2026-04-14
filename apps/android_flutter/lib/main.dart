@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
@@ -60,6 +60,12 @@ enum ConnectMode {
   manual,
 }
 
+enum AudioModePreference {
+  lowLatency,
+  balanced,
+  highQuality,
+}
+
 enum AppLang {
   zh,
   en,
@@ -73,13 +79,15 @@ class DebugPage extends StatefulWidget {
 }
 
 class _DebugPageState extends State<DebugPage> {
-  static const MethodChannel _platformChannel = MethodChannel('lan_audio/platform');
-  static bool _firstLaunchHintConsumed = false;
+  static const MethodChannel _platformChannel =
+      MethodChannel('lan_audio/platform');
 
   final Map<String, DiscoveryServer> _servers = {};
-  final JitterBuffer _jitter = JitterBuffer(startBufferMs: 60, maxBufferMs: 300);
+  final JitterBuffer _jitter =
+      JitterBuffer(startBufferMs: 60, maxBufferMs: 300);
   final AudioTrackOutput _audioOutput = AudioTrackOutput();
-  final BackgroundPlaybackService _backgroundService = BackgroundPlaybackService();
+  final BackgroundPlaybackService _backgroundService =
+      BackgroundPlaybackService();
   final TextEditingController _manualHostController = TextEditingController();
 
   RawDatagramSocket? _discoverySocket;
@@ -101,6 +109,7 @@ class _DebugPageState extends State<DebugPage> {
   bool _probeRunning = false;
   DateTime _lastProbeAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _firstUseHintShown = false;
+  AudioModePreference _currentAudioMode = AudioModePreference.balanced;
 
   PlaybackState _playbackState = PlaybackState.stopped;
   bool _audioTrackInitialized = false;
@@ -125,18 +134,28 @@ class _DebugPageState extends State<DebugPage> {
   int _serviceUdpBytes = 0;
   int _serviceLoss = 0;
   int? _serviceLastSeq;
+  int? _protocolVersion;
+  Map<String, bool> _negotiatedCapabilities = const {};
+  String? _serverPlatform;
+  String? _serverAppVersion;
 
   @override
   void initState() {
     super.initState();
-    final sysLang = PlatformDispatcher.instance.locale.languageCode.toLowerCase();
+    final sysLang =
+        PlatformDispatcher.instance.locale.languageCode.toLowerCase();
     _lang = sysLang.startsWith('zh') ? AppLang.zh : AppLang.en;
     debugPrint('ui_build $kUiBuildTag');
     _acquireMulticastLock();
     _startDiscovery();
     if (kUseBackgroundPlaybackService) {
-      _serviceEventsSub = _backgroundService.events().listen(_onPlaybackServiceEvent);
-      _backgroundService.getSnapshot().then(_onPlaybackServiceEvent).catchError((_) {});
+      debugPrint('ui_init background playback service enabled; attach events/getSnapshot/setOptions');
+      _serviceEventsSub =
+          _backgroundService.events().listen(_onPlaybackServiceEvent);
+      _backgroundService
+          .getSnapshot()
+          .then(_onPlaybackServiceEvent)
+          .catchError((_) {});
       _backgroundService
           .setOptions(startBufferMs: 60, maxBufferMs: 300, pingIntervalMs: 1000)
           .catchError((_) {});
@@ -149,6 +168,39 @@ class _DebugPageState extends State<DebugPage> {
   bool get _isZh => _lang == AppLang.zh;
 
   String tr(String zh, String en) => _isZh ? zh : en;
+
+  AudioModePreference _audioModeFromWire(String value) {
+    switch (value) {
+      case 'low_latency':
+        return AudioModePreference.lowLatency;
+      case 'high_quality':
+        return AudioModePreference.highQuality;
+      default:
+        return AudioModePreference.balanced;
+    }
+  }
+
+  String _audioModeWire(AudioModePreference mode) {
+    switch (mode) {
+      case AudioModePreference.lowLatency:
+        return 'low_latency';
+      case AudioModePreference.highQuality:
+        return 'high_quality';
+      case AudioModePreference.balanced:
+        return 'balanced';
+    }
+  }
+
+  String _audioModeLabel(AudioModePreference mode) {
+    switch (mode) {
+      case AudioModePreference.lowLatency:
+        return tr('低延迟', 'Low Latency');
+      case AudioModePreference.highQuality:
+        return tr('高音质', 'High Quality');
+      case AudioModePreference.balanced:
+        return tr('平衡', 'Balanced');
+    }
+  }
 
   String? _mostRecentHost() {
     if (_recentConnectedHosts.isEmpty) {
@@ -176,14 +228,24 @@ class _DebugPageState extends State<DebugPage> {
       }
       _sampleRate = (metrics['sampleRate'] as num?)?.toInt() ?? _sampleRate;
       _channels = (metrics['channels'] as num?)?.toInt() ?? _channels;
-      _serviceBufferedMs = (metrics['bufferedMs'] as num?)?.toInt() ?? _serviceBufferedMs;
-      _serviceUnderrun = (metrics['jitterUnderrun'] as num?)?.toInt() ?? _serviceUnderrun;
-      _serviceDropped = (metrics['jitterDropped'] as num?)?.toInt() ?? _serviceDropped;
+      _serviceBufferedMs =
+          (metrics['bufferedMs'] as num?)?.toInt() ?? _serviceBufferedMs;
+      _serviceUnderrun =
+          (metrics['jitterUnderrun'] as num?)?.toInt() ?? _serviceUnderrun;
+      _serviceDropped =
+          (metrics['jitterDropped'] as num?)?.toInt() ?? _serviceDropped;
       _serviceLate = (metrics['jitterLate'] as num?)?.toInt() ?? _serviceLate;
-      _serviceUdpPackets = (metrics['udpPackets'] as num?)?.toInt() ?? _serviceUdpPackets;
-      _serviceUdpBytes = (metrics['udpBytes'] as num?)?.toInt() ?? _serviceUdpBytes;
+      _serviceUdpPackets =
+          (metrics['udpPackets'] as num?)?.toInt() ?? _serviceUdpPackets;
+      _serviceUdpBytes =
+          (metrics['udpBytes'] as num?)?.toInt() ?? _serviceUdpBytes;
       _serviceLoss = (metrics['lossEstimate'] as num?)?.toInt() ?? _serviceLoss;
       _serviceLastSeq = (metrics['lastSeq'] as num?)?.toInt();
+      _currentAudioMode = _audioModeFromWire(snapshot.currentAudioMode);
+      _protocolVersion = snapshot.protocolVersion;
+      _negotiatedCapabilities = snapshot.negotiatedCapabilities;
+      _serverPlatform = snapshot.serverPlatform;
+      _serverAppVersion = snapshot.serverAppVersion;
 
       if (servicePlayback == 'playing') {
         _playbackState = PlaybackState.playing;
@@ -198,12 +260,14 @@ class _DebugPageState extends State<DebugPage> {
           servicePlayback == 'playing' ||
           servicePlayback == 'buffering';
 
-      final serviceLabel = snapshot.targetName != null && snapshot.targetHost != null
-          ? '${snapshot.targetName} (${snapshot.targetHost})'
-          : (snapshot.targetHost ?? '');
+      final serviceLabel =
+          snapshot.targetName != null && snapshot.targetHost != null
+              ? '${snapshot.targetName} (${snapshot.targetHost})'
+              : (snapshot.targetHost ?? '');
       _status = '${snapshot.connectionState}/${snapshot.playbackState}'
           '${serviceLabel.isEmpty ? '' : ' $serviceLabel'}';
-      _audioLog = snapshot.recentLog.isNotEmpty ? snapshot.recentLog : _audioLog;
+      _audioLog =
+          snapshot.recentLog.isNotEmpty ? snapshot.recentLog : _audioLog;
       _wsLog = jsonEncode(snapshot.raw);
     });
   }
@@ -229,11 +293,14 @@ class _DebugPageState extends State<DebugPage> {
   }
 
   Future<void> _maybeShowFirstUseHint() async {
-    if (!mounted || _firstUseHintShown || _firstLaunchHintConsumed) {
+    if (!mounted || _firstUseHintShown) {
+      return;
+    }
+    final consumed = await _getFirstUseHintConsumed();
+    if (!mounted || consumed) {
       return;
     }
     _firstUseHintShown = true;
-    _firstLaunchHintConsumed = true;
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -252,6 +319,7 @@ class _DebugPageState extends State<DebugPage> {
         ],
       ),
     );
+    await _setFirstUseHintConsumed();
   }
 
   Future<void> _acquireMulticastLock() async {
@@ -266,8 +334,32 @@ class _DebugPageState extends State<DebugPage> {
     } catch (_) {}
   }
 
+  Future<bool> _getFirstUseHintConsumed() async {
+    try {
+      return await _platformChannel
+              .invokeMethod<bool>('getFirstUseHintConsumed') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _setFirstUseHintConsumed() async {
+    try {
+      await _platformChannel.invokeMethod('setFirstUseHintConsumed', {
+        'consumed': true,
+      });
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
+    if (kUseBackgroundPlaybackService) {
+      debugPrint(
+          'ui_dispose detach only; background playback service is not stopped by UI dispose');
+    } else {
+      debugPrint('ui_dispose legacy path; stopping UI-owned playback');
+    }
     if (!kUseBackgroundPlaybackService) {
       _stopPlayback();
     }
@@ -284,7 +376,8 @@ class _DebugPageState extends State<DebugPage> {
 
   Future<void> _startDiscovery() async {
     try {
-      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 39990);
+      final socket =
+          await RawDatagramSocket.bind(InternetAddress.anyIPv4, 39990);
       _discoverySocket = socket;
       socket.listen((event) {
         if (event != RawSocketEvent.read) {
@@ -318,8 +411,9 @@ class _DebugPageState extends State<DebugPage> {
       if (!mounted) {
         return;
       }
-      final shouldProbe =
-          _connectMode == ConnectMode.discovered && !_wsConnected && _servers.isEmpty;
+      final shouldProbe = _connectMode == ConnectMode.discovered &&
+          !_wsConnected &&
+          _servers.isEmpty;
       if (!shouldProbe) {
         return;
       }
@@ -345,11 +439,14 @@ class _DebugPageState extends State<DebugPage> {
       );
       final addresses = <InternetAddress>[];
       for (final itf in interfaces) {
-        addresses.addAll(itf.addresses.where((a) => a.type == InternetAddressType.IPv4));
+        addresses.addAll(
+            itf.addresses.where((a) => a.type == InternetAddressType.IPv4));
       }
       final local = addresses.where((a) {
         final ip = a.address;
-        return ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.');
+        return ip.startsWith('192.168.') ||
+            ip.startsWith('10.') ||
+            ip.startsWith('172.');
       }).toList();
       if (local.isEmpty) {
         return;
@@ -379,7 +476,8 @@ class _DebugPageState extends State<DebugPage> {
         final ip = '$prefix$host';
         Socket? socket;
         try {
-          socket = await Socket.connect(ip, wsPort, timeout: const Duration(milliseconds: 160));
+          socket = await Socket.connect(ip, wsPort,
+              timeout: const Duration(milliseconds: 160));
           if (!mounted) {
             return;
           }
@@ -426,7 +524,8 @@ class _DebugPageState extends State<DebugPage> {
 
   DiscoveryServer? _parseDiscovery(Datagram datagram) {
     try {
-      final jsonObj = jsonDecode(utf8.decode(datagram.data)) as Map<String, dynamic>;
+      final jsonObj =
+          jsonDecode(utf8.decode(datagram.data)) as Map<String, dynamic>;
       if (jsonObj['type'] != 'lan_audio_discovery_v1') {
         return null;
       }
@@ -489,7 +588,8 @@ class _DebugPageState extends State<DebugPage> {
     final known = _servers.values.where((s) => s.host == host).toList();
     final wsPort = known.isNotEmpty ? known.first.wsPort : 39991;
     final udpPort = known.isNotEmpty ? known.first.udpPort : 39992;
-    final serverName = known.isNotEmpty ? known.first.serverName : 'recent:$host';
+    final serverName =
+        known.isNotEmpty ? known.first.serverName : 'recent:$host';
     await _connectToHost(
       host: host,
       wsPort: wsPort,
@@ -510,6 +610,8 @@ class _DebugPageState extends State<DebugPage> {
     });
     if (kUseBackgroundPlaybackService) {
       try {
+        debugPrint(
+            'ui_startPlayback forwarding to service host=$host ws=$wsPort udp=$udpPort server=$serverName');
         await _backgroundService.startPlayback(
           host: host,
           wsPort: wsPort,
@@ -520,7 +622,8 @@ class _DebugPageState extends State<DebugPage> {
           _recentConnectedHosts[host] = DateTime.now();
           _serviceTargetHost = host;
           _serviceTargetName = serverName;
-          _status = '${tr('后台服务已启动', 'background service started')}: $serverName ($host)';
+          _status =
+              '${tr('后台服务已启动', 'background service started')}: $serverName ($host)';
         });
       } catch (e) {
         setState(() {
@@ -559,18 +662,58 @@ class _DebugPageState extends State<DebugPage> {
       _ws = ws;
 
       final hello = {
-        'type': 'client_hello',
-        'client_name': 'flutter-android',
+        'type': 'hello',
+        'protocol_version': 2,
+        'device_name': 'flutter-android',
+        'client_id': 'flutter-${DateTime.now().millisecondsSinceEpoch}',
         'udp_port': localUdpPort,
         'desired_sample_rate': 48000,
         'channels': 2,
+        'preferred_audio_mode': _audioModeWire(_currentAudioMode),
+        'capabilities': {
+          'supports_pcm16': true,
+          'supports_f32': false,
+          'supports_modes': true,
+          'supports_metrics': true,
+          'supports_opus_future': false,
+          'supports_low_latency': true,
+          'supports_high_quality': true,
+          'supports_native_audio_track': true,
+        },
       };
       ws.add(jsonEncode(hello));
+      ws.add(jsonEncode({
+        'type': 'client_info',
+        'client_name': 'flutter-android',
+        'platform': Platform.operatingSystem,
+        'app_version': kUiBuildTag,
+        'udp_port': localUdpPort,
+      }));
 
       ws.listen((data) {
-        setState(() {
-          _wsLog = '$data';
-        });
+        try {
+          final text = '$data';
+          final decoded = jsonDecode(text);
+          if (decoded is Map<String, dynamic>) {
+            final type = decoded['type']?.toString();
+            if (type == 'hello_ack') {
+              _currentAudioMode = _audioModeFromWire(
+                decoded['current_audio_mode']?.toString() ?? 'balanced',
+              );
+            } else if (type == 'audio_mode_changed') {
+              _currentAudioMode = _audioModeFromWire(
+                decoded['mode']?.toString() ?? 'balanced',
+              );
+            }
+          }
+          setState(() {
+            _wsLog = text;
+          });
+        } catch (_) {
+          setState(() {
+            _wsLog = '$data';
+          });
+        }
       }, onError: (Object e) {
         setState(() {
           _wsConnected = false;
@@ -594,7 +737,8 @@ class _DebugPageState extends State<DebugPage> {
 
       setState(() {
         _wsConnected = true;
-        _status = '${tr('已连接', 'connected')}: $serverName ($host ws:$wsPort udp:$udpPort)';
+        _status =
+            '${tr('已连接', 'connected')}: $serverName ($host ws:$wsPort udp:$udpPort)';
         _recentConnectedHosts[host] = DateTime.now();
         _udpPackets = 0;
         _udpBytes = 0;
@@ -616,10 +760,48 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+  Future<void> _setAudioMode(AudioModePreference mode) async {
+    final modeWire = _audioModeWire(mode);
+    try {
+      if (kUseBackgroundPlaybackService) {
+        await _backgroundService.setAudioMode(
+            mode: modeWire, reason: 'ui_select');
+      } else {
+        _ws?.add(jsonEncode({
+          'type': 'set_audio_mode',
+          'mode': modeWire,
+          'reason': 'ui_select',
+        }));
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _currentAudioMode = mode;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = '${tr('模式切换失败', 'Audio mode change failed')}: $e';
+      });
+    }
+  }
+
   void _handleUdpPacket(Uint8List bytes) {
     final packet = LasPacket.parse(bytes);
     if (packet == null) {
       return;
+    }
+
+    if (packet.hasConfigChanged) {
+      // TODO(protocol-v2): when LAS2/LAV2 header is enabled, refresh playback config here.
+      _audioLog = 'protocol hint: config_changed';
+    }
+    if (packet.hasDiscontinuity) {
+      // TODO(protocol-v2): reset jitter/decoder state on discontinuity.
+      _audioLog = 'protocol hint: discontinuity';
     }
 
     _udpPackets += 1;
@@ -638,7 +820,9 @@ class _DebugPageState extends State<DebugPage> {
     _jitter.push(packet);
 
     if (_playbackState != PlaybackState.stopped) {
-      final newState = _jitter.bufferedMs >= 40 ? PlaybackState.playing : PlaybackState.buffering;
+      final newState = _jitter.bufferedMs >= 40
+          ? PlaybackState.playing
+          : PlaybackState.buffering;
       if (newState != _playbackState) {
         setState(() {
           _playbackState = newState;
@@ -653,9 +837,12 @@ class _DebugPageState extends State<DebugPage> {
 
   Future<void> _startPlayback() async {
     if (kUseBackgroundPlaybackService) {
-      final selected = _selectedServerId == null ? null : _servers[_selectedServerId!];
+      final selected =
+          _selectedServerId == null ? null : _servers[_selectedServerId!];
       final manual = _manualHostController.text.trim();
-      final host = selected?.host ?? _serviceTargetHost ?? (manual.isEmpty ? null : manual);
+      final host = selected?.host ??
+          _serviceTargetHost ??
+          (manual.isEmpty ? null : manual);
       if (host == null || host.isEmpty) {
         setState(() {
           _status = tr('请先选择服务器', 'please select server first');
@@ -664,7 +851,8 @@ class _DebugPageState extends State<DebugPage> {
       }
       final wsPort = selected?.wsPort ?? 39991;
       final udpPort = selected?.udpPort ?? 39992;
-      final serverName = selected?.serverName ?? _serviceTargetName ?? 'manual:$host';
+      final serverName =
+          selected?.serverName ?? _serviceTargetName ?? 'manual:$host';
       await _connectToHost(
         host: host,
         wsPort: wsPort,
@@ -709,7 +897,8 @@ class _DebugPageState extends State<DebugPage> {
           await _audioOutput.init(
             sampleRate: frame.sampleRate,
             channels: frame.channels,
-            frameSamplesPerChannel: frame.frameDurationMs * frame.sampleRate ~/ 1000,
+            frameSamplesPerChannel:
+                frame.frameDurationMs * frame.sampleRate ~/ 1000,
           );
           _audioTrackInitialized = true;
         }
@@ -743,6 +932,7 @@ class _DebugPageState extends State<DebugPage> {
   Future<void> _stopPlayback() async {
     if (kUseBackgroundPlaybackService) {
       try {
+        debugPrint('ui_stopPlayback forwarding to background service');
         await _backgroundService.stopPlayback();
       } catch (_) {}
       if (mounted) {
@@ -785,8 +975,10 @@ class _DebugPageState extends State<DebugPage> {
 
   String _statusChipLabel() {
     if (_isConnecting) return tr('连接中', 'CONNECTING');
-    if (_wsConnected && _playbackState == PlaybackState.playing) return tr('推流中', 'STREAMING');
-    if (_wsConnected && _playbackState == PlaybackState.buffering) return tr('缓冲中', 'BUFFERING');
+    if (_wsConnected && _playbackState == PlaybackState.playing)
+      return tr('推流中', 'STREAMING');
+    if (_wsConnected && _playbackState == PlaybackState.buffering)
+      return tr('缓冲中', 'BUFFERING');
     if (_wsConnected) return tr('已连接', 'CONNECTED');
     return tr('未连接', 'DISCONNECTED');
   }
@@ -813,23 +1005,30 @@ class _DebugPageState extends State<DebugPage> {
     return tr('连接所选', 'Connect Selected');
   }
 
-  int get _uiBufferedMs => kUseBackgroundPlaybackService ? _serviceBufferedMs : _jitter.bufferedMs;
+  int get _uiBufferedMs =>
+      kUseBackgroundPlaybackService ? _serviceBufferedMs : _jitter.bufferedMs;
 
-  int get _uiUnderrun =>
-      kUseBackgroundPlaybackService ? _serviceUnderrun : _jitter.stats.underrunCount;
+  int get _uiUnderrun => kUseBackgroundPlaybackService
+      ? _serviceUnderrun
+      : _jitter.stats.underrunCount;
 
-  int get _uiDropped =>
-      kUseBackgroundPlaybackService ? _serviceDropped : _jitter.stats.droppedFrames;
+  int get _uiDropped => kUseBackgroundPlaybackService
+      ? _serviceDropped
+      : _jitter.stats.droppedFrames;
 
-  int get _uiLate => kUseBackgroundPlaybackService ? _serviceLate : _jitter.stats.lateFrames;
+  int get _uiLate =>
+      kUseBackgroundPlaybackService ? _serviceLate : _jitter.stats.lateFrames;
 
-  int get _uiUdpPackets => kUseBackgroundPlaybackService ? _serviceUdpPackets : _udpPackets;
+  int get _uiUdpPackets =>
+      kUseBackgroundPlaybackService ? _serviceUdpPackets : _udpPackets;
 
-  int get _uiUdpBytes => kUseBackgroundPlaybackService ? _serviceUdpBytes : _udpBytes;
+  int get _uiUdpBytes =>
+      kUseBackgroundPlaybackService ? _serviceUdpBytes : _udpBytes;
 
   int get _uiUdpLoss => kUseBackgroundPlaybackService ? _serviceLoss : _udpLoss;
 
-  int? get _uiLastSeq => kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
+  int? get _uiLastSeq =>
+      kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
 
   Widget _metricTile(String label, String value) {
     return Container(
@@ -841,7 +1040,8 @@ class _DebugPageState extends State<DebugPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+          Text(label,
+              style: const TextStyle(fontSize: 11, color: Colors.black54)),
           const SizedBox(height: 2),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
         ],
@@ -857,7 +1057,8 @@ class _DebugPageState extends State<DebugPage> {
     final matched = servers.where((s) => s.host == recentHost).toList();
     final wsPort = matched.isNotEmpty ? matched.first.wsPort : 39991;
     final udpPort = matched.isNotEmpty ? matched.first.udpPort : 39992;
-    final name = matched.isNotEmpty ? matched.first.serverName : 'recent:$recentHost';
+    final name =
+        matched.isNotEmpty ? matched.first.serverName : 'recent:$recentHost';
 
     return Card(
       color: Theme.of(context).colorScheme.primaryContainer,
@@ -870,15 +1071,19 @@ class _DebugPageState extends State<DebugPage> {
               children: [
                 const Icon(Icons.flash_on, size: 18),
                 const SizedBox(width: 6),
-                Text(tr('快速连接', 'Quick Connect'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(tr('快速连接', 'Quick Connect'),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primary,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text(tr('最近连接', 'Recent'), style: const TextStyle(color: Colors.white, fontSize: 11)),
+                  child: Text(tr('最近连接', 'Recent'),
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 11)),
                 ),
               ],
             ),
@@ -929,17 +1134,21 @@ class _DebugPageState extends State<DebugPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(kUiBuildTag, style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text(kUiBuildTag,
+              style: const TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
               Chip(
-                backgroundColor: _statusChipColor(context).withValues(alpha: 0.18),
+                backgroundColor:
+                    _statusChipColor(context).withValues(alpha: 0.18),
                 label: Text(
                   _statusChipLabel(),
-                  style: TextStyle(color: _statusChipColor(context), fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                      color: _statusChipColor(context),
+                      fontWeight: FontWeight.w700),
                 ),
               ),
               Text(_status),
@@ -955,7 +1164,8 @@ class _DebugPageState extends State<DebugPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(tr('连接', 'Connection'),
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 16)),
                   const SizedBox(height: 8),
                   SegmentedButton<ConnectMode>(
                     segments: [
@@ -994,7 +1204,8 @@ class _DebugPageState extends State<DebugPage> {
                       controller: _manualHostController,
                       decoration: InputDecoration(
                         border: const OutlineInputBorder(),
-                        labelText: tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
+                        labelText:
+                            tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
                         hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
                       ),
                     )
@@ -1017,14 +1228,18 @@ class _DebugPageState extends State<DebugPage> {
                           ),
                           const SizedBox(height: 8),
                           FilledButton.tonal(
-                            onPressed: _probeRunning ? null : _probeSubnetForServers,
+                            onPressed:
+                                _probeRunning ? null : _probeSubnetForServers,
                             child: Text(
-                              _probeRunning ? tr('扫描中...', 'Scanning...') : tr('扫描局域网', 'Scan LAN'),
+                              _probeRunning
+                                  ? tr('扫描中...', 'Scanning...')
+                                  : tr('扫描局域网', 'Scan LAN'),
                             ),
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            tr('提示：可切换到“手动地址”输入 IP。', 'Tip: switch to Manual and enter server IP.'),
+                            tr('提示：可切换到“手动地址”输入 IP。',
+                                'Tip: switch to Manual and enter server IP.'),
                             style: const TextStyle(color: Colors.black54),
                           ),
                         ],
@@ -1049,12 +1264,15 @@ class _DebugPageState extends State<DebugPage> {
                             },
                             title: Row(
                               children: [
-                                Expanded(child: Text('${s.serverName} (${s.host})')),
+                                Expanded(
+                                    child: Text('${s.serverName} (${s.host})')),
                                 if (isRecent)
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.teal.withValues(alpha: 0.16),
+                                      color:
+                                          Colors.teal.withValues(alpha: 0.16),
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     child: Text(
@@ -1092,9 +1310,12 @@ class _DebugPageState extends State<DebugPage> {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton(
-                        onPressed: _probeRunning ? null : _probeSubnetForServers,
+                        onPressed:
+                            _probeRunning ? null : _probeSubnetForServers,
                         child: Text(
-                          _probeRunning ? tr('扫描中...', 'Scanning...') : tr('扫描局域网', 'Scan LAN'),
+                          _probeRunning
+                              ? tr('扫描中...', 'Scanning...')
+                              : tr('扫描局域网', 'Scan LAN'),
                         ),
                       ),
                     ],
@@ -1111,17 +1332,49 @@ class _DebugPageState extends State<DebugPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(tr('播放', 'Playback'),
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 16)),
                   const SizedBox(height: 8),
                   FilledButton(
                     onPressed: !_wsConnected
                         ? null
-                        : (_playbackState == PlaybackState.stopped ? _startPlayback : _stopPlayback),
+                        : (_playbackState == PlaybackState.stopped
+                            ? _startPlayback
+                            : _stopPlayback),
                     child: Text(
                       _playbackState == PlaybackState.stopped
                           ? tr('开始播放', 'Start Playback')
                           : tr('停止播放', 'Stop Playback'),
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '${tr('当前模式', 'Current mode')}: ${_audioModeLabel(_currentAudioMode)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  SegmentedButton<AudioModePreference>(
+                    segments: [
+                      ButtonSegment(
+                        value: AudioModePreference.lowLatency,
+                        label: Text(tr('低延迟', 'Low Latency')),
+                      ),
+                      ButtonSegment(
+                        value: AudioModePreference.balanced,
+                        label: Text(tr('平衡', 'Balanced')),
+                      ),
+                      ButtonSegment(
+                        value: AudioModePreference.highQuality,
+                        label: Text(tr('高音质', 'High Quality')),
+                      ),
+                    ],
+                    selected: <AudioModePreference>{_currentAudioMode},
+                    onSelectionChanged: !_wsConnected
+                        ? null
+                        : (selection) {
+                            final mode = selection.first;
+                            _setAudioMode(mode);
+                          },
                   ),
                   const SizedBox(height: 10),
                   Wrap(
@@ -1145,6 +1398,25 @@ class _DebugPageState extends State<DebugPage> {
               title: Text(tr('调试指标', 'Debug Metrics')),
               childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               children: [
+                Text(
+                  '${tr('协议版本', 'Protocol')}: v${_protocolVersion ?? 1}  ·  '
+                  '${tr('当前模式', 'Mode')}: ${_audioModeLabel(_currentAudioMode)}',
+                ),
+                const SizedBox(height: 6),
+                if (_serverPlatform != null || _serverAppVersion != null)
+                  Text(
+                    '${tr('服务端', 'Server')}: '
+                    '${_serverPlatform ?? 'unknown'}'
+                    '${_serverAppVersion == null ? '' : ' (${_serverAppVersion})'}',
+                  ),
+                if (_serverPlatform != null || _serverAppVersion != null)
+                  const SizedBox(height: 6),
+                Text(
+                  '${tr('能力协商', 'Capabilities')}: '
+                  '${_negotiatedCapabilities.entries.where((e) => e.value).map((e) => e.key).join(', ')}',
+                  style: const TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 8),
                 _metricTile('sample_rate', '$_sampleRate'),
                 const SizedBox(height: 8),
                 _metricTile('channels', '$_channels'),
@@ -1184,11 +1456,3 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 }
-
-
-
-
-
-
-
-

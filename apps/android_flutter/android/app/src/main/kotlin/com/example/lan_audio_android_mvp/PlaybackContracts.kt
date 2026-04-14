@@ -5,6 +5,8 @@ object PlaybackActions {
     const val ACTION_STOP = "lan_audio.action.STOP"
     const val ACTION_RECONNECT = "lan_audio.action.RECONNECT"
     const val ACTION_SET_OPTIONS = "lan_audio.action.SET_OPTIONS"
+    const val ACTION_SET_AUDIO_MODE = "lan_audio.action.SET_AUDIO_MODE"
+    const val ACTION_DUMP_METRICS = "lan_audio.action.DUMP_METRICS"
 
     const val EXTRA_HOST = "host"
     const val EXTRA_WS_PORT = "ws_port"
@@ -13,6 +15,8 @@ object PlaybackActions {
     const val EXTRA_START_BUFFER_MS = "start_buffer_ms"
     const val EXTRA_MAX_BUFFER_MS = "max_buffer_ms"
     const val EXTRA_PING_INTERVAL_MS = "ping_interval_ms"
+    const val EXTRA_AUDIO_MODE = "audio_mode"
+    const val EXTRA_REASON = "reason"
 }
 
 object PlaybackChannels {
@@ -47,6 +51,11 @@ data class PlaybackMetrics(
     val nativeQueuedFrames: Int = 0,
     val audioTrackWriteFrames: Long = 0,
     val audioTrackShortWriteCount: Long = 0,
+    val silenceFillCount: Int = 0,
+    val rxFramesPerSec: Double = 0.0,
+    val audioTrackWriteFramesPerSec: Double = 0.0,
+    val cfgChangedCount: Int = 0,
+    val discontinuityCount: Int = 0,
 )
 
 data class PlaybackSnapshot(
@@ -55,6 +64,13 @@ data class PlaybackSnapshot(
     val playbackState: String = "stopped",
     val targetHost: String? = null,
     val targetName: String? = null,
+    val protocolVersion: Int? = null,
+    val currentAudioMode: String = "balanced",
+    val negotiatedCapabilities: Map<String, Boolean> = emptyMap(),
+    val clientPlatform: String = "android",
+    val clientAppVersion: String = "android_flutter",
+    val serverPlatform: String? = null,
+    val serverAppVersion: String? = null,
     val metrics: PlaybackMetrics = PlaybackMetrics(),
     val recentLog: String = "",
     val error: Map<String, String>? = null,
@@ -66,6 +82,13 @@ data class PlaybackSnapshot(
             "playbackState" to playbackState,
             "targetHost" to targetHost,
             "targetName" to targetName,
+            "protocolVersion" to protocolVersion,
+            "currentAudioMode" to currentAudioMode,
+            "negotiatedCapabilities" to negotiatedCapabilities,
+            "clientPlatform" to clientPlatform,
+            "clientAppVersion" to clientAppVersion,
+            "serverPlatform" to serverPlatform,
+            "serverAppVersion" to serverAppVersion,
             "metrics" to mapOf(
                 "sampleRate" to metrics.sampleRate,
                 "channels" to metrics.channels,
@@ -80,6 +103,11 @@ data class PlaybackSnapshot(
                 "nativeQueuedFrames" to metrics.nativeQueuedFrames,
                 "audioTrackWriteFrames" to metrics.audioTrackWriteFrames,
                 "audioTrackShortWriteCount" to metrics.audioTrackShortWriteCount,
+                "silenceFillCount" to metrics.silenceFillCount,
+                "rxFramesPerSec" to metrics.rxFramesPerSec,
+                "audioTrackWriteFramesPerSec" to metrics.audioTrackWriteFramesPerSec,
+                "cfgChangedCount" to metrics.cfgChangedCount,
+                "discontinuityCount" to metrics.discontinuityCount,
             ),
             "recentLog" to recentLog,
             "error" to error,

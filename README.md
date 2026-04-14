@@ -3,6 +3,20 @@
 当前仓库已可在本机进入“可构建、可启动、可联调准备”状态，技术路线保持不变：Rust + Tauri + Flutter + UDP + WebSocket（当前主路径 PCM 直通）。
 Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless` 保留用于调试与回归。
 
+## 当前项目主线（2026-04）
+
+1. 播放稳定性
+2. 延迟优化
+3. 多策略模式
+4. 协议演进（Protocol v2）
+5. 产品化 UI / 桌面端交付
+
+说明：
+
+- “协议演进”已升级为独立主线，不再作为附属任务。
+- 当前运行主路径仍以 PCM + legacy/v1 为主。
+- Protocol v2 当前是“文档已定 + 结构已定 + 骨架已落 + 最小接入”，并非全量切换。
+
 ## 稳定出声结论
 
 - 当前结论：**可出声但暂不稳定**（已达到可用级别，尚未达到“长时稳定无波动”级别）。
@@ -17,7 +31,99 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
   - 优先在稳定 Wi-Fi（同一局域网，尽量 5GHz）环境使用。
   - 保持 `48kHz / stereo` 默认配置（当前主路径即此配置）。
   - 首次排障建议先用 `synthetic` 验证链路，再切换到 `windows_loopback` 验证系统音频采集。
-  - 若出现波动，优先观察 Android 端 `buffered_ms / underrun` 与服务端 capture 状态。
+- 若出现波动，优先观察 Android 端 `buffered_ms / underrun` 与服务端 capture 状态。
+
+## Protocol v2 当前状态
+
+- 已完成：
+  - `docs/protocol.md` 升级为 Protocol v2 草案（控制面、数据面、capabilities、迁移策略）。
+  - Rust 协议层新增 v2 结构体与 UDP v2 header 编解码骨架。
+  - 控制面联动已接通：`hello/hello_ack + server_info + client_info + set_audio_mode/audio_mode_changed`。
+- 已有骨架：
+  - 服务端维护运行时 `current_audio_mode`（默认 `balanced`），Android / Windows 桌面均可显示当前模式。
+  - Android 后台播放主链路已发送 v2 `hello/client_info` 并接收 `hello_ack/server_info`。
+  - 服务端发送路径已保留 `config_changed / discontinuity` 插入位置。
+- 尚未启用：
+  - 默认数据面仍发送 legacy `LAS1` 头（未切 v2 为默认）。
+  - v2 数据面当前仍处于灰度阶段，默认不直接放到主路径。
+- 双栈灰度状态：
+  - 服务端已支持按配置选择 `legacy_las1` / `v2_header`（`--data-plane`）。
+  - 客户端接收侧已支持 `LAS1/LAV2` 双栈识别。
+  - 灰度保护：`windows_loopback + v2_header` 仅在显式开关 `--allow-loopback-v2-header-gray` 下启用；默认仍自动回落 `legacy_las1`。
+
+### v2 数据面灰度验收（2026-04-14）
+
+- 验收目标：`synthetic + --data-plane v2_header`。
+- 本机执行结果（非真机听感）：
+  - `LAV2` 识别：通过（本地灰度客户端统计 `v2=1200, v1=0`）。
+  - 连续播放数据流：通过（连续收包，无 sequence loss）。
+  - 模式切换链路：通过（`balanced -> low_latency -> high_quality -> balanced`）。
+  - `config_changed/discontinuity`：通过（累计 `cfg_changed=3`, `discontinuity=4`，与切换次数一致）。
+- 真机状态：
+  - 已完成一轮真实 Android 设备上的 `synthetic + --data-plane v2_header` 连接、播放与模式切换验收。
+  - 该轮 synthetic 验收使用设备：`5391d451 (Xiaomi 24129PN74C)`。
+- 后续扩展：
+  - 先控制面稳定协商，再灰度数据面 header，最后再做默认路径切换与 Opus 接线。
+
+### v2 synthetic 真机验收结论
+
+- 结论：**synthetic + v2_header 真机验收通过**
+- 验收环境：
+  - Windows 服务端：`synthetic + --data-plane v2_header`
+  - Android 真机：`5391d451 / Xiaomi 24129PN74C`
+  - 模式切换序列：`balanced -> low_latency -> high_quality -> balanced`
+- Android 端关键指标（steady-state dump）：
+  - `baseline_balanced`: `Playback=playing`, `buffered_ms=290`, `jitter_underrun=1`, `dropped_late_frames=13/0`, `silence_fill_count=0`, `rx_frames_per_sec=99.4`, `audio_track_write_frames_per_sec=99.4`, `cfg_changed=0`, `discontinuity=1`
+  - `after_low_latency`: `Playback=playing`, `buffered_ms=50`, `jitter_underrun=0`, `dropped_late_frames=0/0`, `silence_fill_count=0`, `rx_frames_per_sec=100.0`, `audio_track_write_frames_per_sec=100.0`, `cfg_changed=1`, `discontinuity=2`
+  - `after_high_quality`: `Playback=playing`, `buffered_ms=50`, `jitter_underrun=0`, `dropped_late_frames=0/0`, `silence_fill_count=0`, `rx_frames_per_sec=104.5`, `audio_track_write_frames_per_sec=99.5`, `cfg_changed=2`, `discontinuity=3`
+  - `after_balanced_final`: `Playback=playing`, `buffered_ms=70`, `jitter_underrun=0`, `dropped_late_frames=0/0`, `silence_fill_count=0`, `rx_frames_per_sec=99.0`, `audio_track_write_frames_per_sec=99.0`, `cfg_changed=3`, `discontinuity=4`
+- 服务端侧验证：
+  - 已记录 `audio mode changed; mark config_changed/discontinuity in outgoing packet`
+  - 切换链路依次命中：`Balanced -> LowLatency`, `LowLatency -> HighQuality`, `HighQuality -> Balanced`
+- 观察结论：
+  - 模式切换后的客户端行为为最小重同步（`udp_config_changed_resync` + `init AudioTrack`），切换后迅速恢复 `playing`
+  - 在正式模式切换窗口内，未见长时间 buffering、突然没声或持续异常波动
+- 下一阶段建议：
+  - 可以进入 `loopback + v2_header` 小流量灰度，但仍应保持非默认、保留回滚开关，并继续禁止直接放开为主路径
+
+### loopback + v2_header 小流量灰度结论
+
+- 结论：**loopback + v2_header 当前未通过**
+- 灰度保护：
+  - 默认主路径仍是 `legacy_las1`
+  - `windows_loopback + v2_header` 仅在显式开关 `--allow-loopback-v2-header-gray` 下启用
+  - 可随时回退到：
+    - `windows_loopback + legacy_las1`
+    - `synthetic + v2_header`
+- 验收环境：
+  - Windows 服务端：`windows_loopback + --data-plane v2_header --allow-loopback-v2-header-gray`
+  - Android 真机：`5391d451 / Xiaomi 24129PN74C`
+  - 回滚路径仍保留：
+    - `windows_loopback + legacy_las1`
+    - `synthetic + v2_header`
+- Android 端实际指标（基线阶段，logcat dump）：
+  - `Playback=buffering`
+  - `buffered_ms=0~50`
+  - `jitter_underrun=23 -> 30`
+  - `dropped_late_frames=0/0`
+  - `silence_fill_count=0`
+  - `rx_frames_per_sec=5.9 ~ 7.0`
+  - `audio_track_write_frames_per_sec=5.9 ~ 12.0`
+  - `cfg_changed=0`
+  - `discontinuity=1`
+- 服务端侧观察：
+  - 真实 v2 数据面已建立：`selected_data_plane=v2_header`
+  - Windows loopback 采集已启动，未看到 `capture source is not started`
+  - 但 `capture_no_packet_count` 长时间偏高，`capture_underruns` 持续上升
+  - `capture_last_peak / capture_last_rms` 大多数时间接近 `0`，只偶发极小非零值（例如 `0.0058 / 0.0024`）
+  - `tx_frames_per_sec` 大部分时间仅约 `6.4 ~ 6.6 fps`，远低于 synthetic 阶段的约 `100 fps`
+- 模式切换：
+  - 已确认至少一轮 `balanced -> low_latency` 命中服务端，并正确打出 `config_changed/discontinuity`
+  - 但 Android 真机在后续切换过程中从 `adb` 掉线，`low_latency -> high_quality -> balanced` 未完整补齐
+- 结论解释：
+  - 这轮主阻塞点在 **Windows 采集端**
+  - v2 数据面握手和 `LAV2` 发送已打通，但 loopback 采集输出节奏明显异常，客户端持续 `buffering`
+  - 与已通过的 `synthetic + v2_header` 相比，loopback 下表现明显劣化，当前不能进入下一阶段流量放大
 
 ## 本机实测状态（2026-04-12, Asia/Shanghai）
 
@@ -42,7 +148,7 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
 
 ### 2) 已修复但当前机器仍受外部条件限制
 
-- `adb devices` 当前无在线设备，尚未在这台机器完成“安装到真机并实际出声”验收。
+- 真机 `synthetic + v2_header` 验收已完成；`windows_loopback + v2_header` 已开始真机灰度，但当前主阻塞点转为 Windows loopback 采集节奏异常，且本轮模式切换阶段出现 `adb` 掉线。
 - Android 构建期间存在 AGP/Kotlin 版本即将弃用警告，不影响当前 debug 构建。
 
 ### 3) 仍需你手动安装的外部工具
@@ -53,6 +159,20 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
   - USB 驱动可用并在 `adb devices` 中出现 `device`
 
 ## 可执行目标与命令
+
+## GitHub Actions 构建
+
+仓库已新增两条 CI 工作流（`Actions` 页面可直接触发 `workflow_dispatch`）：
+
+- `Build Android APK`  
+  文件：[.github/workflows/build-android.yml](.github/workflows/build-android.yml)  
+  产物：`android-debug-apk`（`app-debug.apk`）
+
+- `Build Windows Client`  
+  文件：[.github/workflows/build-windows-client.yml](.github/workflows/build-windows-client.yml)  
+  产物：
+  - `windows-client-exe`（`lan_audio_desktop.exe` + `web` 静态资源）
+  - `windows-client-bundles`（若打包成功则包含 `msi/nsis` 安装包）
 
 ### 服务端（Windows）
 
@@ -291,6 +411,8 @@ Android 端每秒输出/展示 `rx_summary`，重点看：
 - `docs/local_simulation.md`
 - `docs/audio_capture.md`
 - `docs/architecture.md`
+- `docs/protocol.md`
+- `docs/roadmap.md`
 - `docs/todo.md`
 - `docs/known_issues.md`
 - `docs/desktop_ui.md`
