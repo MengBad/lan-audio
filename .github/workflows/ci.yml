@@ -91,6 +91,9 @@ jobs:
       - name: flutter pub get
         working-directory: apps/android_flutter
         run: flutter pub get
+      - name: Make Gradle wrapper executable
+        working-directory: apps/android_flutter/android
+        run: chmod +x ./gradlew
       - name: gradlew assembleDebug
         working-directory: apps/android_flutter/android
         run: ./gradlew assembleDebug

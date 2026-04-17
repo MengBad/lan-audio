@@ -6,6 +6,7 @@ use super::{
 };
 
 /// Non-Windows placeholder implementation.
+#[derive(Debug)]
 pub struct WindowsLoopbackCapture {
     state: CaptureSourceState,
 }
