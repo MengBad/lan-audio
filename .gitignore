@@ -23,6 +23,7 @@ Thumbs.db
 
 # Debug audio dumps
 debug_captures/
+logs/
 
 # Android crash dumps
 *.hprof
