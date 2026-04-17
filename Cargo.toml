@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 members = [
   "crates/lan_audio_protocol",
   "crates/lan_audio_server",
@@ -13,7 +13,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["LAN Audio MVP Team"]
 
 [workspace.dependencies]

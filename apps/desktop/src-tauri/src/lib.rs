@@ -3,8 +3,10 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lan_audio_protocol::{AudioMode, ProtocolCapabilities, PROTOCOL_VERSION_V2};
-use lan_audio_server::config::{AudioSourceKind, DataPlaneFormat, ServerConfig};
+use lan_audio_protocol::{
+    audio_mode_profile, AudioMode, AudioModeProfile, ProtocolCapabilities, PROTOCOL_VERSION_V2,
+};
+use lan_audio_server::config::{AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig};
 use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use serde::{Deserialize, Serialize};
@@ -81,6 +83,11 @@ struct DesktopSnapshot {
     error_message: Option<String>,
     audio_source: String,
     data_plane_format: String,
+    protocol_path: String,
+    gray_mode: bool,
+    codec_selection: String,
+    effective_codec: String,
+    recommended_connection: String,
     loopback_v2_header_gray_enabled: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
@@ -93,6 +100,7 @@ struct DesktopSnapshot {
     connection_status: String,
     session_status: String,
     current_audio_mode: String,
+    mode_profile: AudioModeProfile,
     protocol_version: u8,
     capabilities: ProtocolCapabilities,
     version: String,
@@ -104,6 +112,7 @@ struct DesktopSnapshot {
 struct DesktopServiceConfig {
     audio_source: AudioSourceKind,
     data_plane_format: DataPlaneFormat,
+    codec_selection: CodecSelection,
     allow_loopback_v2_header_gray: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
@@ -118,6 +127,7 @@ impl Default for DesktopServiceConfig {
         Self {
             audio_source: cfg.audio_source,
             data_plane_format: cfg.data_plane_format,
+            codec_selection: cfg.codec_selection,
             allow_loopback_v2_header_gray: cfg.allow_loopback_v2_header_gray,
             fallback_to_synthetic: cfg.audio_source_fallback_to_synthetic,
             capture_dump_wav: cfg.capture_debug_dump_wav,
@@ -132,6 +142,7 @@ impl Default for DesktopServiceConfig {
 struct ServiceSettingsInput {
     audio_source: String,
     data_plane_format: String,
+    codec_selection: String,
     allow_loopback_v2_header_gray: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
@@ -179,6 +190,10 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .as_ref()
         .map(|svc| svc.current_audio_mode())
         .unwrap_or(cfg.current_audio_mode);
+    let mode_profile = audio_mode_profile(current_audio_mode);
+    let gray_mode = cfg.data_plane_format == DataPlaneFormat::V2Header
+        && (cfg.audio_source == AudioSourceKind::Synthetic || cfg.allow_loopback_v2_header_gray);
+    let effective_codec = "pcm16";
 
     let local_ip = detect_local_ip();
     let connected_devices = metrics.active_sessions;
@@ -214,6 +229,11 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         error_message: last_error,
         audio_source: cfg.audio_source.as_str().to_string(),
         data_plane_format: cfg.data_plane_format.as_str().to_string(),
+        protocol_path: cfg.data_plane_format.as_str().to_string(),
+        gray_mode,
+        codec_selection: cfg.codec_selection.as_str().to_string(),
+        effective_codec: effective_codec.to_string(),
+        recommended_connection: recommended_connection(&cfg).to_string(),
         loopback_v2_header_gray_enabled: cfg.allow_loopback_v2_header_gray,
         fallback_to_synthetic: cfg.fallback_to_synthetic,
         capture_dump_wav: cfg.capture_dump_wav,
@@ -226,6 +246,7 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         connection_status,
         session_status,
         current_audio_mode: format!("{:?}", current_audio_mode).to_lowercase(),
+        mode_profile,
         protocol_version: PROTOCOL_VERSION_V2,
         capabilities: default_protocol_capabilities(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -261,10 +282,13 @@ fn update_service_settings(
     let source = AudioSourceKind::parse(&settings.audio_source).map_err(|e| e.to_string())?;
     let data_plane =
         DataPlaneFormat::parse(&settings.data_plane_format).map_err(|e| e.to_string())?;
+    let codec_selection =
+        CodecSelection::parse(&settings.codec_selection).map_err(|e| e.to_string())?;
     let restart_needed = {
         let mut guard = state.inner.lock().expect("state lock");
         guard.config.audio_source = source;
         guard.config.data_plane_format = data_plane;
+        guard.config.codec_selection = codec_selection;
         guard.config.allow_loopback_v2_header_gray = settings.allow_loopback_v2_header_gray;
         guard.config.fallback_to_synthetic = settings.fallback_to_synthetic;
         guard.config.capture_dump_wav = settings.capture_dump_wav;
@@ -277,9 +301,10 @@ fn update_service_settings(
     push_log(
         &state.logs,
         format!(
-            "settings updated: source={}, data_plane={}, loopback_v2_gray={}, fallback={}, dump_wav={}",
+            "settings updated: source={}, data_plane={}, codec={}, loopback_v2_gray={}, fallback={}, dump_wav={}",
             source.as_str(),
             data_plane.as_str(),
+            codec_selection.as_str(),
             settings.allow_loopback_v2_header_gray,
             settings.fallback_to_synthetic,
             settings.capture_dump_wav
@@ -402,6 +427,7 @@ fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, Strin
     let mut server = ServerConfig::default();
     server.audio_source = cfg.audio_source;
     server.data_plane_format = cfg.data_plane_format;
+    server.codec_selection = cfg.codec_selection;
     server.allow_loopback_v2_header_gray = cfg.allow_loopback_v2_header_gray;
     server.audio_source_fallback_to_synthetic = cfg.fallback_to_synthetic;
     server.capture_debug_dump_wav = cfg.capture_dump_wav;
@@ -409,6 +435,14 @@ fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, Strin
     server.ws_bind = parse_bind(cfg.ws_port)?;
     server.udp_bind = parse_bind(cfg.udp_port)?;
     Ok(server)
+}
+
+fn recommended_connection(cfg: &DesktopServiceConfig) -> &'static str {
+    if cfg.data_plane_format == DataPlaneFormat::V2Header {
+        "USB tethering or 5GHz Wi-Fi"
+    } else {
+        "Same Wi-Fi network"
+    }
 }
 
 fn parse_bind(port: u16) -> Result<SocketAddr, String> {
@@ -464,9 +498,14 @@ fn default_protocol_capabilities() -> ProtocolCapabilities {
         supports_modes: true,
         supports_metrics: true,
         supports_opus_future: false,
+        supports_opus_experimental: false,
         supports_low_latency: true,
         supports_high_quality: true,
         supports_native_audio_track: true,
+        supports_fast_path: true,
+        supports_stable_audio_track: true,
+        supports_usb_tethering: true,
+        supports_usb_direct_future: false,
     }
 }
 

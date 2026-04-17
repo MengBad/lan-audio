@@ -6,9 +6,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
-    AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo, ControlMessageV2, ErrorMessage,
-    Hello, HelloAck, ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode,
-    PROTOCOL_VERSION_V2,
+    audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeChanged, ClientControlMessage,
+    ClientInfo, ControlMessageV2, ErrorMessage, Hello, HelloAck, ProtocolCapabilities,
+    ServerControlMessage, ServerInfo, SetAudioMode, PROTOCOL_VERSION_V2,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
@@ -141,6 +141,7 @@ impl SessionServer {
                 accepted: true,
                 session_id,
                 current_audio_mode,
+                mode_profile: audio_mode_profile(current_audio_mode),
                 capabilities: default_server_capabilities(),
                 message: "hello_ack".to_string(),
             });
@@ -157,6 +158,11 @@ impl SessionServer {
                 udp_port: self.cfg.udp_bind.port(),
                 protocol_version: PROTOCOL_VERSION_V2,
                 current_audio_mode,
+                mode_profile: audio_mode_profile(current_audio_mode),
+                codec: AudioCodecPreference::Pcm16,
+                data_plane: self.cfg.data_plane_format.as_str().to_string(),
+                gray_mode: self.cfg.allow_loopback_v2_header_gray,
+                recommended_connection: "usb_tethering_or_5ghz_wifi".to_string(),
             });
             ws_tx
                 .send(Message::Text(serde_json::to_string(&server_info)?.into()))
@@ -167,10 +173,17 @@ impl SessionServer {
         self.metrics
             .note_client_connected(&client_name, &peer.ip().to_string());
         self.metrics.inc_sessions();
+        if self.cfg.codec_selection.as_str() != "pcm16" {
+            warn!(
+                requested_codec = %self.cfg.codec_selection.as_str(),
+                effective_codec = "pcm16",
+                "requested codec is not wired yet; falling back to pcm16"
+            );
+        }
 
         let welcome = ServerControlMessage::ServerWelcome {
             session_id,
-            codec: "opus".to_string(),
+            codec: "pcm16".to_string(),
             sample_rate: desired_sample_rate.max(8_000),
             channels,
             frames_per_packet: self.cfg.frames_per_packet,
@@ -258,6 +271,7 @@ impl SessionServer {
                                                     mode,
                                                     applied: true,
                                                     reason,
+                                                    mode_profile: audio_mode_profile(mode),
                                                 });
                                                 ws_tx.send(Message::Text(serde_json::to_string(&changed)?.into())).await?;
                                                 info!(session = %session_id, mode = ?current_audio_mode, "audio mode updated by client");
@@ -418,9 +432,14 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_modes: true,
         supports_metrics: true,
         supports_opus_future: false,
+        supports_opus_experimental: false,
         supports_low_latency: true,
         supports_high_quality: true,
         supports_native_audio_track: true,
+        supports_fast_path: false,
+        supports_stable_audio_track: true,
+        supports_usb_tethering: true,
+        supports_usb_direct_future: false,
     }
 }
 

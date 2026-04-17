@@ -35,22 +35,107 @@ pub enum AudioMode {
     HighQuality,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleFormatPreference {
+    Pcm16,
+    F32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioCodecPreference {
+    Pcm16,
+    OpusExperimental,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioModeProfile {
+    pub mode: AudioMode,
+    pub start_buffer_ms: u16,
+    pub max_buffer_ms: u16,
+    pub batch_frames: u8,
+    pub drop_threshold_ms: u16,
+    pub prefer_low_latency_path: bool,
+    pub prefer_stable_audio_track: bool,
+    pub preferred_codec: AudioCodecPreference,
+    pub preferred_sample_format: SampleFormatPreference,
+    pub frame_duration_ms: u16,
+    pub reset_buffer_on_switch: bool,
+}
+
+pub fn audio_mode_profile(mode: AudioMode) -> AudioModeProfile {
+    match mode {
+        AudioMode::LowLatency => AudioModeProfile {
+            mode,
+            start_buffer_ms: 40,
+            max_buffer_ms: 180,
+            batch_frames: 1,
+            drop_threshold_ms: 140,
+            prefer_low_latency_path: true,
+            prefer_stable_audio_track: false,
+            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_sample_format: SampleFormatPreference::Pcm16,
+            frame_duration_ms: 10,
+            reset_buffer_on_switch: true,
+        },
+        AudioMode::Balanced => AudioModeProfile {
+            mode,
+            start_buffer_ms: 60,
+            max_buffer_ms: 300,
+            batch_frames: 2,
+            drop_threshold_ms: 220,
+            prefer_low_latency_path: false,
+            prefer_stable_audio_track: true,
+            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_sample_format: SampleFormatPreference::Pcm16,
+            frame_duration_ms: 10,
+            reset_buffer_on_switch: true,
+        },
+        AudioMode::HighQuality => AudioModeProfile {
+            mode,
+            start_buffer_ms: 120,
+            max_buffer_ms: 500,
+            batch_frames: 3,
+            drop_threshold_ms: 420,
+            prefer_low_latency_path: false,
+            prefer_stable_audio_track: true,
+            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_sample_format: SampleFormatPreference::Pcm16,
+            frame_duration_ms: 10,
+            reset_buffer_on_switch: false,
+        },
+    }
+}
+
 impl Default for AudioMode {
     fn default() -> Self {
         Self::Balanced
     }
 }
 
+impl Default for AudioModeProfile {
+    fn default() -> Self {
+        audio_mode_profile(AudioMode::Balanced)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct ProtocolCapabilities {
     pub supports_pcm16: bool,
     pub supports_f32: bool,
     pub supports_modes: bool,
     pub supports_metrics: bool,
     pub supports_opus_future: bool,
+    pub supports_opus_experimental: bool,
     pub supports_low_latency: bool,
     pub supports_high_quality: bool,
     pub supports_native_audio_track: bool,
+    pub supports_fast_path: bool,
+    pub supports_stable_audio_track: bool,
+    pub supports_usb_tethering: bool,
+    pub supports_usb_direct_future: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +156,8 @@ pub struct HelloAck {
     pub accepted: bool,
     pub session_id: Uuid,
     pub current_audio_mode: AudioMode,
+    #[serde(default)]
+    pub mode_profile: AudioModeProfile,
     pub capabilities: ProtocolCapabilities,
     pub message: String,
 }
@@ -85,6 +172,12 @@ pub struct ServerInfo {
     pub udp_port: u16,
     pub protocol_version: u8,
     pub current_audio_mode: AudioMode,
+    #[serde(default)]
+    pub mode_profile: AudioModeProfile,
+    pub codec: AudioCodecPreference,
+    pub data_plane: String,
+    pub gray_mode: bool,
+    pub recommended_connection: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +199,8 @@ pub struct AudioModeChanged {
     pub mode: AudioMode,
     pub applied: bool,
     pub reason: String,
+    #[serde(default)]
+    pub mode_profile: AudioModeProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -217,7 +312,7 @@ pub enum ServerControlMessage {
 pub enum UdpAudioCodecV2 {
     Pcm16 = 1,
     F32 = 2,
-    OpusFuture = 3,
+    OpusExperimental = 3,
 }
 
 impl UdpAudioCodecV2 {
@@ -225,7 +320,7 @@ impl UdpAudioCodecV2 {
         match value {
             1 => Some(Self::Pcm16),
             2 => Some(Self::F32),
-            3 => Some(Self::OpusFuture),
+            3 => Some(Self::OpusExperimental),
             _ => None,
         }
     }
@@ -489,6 +584,27 @@ mod tests {
     }
 
     #[test]
+    fn audio_mode_profile_has_low_latency_and_high_quality_tradeoffs() {
+        let low = audio_mode_profile(AudioMode::LowLatency);
+        let high = audio_mode_profile(AudioMode::HighQuality);
+        assert!(low.prefer_low_latency_path);
+        assert!(high.prefer_stable_audio_track);
+        assert!(low.start_buffer_ms < high.start_buffer_ms);
+        assert!(low.max_buffer_ms < high.max_buffer_ms);
+    }
+
+    #[test]
+    fn codec_preference_marks_opus_as_experimental() {
+        let json =
+            serde_json::to_string(&AudioCodecPreference::OpusExperimental).expect("serialize");
+        assert_eq!(json, "\"opus_experimental\"");
+        assert_eq!(
+            UdpAudioCodecV2::from_u8(3),
+            Some(UdpAudioCodecV2::OpusExperimental)
+        );
+    }
+
+    #[test]
     fn v2_capabilities_round_trip_json() {
         let caps = ProtocolCapabilities {
             supports_pcm16: true,
@@ -496,9 +612,14 @@ mod tests {
             supports_modes: true,
             supports_metrics: true,
             supports_opus_future: true,
+            supports_opus_experimental: true,
             supports_low_latency: true,
             supports_high_quality: true,
             supports_native_audio_track: true,
+            supports_fast_path: true,
+            supports_stable_audio_track: true,
+            supports_usb_tethering: true,
+            supports_usb_direct_future: false,
         };
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
@@ -520,9 +641,14 @@ mod tests {
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: true,
+                supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
                 supports_native_audio_track: true,
+                supports_fast_path: true,
+                supports_stable_audio_track: true,
+                supports_usb_tethering: true,
+                supports_usb_direct_future: false,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -541,15 +667,21 @@ mod tests {
             accepted: true,
             session_id: Uuid::new_v4(),
             current_audio_mode: AudioMode::Balanced,
+            mode_profile: audio_mode_profile(AudioMode::Balanced),
             capabilities: ProtocolCapabilities {
                 supports_pcm16: true,
                 supports_f32: false,
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: false,
+                supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
                 supports_native_audio_track: true,
+                supports_fast_path: false,
+                supports_stable_audio_track: true,
+                supports_usb_tethering: true,
+                supports_usb_direct_future: false,
             },
             message: "ok".to_string(),
         });

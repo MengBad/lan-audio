@@ -11,7 +11,7 @@ import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 
-const String kUiBuildTag = 'UI build: playback-diagnostics-v29';
+const String kUiBuildTag = 'UI build: playback-diagnostics-v30';
 const bool kUseBackgroundPlaybackService = true;
 
 void main() {
@@ -138,6 +138,11 @@ class _DebugPageState extends State<DebugPage> {
   Map<String, bool> _negotiatedCapabilities = const {};
   String? _serverPlatform;
   String? _serverAppVersion;
+  Map<String, dynamic> _modeProfile = const {};
+  String _connectionPath = 'lan_ip_wifi_or_usb';
+  String _protocolPath = 'legacy_or_v2_auto';
+  String _playbackBackend = 'audiotrack_stable';
+  bool _experimentalPath = false;
 
   @override
   void initState() {
@@ -202,6 +207,19 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+  String _connectionPathLabel(String path) {
+    switch (path) {
+      case 'lan_ip_wifi_or_usb':
+        return tr('局域网 IP（Wi-Fi / USB）', 'LAN IP (Wi-Fi / USB)');
+      case 'usb_tethering':
+        return tr('USB 共享网络', 'USB tethering');
+      case 'wifi':
+        return tr('Wi-Fi', 'Wi-Fi');
+      default:
+        return path;
+    }
+  }
+
   String? _mostRecentHost() {
     if (_recentConnectedHosts.isEmpty) {
       return null;
@@ -246,6 +264,11 @@ class _DebugPageState extends State<DebugPage> {
       _negotiatedCapabilities = snapshot.negotiatedCapabilities;
       _serverPlatform = snapshot.serverPlatform;
       _serverAppVersion = snapshot.serverAppVersion;
+      _modeProfile = snapshot.modeProfile;
+      _connectionPath = snapshot.connectionPath;
+      _protocolPath = snapshot.protocolPath;
+      _playbackBackend = snapshot.playbackBackend;
+      _experimentalPath = snapshot.experimentalPath;
 
       if (servicePlayback == 'playing') {
         _playbackState = PlaybackState.playing;
@@ -1352,6 +1375,18 @@ class _DebugPageState extends State<DebugPage> {
                     '${tr('当前模式', 'Current mode')}: ${_audioModeLabel(_currentAudioMode)}',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${tr('协议路径', 'Protocol path')}: $_protocolPath'
+                    '${_experimentalPath ? ' (${tr('灰度', 'gray')})' : ''}',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${tr('播放后端', 'Playback backend')}: $_playbackBackend  ·  '
+                    '${tr('连接来源', 'Connection path')}: ${_connectionPathLabel(_connectionPath)}',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
                   const SizedBox(height: 6),
                   SegmentedButton<AudioModePreference>(
                     segments: [
@@ -1384,12 +1419,56 @@ class _DebugPageState extends State<DebugPage> {
                       _metricTile(tr('状态', 'Status'), _playbackLabel()),
                       _metricTile(tr('缓冲', 'Buffered'), '$_uiBufferedMs ms'),
                       _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
+                      _metricTile(
+                        tr('策略', 'Strategy'),
+                        '${_modeProfile['startBufferMs'] ?? '-'} / ${_modeProfile['maxBufferMs'] ?? '-'} ms',
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text('${tr('音频日志', 'Audio log')}: $_audioLog'),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: ExpansionTile(
+              title: Text(tr('连接帮助', 'Connection Help')),
+              subtitle: Text(tr(
+                '发现失败或延迟偏高时先检查这里',
+                'Check this when discovery fails or latency is high',
+              )),
+              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              children: [
+                Text(
+                  tr(
+                    '确保手机和电脑在同一网络；访客网络、AP 隔离或客户端隔离会阻止发现。',
+                    'Keep phone and PC on the same network; guest Wi-Fi, AP isolation, or client isolation can block discovery.',
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  tr(
+                    '如果自动发现失败，请使用“扫描局域网”或手动输入 Windows 端地址。',
+                    'If discovery fails, use Scan LAN or enter the Windows address manually.',
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  tr(
+                    '追求低延迟时优先尝试 USB tethering 或 5GHz Wi-Fi；高音质模式会更稳但延迟更高。',
+                    'For lower latency, prefer USB tethering or 5GHz Wi-Fi; High Quality is smoother but may add latency.',
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  tr(
+                    '若后台后无声或断流，请关闭 Android 电池优化或保持 App 前台播放。',
+                    'If audio stops in background, disable Android battery optimization or keep the app foregrounded.',
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 10),

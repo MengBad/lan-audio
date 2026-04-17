@@ -20,6 +20,7 @@ data class JitterStats(
 class PlaybackJitterBuffer(
     private val startBufferMs: Int,
     private val maxBufferMs: Int,
+    private val dropThresholdMs: Int = maxBufferMs,
 ) {
     private val frames = TreeMap<Int, PcmFrame>(::compareSeq)
     private var playoutStarted = false
@@ -61,6 +62,7 @@ class PlaybackJitterBuffer(
 
         frames[frame.sequence] = frame
         trimIfNeeded()
+        trimLatencyTailIfNeeded()
         stats.bufferedFrames = frames.size
     }
 
@@ -117,6 +119,22 @@ class PlaybackJitterBuffer(
             frames.pollFirstEntry()
             stats.droppedFrames += 1
         }
+    }
+
+    private fun trimLatencyTailIfNeeded() {
+        val thresholdFrames = kotlin.math.ceil(dropThresholdMs / frameDurationMs.toDouble()).toInt()
+            .coerceAtLeast(1)
+        val targetFrames = kotlin.math.ceil(startBufferMs / frameDurationMs.toDouble()).toInt()
+            .coerceAtLeast(1)
+        if (frames.size <= thresholdFrames) {
+            return
+        }
+        while (frames.size > targetFrames) {
+            frames.pollFirstEntry()
+            stats.droppedFrames += 1
+        }
+        playoutStarted = false
+        expectedSequence = frames.firstKeyOrNull()
     }
 
     private fun compareSeq(a: Int, b: Int): Int {

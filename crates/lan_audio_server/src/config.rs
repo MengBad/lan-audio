@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{anyhow, Result};
-use lan_audio_protocol::AudioMode;
+use lan_audio_protocol::{AudioCodecPreference, AudioMode};
 use lan_audio_protocol::{DISCOVERY_PORT, UDP_AUDIO_PORT, WS_PORT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,36 @@ pub enum SyntheticSignalKind {
 pub enum DataPlaneFormat {
     LegacyLas1,
     V2Header,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecSelection {
+    Pcm16,
+    OpusExperimental,
+}
+
+impl CodecSelection {
+    pub fn parse(input: &str) -> Result<Self> {
+        match input {
+            "pcm16" | "pcm" => Ok(Self::Pcm16),
+            "opus_experimental" | "opus" => Ok(Self::OpusExperimental),
+            other => Err(anyhow!("unsupported codec: {other}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pcm16 => "pcm16",
+            Self::OpusExperimental => "opus_experimental",
+        }
+    }
+
+    pub fn as_protocol_preference(self) -> AudioCodecPreference {
+        match self {
+            Self::Pcm16 => AudioCodecPreference::Pcm16,
+            Self::OpusExperimental => AudioCodecPreference::OpusExperimental,
+        }
+    }
 }
 
 impl DataPlaneFormat {
@@ -75,6 +105,7 @@ pub struct ServerConfig {
     pub capture_debug_dump_seconds: u32,
     pub capture_debug_dump_dir: String,
     pub current_audio_mode: AudioMode,
+    pub codec_selection: CodecSelection,
     pub data_plane_format: DataPlaneFormat,
     pub allow_loopback_v2_header_gray: bool,
 }
@@ -101,6 +132,7 @@ impl Default for ServerConfig {
             capture_debug_dump_seconds: 5,
             capture_debug_dump_dir: "debug_captures".to_string(),
             current_audio_mode: AudioMode::Balanced,
+            codec_selection: CodecSelection::Pcm16,
             data_plane_format: DataPlaneFormat::LegacyLas1,
             allow_loopback_v2_header_gray: false,
         }
@@ -175,6 +207,12 @@ impl ServerConfig {
                         .ok_or_else(|| anyhow!("missing value for --data-plane"))?;
                     self.data_plane_format = DataPlaneFormat::parse(&value)?;
                 }
+                "--codec" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("missing value for --codec"))?;
+                    self.codec_selection = CodecSelection::parse(&value)?;
+                }
                 "--allow-loopback-v2-header-gray" | "--enable-loopback-v2-header-gray" => {
                     self.allow_loopback_v2_header_gray = true;
                 }
@@ -243,5 +281,22 @@ mod tests {
         cfg.apply_args(vec!["--allow-loopback-v2-header-gray".to_string()])
             .expect("apply args");
         assert!(cfg.allow_loopback_v2_header_gray);
+    }
+
+    #[test]
+    fn parse_codec_selection() {
+        assert!(matches!(
+            CodecSelection::parse("pcm16"),
+            Ok(CodecSelection::Pcm16)
+        ));
+        assert!(matches!(
+            CodecSelection::parse("opus"),
+            Ok(CodecSelection::OpusExperimental)
+        ));
+        assert!(CodecSelection::parse("bad").is_err());
+        assert_eq!(
+            CodecSelection::OpusExperimental.as_protocol_preference(),
+            AudioCodecPreference::OpusExperimental
+        );
     }
 }

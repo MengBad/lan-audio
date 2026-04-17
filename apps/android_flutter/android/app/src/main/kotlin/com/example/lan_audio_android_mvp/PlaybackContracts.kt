@@ -34,8 +34,100 @@ data class PlaybackTarget(
 data class PlaybackOptions(
     val startBufferMs: Int = 60,
     val maxBufferMs: Int = 300,
+    val batchFrames: Int = 2,
+    val dropThresholdMs: Int = 220,
+    val preferLowLatencyPath: Boolean = false,
+    val preferStableAudioTrack: Boolean = true,
+    val preferredCodec: String = "pcm16",
+    val preferredSampleFormat: String = "pcm16",
+    val frameDurationMs: Int = 10,
+    val resetBufferOnSwitch: Boolean = true,
     val pingIntervalMs: Int = 1000,
 )
+
+data class PlaybackModeProfile(
+    val mode: String,
+    val startBufferMs: Int,
+    val maxBufferMs: Int,
+    val batchFrames: Int,
+    val dropThresholdMs: Int,
+    val preferLowLatencyPath: Boolean,
+    val preferStableAudioTrack: Boolean,
+    val preferredCodec: String,
+    val preferredSampleFormat: String,
+    val frameDurationMs: Int,
+    val resetBufferOnSwitch: Boolean,
+) {
+    fun toOptions(pingIntervalMs: Int = 1000): PlaybackOptions {
+        return PlaybackOptions(
+            startBufferMs = startBufferMs,
+            maxBufferMs = maxBufferMs,
+            batchFrames = batchFrames,
+            dropThresholdMs = dropThresholdMs,
+            preferLowLatencyPath = preferLowLatencyPath,
+            preferStableAudioTrack = preferStableAudioTrack,
+            preferredCodec = preferredCodec,
+            preferredSampleFormat = preferredSampleFormat,
+            frameDurationMs = frameDurationMs,
+            resetBufferOnSwitch = resetBufferOnSwitch,
+            pingIntervalMs = pingIntervalMs,
+        )
+    }
+}
+
+object PlaybackModeProfiles {
+    fun forMode(mode: String): PlaybackModeProfile {
+        return when (normalize(mode)) {
+            "low_latency" -> PlaybackModeProfile(
+                mode = "low_latency",
+                startBufferMs = 40,
+                maxBufferMs = 180,
+                batchFrames = 1,
+                dropThresholdMs = 140,
+                preferLowLatencyPath = true,
+                preferStableAudioTrack = false,
+                preferredCodec = "pcm16",
+                preferredSampleFormat = "pcm16",
+                frameDurationMs = 10,
+                resetBufferOnSwitch = true,
+            )
+            "high_quality" -> PlaybackModeProfile(
+                mode = "high_quality",
+                startBufferMs = 120,
+                maxBufferMs = 500,
+                batchFrames = 3,
+                dropThresholdMs = 420,
+                preferLowLatencyPath = false,
+                preferStableAudioTrack = true,
+                preferredCodec = "pcm16",
+                preferredSampleFormat = "pcm16",
+                frameDurationMs = 10,
+                resetBufferOnSwitch = false,
+            )
+            else -> PlaybackModeProfile(
+                mode = "balanced",
+                startBufferMs = 60,
+                maxBufferMs = 300,
+                batchFrames = 2,
+                dropThresholdMs = 220,
+                preferLowLatencyPath = false,
+                preferStableAudioTrack = true,
+                preferredCodec = "pcm16",
+                preferredSampleFormat = "pcm16",
+                frameDurationMs = 10,
+                resetBufferOnSwitch = true,
+            )
+        }
+    }
+
+    fun normalize(mode: String): String {
+        return when (mode.lowercase()) {
+            "low_latency" -> "low_latency"
+            "high_quality" -> "high_quality"
+            else -> "balanced"
+        }
+    }
+}
 
 data class PlaybackMetrics(
     val sampleRate: Int = 48000,
@@ -67,6 +159,11 @@ data class PlaybackSnapshot(
     val protocolVersion: Int? = null,
     val currentAudioMode: String = "balanced",
     val negotiatedCapabilities: Map<String, Boolean> = emptyMap(),
+    val modeProfile: PlaybackModeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+    val connectionPath: String = "lan_ip_wifi_or_usb",
+    val playbackBackend: String = "audiotrack_stable",
+    val protocolPath: String = "legacy_or_v2_auto",
+    val experimentalPath: Boolean = false,
     val clientPlatform: String = "android",
     val clientAppVersion: String = "android_flutter",
     val serverPlatform: String? = null,
@@ -85,6 +182,23 @@ data class PlaybackSnapshot(
             "protocolVersion" to protocolVersion,
             "currentAudioMode" to currentAudioMode,
             "negotiatedCapabilities" to negotiatedCapabilities,
+            "modeProfile" to mapOf(
+                "mode" to modeProfile.mode,
+                "startBufferMs" to modeProfile.startBufferMs,
+                "maxBufferMs" to modeProfile.maxBufferMs,
+                "batchFrames" to modeProfile.batchFrames,
+                "dropThresholdMs" to modeProfile.dropThresholdMs,
+                "preferLowLatencyPath" to modeProfile.preferLowLatencyPath,
+                "preferStableAudioTrack" to modeProfile.preferStableAudioTrack,
+                "preferredCodec" to modeProfile.preferredCodec,
+                "preferredSampleFormat" to modeProfile.preferredSampleFormat,
+                "frameDurationMs" to modeProfile.frameDurationMs,
+                "resetBufferOnSwitch" to modeProfile.resetBufferOnSwitch,
+            ),
+            "connectionPath" to connectionPath,
+            "playbackBackend" to playbackBackend,
+            "protocolPath" to protocolPath,
+            "experimentalPath" to experimentalPath,
             "clientPlatform" to clientPlatform,
             "clientAppVersion" to clientAppVersion,
             "serverPlatform" to serverPlatform,

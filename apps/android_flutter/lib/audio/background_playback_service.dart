@@ -12,6 +12,11 @@ class PlaybackServiceSnapshot {
     required this.protocolVersion,
     required this.currentAudioMode,
     required this.negotiatedCapabilities,
+    required this.modeProfile,
+    required this.connectionPath,
+    required this.playbackBackend,
+    required this.protocolPath,
+    required this.experimentalPath,
     required this.clientPlatform,
     required this.clientAppVersion,
     required this.serverPlatform,
@@ -30,6 +35,11 @@ class PlaybackServiceSnapshot {
   final int? protocolVersion;
   final String currentAudioMode;
   final Map<String, bool> negotiatedCapabilities;
+  final Map<String, dynamic> modeProfile;
+  final String connectionPath;
+  final String playbackBackend;
+  final String protocolPath;
+  final bool experimentalPath;
   final String clientPlatform;
   final String clientAppVersion;
   final String? serverPlatform;
@@ -56,6 +66,15 @@ class PlaybackServiceSnapshot {
                 (key, value) => MapEntry('$key', value == true),
               ) ??
               const <String, bool>{},
+      modeProfile: (normalized['modeProfile'] as Map?)?.map(
+            (key, value) => MapEntry('$key', value),
+          ) ??
+          const <String, dynamic>{},
+      connectionPath: '${normalized['connectionPath'] ?? 'lan_ip_wifi_or_usb'}',
+      playbackBackend:
+          '${normalized['playbackBackend'] ?? 'audiotrack_stable'}',
+      protocolPath: '${normalized['protocolPath'] ?? 'legacy_or_v2_auto'}',
+      experimentalPath: normalized['experimentalPath'] == true,
       clientPlatform: '${normalized['clientPlatform'] ?? 'android'}',
       clientAppVersion: '${normalized['clientAppVersion'] ?? ''}',
       serverPlatform: normalized['serverPlatform']?.toString(),

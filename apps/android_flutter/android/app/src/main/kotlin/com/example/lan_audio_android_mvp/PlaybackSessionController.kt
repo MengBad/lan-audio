@@ -30,8 +30,8 @@ class PlaybackSessionController(
     private var playoutFuture: ScheduledFuture<*>? = null
     private var reconnectFuture: ScheduledFuture<*>? = null
     private var streamManager: StreamSessionManager? = null
-    private var jitterBuffer = PlaybackJitterBuffer(60, 300)
-    private var options = PlaybackOptions()
+    private var options = PlaybackModeProfiles.forMode("balanced").toOptions()
+    private var jitterBuffer = newJitterBuffer(options)
     private var currentTarget: PlaybackTarget? = null
     private var focusRequest: AudioFocusRequest? = null
     private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
@@ -72,7 +72,7 @@ class PlaybackSessionController(
         }
         registerNoisyReceiver()
 
-        jitterBuffer = PlaybackJitterBuffer(options.startBufferMs, options.maxBufferMs)
+        jitterBuffer = newJitterBuffer(options)
         lastSeq = null
         udpLoss = 0
         silenceFillCount = 0
@@ -87,6 +87,10 @@ class PlaybackSessionController(
                 serviceState = "running",
                 connectionState = "connecting",
                 playbackState = "buffering",
+                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode),
+                playbackBackend = playbackBackendLabel(options),
+                protocolPath = "legacy_or_v2_auto",
+                experimentalPath = false,
                 targetHost = target.host,
                 targetName = target.serverName,
                 recentLog = "connecting:${target.serverName}(${target.host})",
@@ -158,10 +162,12 @@ class PlaybackSessionController(
                 capabilities: Map<String, Boolean>,
             ) {
                 if (generation != streamGeneration) return
+                applyAudioModeProfile(currentAudioMode, "hello_ack")
                 stateStore.update {
                     it.copy(
                         protocolVersion = protocolVersion,
-                        currentAudioMode = normalizeAudioMode(currentAudioMode),
+                        currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
+                        modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
                         negotiatedCapabilities = capabilities,
                         recentLog = "hello_ack_v2",
                     )
@@ -170,20 +176,26 @@ class PlaybackSessionController(
 
             override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
                 if (generation != streamGeneration) return
+                applyAudioModeProfile(currentAudioMode, "server_info")
                 stateStore.update {
                     it.copy(
                         serverPlatform = platform,
                         serverAppVersion = appVersion,
-                        currentAudioMode = normalizeAudioMode(currentAudioMode),
+                        currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
+                        modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
                     )
                 }
             }
 
             override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
                 if (generation != streamGeneration) return
+                if (applied) {
+                    applyAudioModeProfile(mode, reason)
+                }
                 stateStore.update {
                     it.copy(
-                        currentAudioMode = normalizeAudioMode(mode),
+                        currentAudioMode = PlaybackModeProfiles.normalize(mode),
+                        modeProfile = PlaybackModeProfiles.forMode(mode),
                         recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                     )
                 }
@@ -236,15 +248,27 @@ class PlaybackSessionController(
             "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
         )
         options = next
-        jitterBuffer = PlaybackJitterBuffer(options.startBufferMs, options.maxBufferMs)
-        stateStore.update { it.copy(recentLog = "options_updated") }
+        jitterBuffer = newJitterBuffer(options)
+        stateStore.update {
+            it.copy(
+                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode),
+                playbackBackend = playbackBackendLabel(options),
+                recentLog = "options_updated",
+            )
+        }
     }
 
     fun setAudioMode(mode: String, reason: String = "user_selected") {
-        val normalized = normalizeAudioMode(mode)
+        val normalized = PlaybackModeProfiles.normalize(mode)
+        applyAudioModeProfile(normalized, reason)
         val sent = streamManager?.setAudioMode(normalized, reason) ?: false
         stateStore.update {
-            it.copy(recentLog = if (sent) "set_audio_mode:$normalized" else "set_audio_mode_pending:$normalized")
+            it.copy(
+                currentAudioMode = normalized,
+                modeProfile = PlaybackModeProfiles.forMode(normalized),
+                playbackBackend = playbackBackendLabel(options),
+                recentLog = if (sent) "set_audio_mode:$normalized" else "set_audio_mode_pending:$normalized",
+            )
         }
     }
 
@@ -304,10 +328,12 @@ class PlaybackSessionController(
 
         if (packet.hasConfigChanged) {
             cfgChangedCount += 1
-            audioTrackController.stop()
-            audioTrackController.release()
-            audioInit = false
-            audioStarted = false
+            if (options.resetBufferOnSwitch) {
+                audioTrackController.stop()
+                audioTrackController.release()
+                audioInit = false
+                audioStarted = false
+            }
             stateStore.update { it.copy(recentLog = "udp_config_changed_resync") }
         }
 
@@ -339,6 +365,10 @@ class PlaybackSessionController(
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
                 ),
+                protocolVersion = packet.protocolVersion,
+                protocolPath = if (packet.protocolVersion == 2) "v2_header" else "legacy_las1",
+                experimentalPath = packet.protocolVersion == 2,
+                playbackBackend = playbackBackendLabel(options),
             )
         }
         maybeLogMetrics()
@@ -379,7 +409,8 @@ class PlaybackSessionController(
             audioTrackController.start()
             audioStarted = true
         }
-        audioTrackController.writePcm16(frame.payload)
+        val writePayload = collectWritePayload(frame)
+        audioTrackController.writePcm16(writePayload)
         val audioStats = audioTrackController.stats()
         stateStore.update {
             it.copy(
@@ -458,10 +489,12 @@ class PlaybackSessionController(
                     capabilities: Map<String, Boolean>,
                 ) {
                     if (generation != streamGeneration) return
+                    applyAudioModeProfile(currentAudioMode, "hello_ack")
                     stateStore.update {
                         it.copy(
                             protocolVersion = protocolVersion,
-                            currentAudioMode = normalizeAudioMode(currentAudioMode),
+                            currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
+                            modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
                             negotiatedCapabilities = capabilities,
                             recentLog = "hello_ack_v2",
                         )
@@ -470,20 +503,26 @@ class PlaybackSessionController(
 
                 override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
                     if (generation != streamGeneration) return
+                    applyAudioModeProfile(currentAudioMode, "server_info")
                     stateStore.update {
                         it.copy(
                             serverPlatform = platform,
                             serverAppVersion = appVersion,
-                            currentAudioMode = normalizeAudioMode(currentAudioMode),
+                            currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
+                            modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
                         )
                     }
                 }
 
                 override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
                     if (generation != streamGeneration) return
+                    if (applied) {
+                        applyAudioModeProfile(mode, reason)
+                    }
                     stateStore.update {
                         it.copy(
-                            currentAudioMode = normalizeAudioMode(mode),
+                            currentAudioMode = PlaybackModeProfiles.normalize(mode),
+                            modeProfile = PlaybackModeProfiles.forMode(mode),
                             recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                         )
                     }
@@ -598,12 +637,56 @@ class PlaybackSessionController(
         Log.i(logTag, "audio focus released")
     }
 
-    private fun normalizeAudioMode(mode: String): String {
-        return when (mode.lowercase()) {
-            "low_latency" -> "low_latency"
-            "high_quality" -> "high_quality"
-            else -> "balanced"
+    private fun applyAudioModeProfile(mode: String, reason: String) {
+        val normalized = PlaybackModeProfiles.normalize(mode)
+        val profile = PlaybackModeProfiles.forMode(normalized)
+        options = profile.toOptions(options.pingIntervalMs)
+        if (profile.resetBufferOnSwitch) {
+            jitterBuffer = newJitterBuffer(options)
+            audioTrackController.stop()
+            audioTrackController.release()
+            audioInit = false
+            audioStarted = false
+            lastSeq = null
         }
+        Log.i(
+            logTag,
+            "applyAudioModeProfile mode=$normalized reason=$reason startBufferMs=${options.startBufferMs} maxBufferMs=${options.maxBufferMs} batchFrames=${options.batchFrames} dropThresholdMs=${options.dropThresholdMs}"
+        )
+    }
+
+    private fun newJitterBuffer(opts: PlaybackOptions): PlaybackJitterBuffer {
+        return PlaybackJitterBuffer(opts.startBufferMs, opts.maxBufferMs, opts.dropThresholdMs)
+    }
+
+    private fun playbackBackendLabel(opts: PlaybackOptions): String {
+        return if (opts.preferLowLatencyPath) "audiotrack_fast_path" else "audiotrack_stable"
+    }
+
+    private fun collectWritePayload(first: PcmFrame): ByteArray {
+        val batchSize = options.batchFrames.coerceIn(1, 4)
+        if (batchSize == 1) {
+            return first.payload
+        }
+        val chunks = ArrayList<ByteArray>(batchSize)
+        chunks.add(first.payload)
+        repeat(batchSize - 1) {
+            val next = jitterBuffer.pop() ?: return@repeat
+            if (next.sampleRate == first.sampleRate && next.channels == first.channels) {
+                chunks.add(next.payload)
+            }
+        }
+        if (chunks.size == 1) {
+            return first.payload
+        }
+        val total = chunks.sumOf { it.size }
+        val out = ByteArray(total)
+        var offset = 0
+        for (chunk in chunks) {
+            System.arraycopy(chunk, 0, out, offset, chunk.size)
+            offset += chunk.size
+        }
+        return out
     }
 
     private fun maybeLogMetrics(force: Boolean = false, reason: String = "periodic") {

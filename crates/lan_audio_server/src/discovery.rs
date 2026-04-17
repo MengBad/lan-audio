@@ -127,10 +127,7 @@ mod tests {
             Ipv4Addr::new(192, 168, 31, 255)
         );
         assert_eq!(
-            directed_broadcast(
-                Ipv4Addr::new(10, 0, 0, 18),
-                Ipv4Addr::new(255, 255, 0, 0)
-            ),
+            directed_broadcast(Ipv4Addr::new(10, 0, 0, 18), Ipv4Addr::new(255, 255, 0, 0)),
             Ipv4Addr::new(10, 0, 255, 255)
         );
     }

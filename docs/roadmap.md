@@ -1,41 +1,79 @@
-﻿# Project Roadmap
+# Project Roadmap
 
 当前主路径说明：
 
-- 运行主路径仍以 PCM（legacy/v1）为主。
-- Protocol v2 本轮重点为“文档 + 结构 + 最小接入点”，不是全量切换。
+- 默认运行主路径仍是 PCM + legacy `LAS1`，这是当前安全回滚路径。
+- Protocol v2 已从协议骨架推进为低延迟产品升级骨架：控制面联动已接通，数据面具备 `LAS1/LAV2` 双栈灰度，默认仍不全量切换。
+- V2 的产品目标是低延迟、可诊断、可回滚、可扩展，而不是为了升级而升级。
+
+## V2 产品能力模型
+
+### 连接能力
+
+- 已完成：UDP 自动发现、手动地址、局域网扫描、最近连接/快速连接。
+- 已有骨架：Android/桌面端可展示连接路径与协议路径。
+- 尚未启用：USB direct。
+- 后续扩展：USB tethering 低延迟推荐路径、USB direct 探测、发现失败时更明确的连接帮助。
+
+### 发送能力
+
+- 已完成：`synthetic` 稳定基线、`windows_loopback` 系统音频采集。
+- 已有骨架：loopback + v2 header 显式灰度开关。
+- 尚未启用：microphone backhaul。
+- 后续扩展：手机麦克风回传、loopback + v2 长稳压测、采集侧动态缓冲。
+
+### 播放能力
+
+- 已完成：Android 后台播放服务、AudioTrack 写入、jitter buffer、基础追帧。
+- 已有骨架：三档模式对应 start buffer、max buffer、batch、drop threshold、后端偏好。
+- 尚未启用：设备级后端自动选择。
+- 后续扩展：fast path 探测、高质量后端回退策略、智能自适应缓冲。
+
+### 协议能力
+
+- 已完成：Protocol v2 控制面联动、capabilities、mode 同步、`config_changed/discontinuity`。
+- 已有骨架：数据面 `LAV2` header、codec 枚举、Opus 实验入口。
+- 尚未启用：Opus 实际编码/解码、v2 数据面默认主路径。
+- 后续扩展：v1/v2 双栈灰度扩大、Opus 低延迟实验链路。
+
+### 诊断能力
+
+- 已完成：Android 播放指标、桌面折叠 metrics/log、连接地址复制。
+- 已有骨架：连接帮助入口、网络/后台问题文档化。
+- 尚未启用：自动诊断报告。
+- 后续扩展：同网段检查、AP isolation 提示、USB 推荐、后台电池优化检查。
 
 ## 1) 播放稳定性
 
 - 已完成：Android/Windows 真机可连接并出声（可用）。
 - 已有骨架：后台播放服务（Media3）与关键诊断指标。
-- 尚未启用：无。
-- 后续扩展：多机型长稳压测、后台锁屏长时稳定性、抗抖策略强化。
+- 尚未启用：多机型长稳结论。
+- 后续扩展：后台锁屏长时稳定性、抗抖策略强化、不同 Android 厂商策略验证。
 
 ## 2) 延迟优化
 
 - 已完成：基础 jitter buffer 与若干播放调度修复。
-- 已有骨架：可观测指标与播放预算控制。
-- 尚未启用：基于模式的系统化参数矩阵。
-- 后续扩展：低延迟策略的动态调优与网络抖动自适应。
+- 已有骨架：三档模式参数矩阵与 Android 播放策略入口。
+- 尚未启用：自动低延迟自适应。
+- 后续扩展：低延迟路径探测、USB tethering 低延迟验收、loopback + v2 长尾抖动收敛。
 
 ## 3) 多策略模式
 
-- 已完成：策略方向定义（low_latency / balanced / high_quality）。
-- 已有骨架：Protocol v2 `AudioMode` 与控制面切换消息。
-- 尚未启用：生产路径下的完整模式切换闭环。
-- 后续扩展：智能自适应（自动在模式间切换）。
+- 已完成：`low_latency / balanced / high_quality` 控制面同步。
+- 已有骨架：`AudioModeProfile` 将模式映射到 start/max buffer、batch、drop threshold、codec/sample format/frame duration 偏好。
+- 尚未启用：完整设备后端选择与自动回退。
+- 后续扩展：智能自适应、设备能力记忆、模式切换体验提示。
 
 ## 4) 协议演进（Protocol v2）
 
-- 已完成：v2 协议草案（控制面、数据面、capabilities、迁移策略）。
-- 已有骨架：Rust v2 结构体、UDP v2 header 编解码、session 最小协商入口。
-- 尚未启用：默认 UDP 运行流量切到 v2 header。
-- 后续扩展：Opus 真正接线、双端全量启用 v2。
+- 已完成：v2 协议草案、Rust v2 结构体、UDP v2 header 编解码、session 协商入口。
+- 已有骨架：Opus experimental、USB capabilities、数据面双栈。
+- 尚未启用：默认 UDP 运行流量切到 v2 header；Opus 真实链路。
+- 后续扩展：先扩大 synthetic/loopback 灰度，再做默认路径切换。
 
 ## 5) 产品化 UI / 桌面端交付
 
 - 已完成：Windows Tauri 可执行客户端、单主按钮控制台 UI。
-- 已有骨架：桌面与 Android 端的模式状态预留位。
-- 尚未启用：完整模式切换 UI 闭环。
-- 后续扩展：安装器与防火墙引导、连接二维码、会话详情。
+- 已有骨架：桌面与 Android 端显示模式、协议路径、播放后端、灰度状态、推荐连接方式。
+- 尚未启用：完整安装器发布与自动诊断报告。
+- 后续扩展：连接二维码、防火墙引导、USB 帮助、会话详情、发布包签名。

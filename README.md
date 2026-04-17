@@ -3,6 +3,25 @@
 当前仓库已可在本机进入“可构建、可启动、可联调准备”状态，技术路线保持不变：Rust + Tauri + Flutter + UDP + WebSocket（当前主路径 PCM 直通）。
 Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless` 保留用于调试与回归。
 
+## 自动化执行路径
+
+- 当前版本（短版本）：`1.0`
+- 统一版本源：仓库根目录 `VERSION`
+- 统一本地验证入口：`scripts/validate_local.ps1`
+- 统一版本递增入口：`scripts/bump_version.ps1`
+- 统一发布入口：`scripts/release.ps1`
+- 统一 CI：`.github/workflows/ci.yml`
+- Release 草稿工作流：`.github/workflows/release.yml`
+
+默认执行流程（Codex 与人工一致）：
+
+1. 读规则与核心文档（`AGENTS.md` + `README/docs`）。
+2. 修改代码与测试。
+3. 运行 `scripts/validate_local.ps1`。
+4. 同步文档（README/todo/protocol/migration）。
+5. 判断是否满足发布条件。
+6. 满足时执行 `scripts/release.ps1`，触发 Actions 与 Release 流程。
+
 ## 当前项目主线（2026-04）
 
 1. 播放稳定性
@@ -15,7 +34,57 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
 
 - “协议演进”已升级为独立主线，不再作为附属任务。
 - 当前运行主路径仍以 PCM + legacy/v1 为主。
-- Protocol v2 当前是“文档已定 + 结构已定 + 骨架已落 + 最小接入”，并非全量切换。
+- Protocol v2 当前已从“协议骨架”推进为“低延迟产品升级骨架”：控制面已联动，数据面可灰度，模式策略可下发，但默认主路径仍不全量切换。
+
+## V2 产品级低延迟能力模型
+
+V2 的目标不是单纯换 header，而是把“低延迟、可诊断、可回滚、可扩展”作为产品能力固定下来。外部参照上，AudioRelay 官方文档也把 [USB 连接](https://audiorelay.net/docs/usb)、[同网段/访客网络/AP isolation/5GHz Wi-Fi 排障](https://audiorelay.net/docs/help/network-issues) 等作为实际体验的一部分；本项目采用同类边界，但按当前工程阶段保留灰度与回滚。
+
+### 能力块
+
+- 连接能力：
+  - 已有：自动发现、手动地址、局域网扫描、最近连接/快速连接。
+  - 本轮纳入路线：USB tethering 作为低延迟推荐路径；USB direct 作为后续扩展。
+- 发送能力：
+  - 已有：`synthetic` 稳定基线、`windows_loopback` 系统音频采集。
+  - 路线预留：未来 microphone backhaul（手机麦克风回传到电脑）不与当前播放链路混写。
+- 播放能力：
+  - 已有：Android 后台服务、AudioTrack、jitter buffer、模式切换最小重同步。
+  - 本轮强化：三档模式映射到缓冲、批处理、drop threshold、后端偏好，而不是只作为 UI 名称。
+- 协议能力：
+  - 已有：Protocol v2 控制面、数据面 `LAS1/LAV2` 双栈识别、mode 同步、capabilities、`config_changed/discontinuity`。
+  - 本轮强化：codec 偏好与 Opus 实验入口进入协议/配置层，但实际音频仍回退 PCM16。
+- 诊断能力：
+  - 已有：Android 播放指标、桌面 metrics/log 折叠区。
+  - 本轮强化：网络/USB/后台限制被正式纳入 UI 帮助与文档排障路径。
+
+### 三档模式策略
+
+| 模式 | 适用场景 | start buffer | max buffer | batch | drop threshold | 后端/路径倾向 | 切换策略 |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| `low_latency` | 游戏、视频跟听、对嘴型敏感 | 40ms | 180ms | 1 | 140ms | 优先 fast/低延迟路径，允许更激进追帧 | 重置缓冲 |
+| `balanced` | 默认推荐 | 60ms | 300ms | 2 | 220ms | 稳定 AudioTrack + 适中缓冲 | 重置缓冲 |
+| `high_quality` | 音乐/长时播放，优先平滑 | 120ms | 500ms | 3 | 420ms | 稳定后端、更保守缓冲 | 尽量平滑切换 |
+
+说明：
+
+- 低延迟路径可能在部分设备上牺牲音质或容错，这是策略选择，不直接视为 bug。
+- 高音质路径可能更慢，但更适合网络抖动或后台播放场景。
+- 当前三档策略已进入 Rust 协议层、服务端状态、Android 播放策略和桌面展示；仍需更多真机验证来收敛具体参数。
+
+### Opus 与 USB 状态
+
+- Opus：已进入协议枚举、capabilities 与服务端/桌面配置入口；当前未接真实编码/解码，选择 `opus_experimental` 时仍回退 PCM16。
+- USB：已进入 V2 路线与产品文案；当前推荐先使用 Android USB tethering 形成局域网直连，后续再评估 USB direct。
+- 默认安全：`legacy_las1` 仍是默认数据面；`synthetic + v2_header` 是稳定灰度基线；`loopback + v2_header` 仍需显式开关。
+
+### 网络与后台自诊断
+
+- 首先确认手机与电脑在同一网络，避免访客网络、AP isolation、client isolation、VPN 隔离。
+- 自动发现失败时，优先使用局域网扫描或手动地址。
+- 延迟偏高时，优先尝试 5GHz Wi-Fi、电脑有线网、USB tethering。
+- Android 后台断流时，检查电池优化、后台限制、通知/前台服务状态。
+- 如果 `windows_loopback + v2_header` 波动，回滚到 `windows_loopback + legacy_las1` 或 `synthetic + v2_header` 做对照。
 
 ## 稳定出声结论
 
@@ -88,7 +157,7 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
 
 ### loopback + v2_header 小流量灰度结论
 
-- 结论：**loopback + v2_header 当前未通过**
+- 结论：**loopback + v2_header 可播（已完成真机小流量灰度），但暂不稳定**
 - 灰度保护：
   - 默认主路径仍是 `legacy_las1`
   - `windows_loopback + v2_header` 仅在显式开关 `--allow-loopback-v2-header-gray` 下启用
@@ -98,32 +167,32 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
 - 验收环境：
   - Windows 服务端：`windows_loopback + --data-plane v2_header --allow-loopback-v2-header-gray`
   - Android 真机：`5391d451 / Xiaomi 24129PN74C`
-  - 回滚路径仍保留：
-    - `windows_loopback + legacy_las1`
-    - `synthetic + v2_header`
-- Android 端实际指标（基线阶段，logcat dump）：
-  - `Playback=buffering`
-  - `buffered_ms=0~50`
-  - `jitter_underrun=23 -> 30`
-  - `dropped_late_frames=0/0`
+- 本轮真机验收：2026-04-15（Asia/Shanghai）
+- 回滚路径仍保留：
+  - `windows_loopback + legacy_las1`
+  - `synthetic + v2_header`
+- Android 端实测指标（连续播放 + 模式切换后）：
+  - `Playback=playing`（持续超过 2 分钟）
+  - `buffered_ms=20~300`
+  - `jitter_underrun=0`
+  - `dropped_late_frames=0 -> 104`
   - `silence_fill_count=0`
-  - `rx_frames_per_sec=5.9 ~ 7.0`
-  - `audio_track_write_frames_per_sec=5.9 ~ 12.0`
-  - `cfg_changed=0`
-  - `discontinuity=1`
+  - `rx_frames_per_sec≈99~101`（个别瞬时波动）
+  - `audio_track_write_frames_per_sec≈99~101`（切换瞬间可见短暂 0 或低值）
+  - `cfg_changed=3`
+  - `discontinuity=4`
 - 服务端侧观察：
-  - 真实 v2 数据面已建立：`selected_data_plane=v2_header`
-  - Windows loopback 采集已启动，未看到 `capture source is not started`
-  - 但 `capture_no_packet_count` 长时间偏高，`capture_underruns` 持续上升
-  - `capture_last_peak / capture_last_rms` 大多数时间接近 `0`，只偶发极小非零值（例如 `0.0058 / 0.0024`）
-  - `tx_frames_per_sec` 大部分时间仅约 `6.4 ~ 6.6 fps`，远低于 synthetic 阶段的约 `100 fps`
+  - `mock_android_client` 侧确认收包为 `v2=1207, v1=0`，`cfg_changed=3`, `discontinuity=4`
+  - 模式切换顺序已覆盖：`balanced -> low_latency -> high_quality -> balanced`
+  - 本轮日志未出现 `capture source is not started`
+  - `capture_last_peak / capture_last_rms / capture_source_state` 当前未以稳定结构化日志导出，本轮未纳入量化统计
 - 模式切换：
-  - 已确认至少一轮 `balanced -> low_latency` 命中服务端，并正确打出 `config_changed/discontinuity`
-  - 但 Android 真机在后续切换过程中从 `adb` 掉线，`low_latency -> high_quality -> balanced` 未完整补齐
+  - 服务端已打出 `config_changed/discontinuity`，Android 接收侧执行最小重同步（可见 `udp_config_changed_resync` + `init AudioTrack`）
+  - 切换后可恢复 `playing`，未出现长时间无声或卡死
 - 结论解释：
-  - 这轮主阻塞点在 **Windows 采集端**
-  - v2 数据面握手和 `LAV2` 发送已打通，但 loopback 采集输出节奏明显异常，客户端持续 `buffering`
-  - 与已通过的 `synthetic + v2_header` 相比，loopback 下表现明显劣化，当前不能进入下一阶段流量放大
+  - 当前主要风险在 **模式切换重同步 + Android 播放侧缓冲策略**
+  - v2 数据面连通性已成立（loopback 下真实可播），但切换后出现过 `buffered_ms` 抬高与 `dropped_late_frames` 累积
+  - 现阶段适合继续小流量观察，不建议切默认主路径或放大全量流量
 
 ## 本机实测状态（2026-04-12, Asia/Shanghai）
 
@@ -148,7 +217,7 @@ Windows 端当前主入口已切换为 Tauri 桌面客户端，`desktop_headless
 
 ### 2) 已修复但当前机器仍受外部条件限制
 
-- 真机 `synthetic + v2_header` 验收已完成；`windows_loopback + v2_header` 已开始真机灰度，但当前主阻塞点转为 Windows loopback 采集节奏异常，且本轮模式切换阶段出现 `adb` 掉线。
+- 真机 `synthetic + v2_header` 验收已完成；`windows_loopback + v2_header` 已完成小流量真机灰度，结论为可播但暂不稳定，当前主阻塞点是模式切换重同步与 Android 播放缓冲策略。
 - Android 构建期间存在 AGP/Kotlin 版本即将弃用警告，不影响当前 debug 构建。
 
 ### 3) 仍需你手动安装的外部工具
@@ -284,7 +353,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_android_client.ps1
 
 当前 Android UI 版本号应显示：
 
-- `UI build: playback-diagnostics-v29`
+- `UI build: playback-diagnostics-v30`
 
 v8 在 v7 纯 PCM 诊断基础上修复了一个播放端状态机问题：当 jitter buffer 已经空队列 underrun 时，不再继续推进 expected sequence，避免后续正常到达的新 UDP 包被持续误判为 late packet。
 
@@ -360,6 +429,12 @@ v29 缓冲卡死修复（本轮）：
 - 修复后台会话重连竞态：`ws failure` 不再重复触发双重重连调度。
 - 增加流回调代际保护（generation guard），忽略过期连接回调，避免旧失败事件打断新连接。
 - `ws connected` 后会主动取消挂起中的重连任务，降低“刚连上又回缓冲”的概率。
+
+v30 V2 低延迟产品升级（本轮）：
+- 三档模式不再只是 UI 名称，已映射到 start/max buffer、batch、drop threshold、播放后端偏好。
+- Android 首页展示协议路径、播放后端、连接来源与模式策略摘要。
+- 新增连接帮助折叠区：同网段/AP isolation、扫描/手动地址、USB tethering、后台电池优化。
+- 注意：该版本不切默认数据面、不启用真实 Opus、不声明 loopback + v2 已稳定。
 
 v11 增加播放写入批处理：Dart 侧把 2~4 个连续 10ms PCM 帧合并后一次写入 AudioTrack，降低 MethodChannel 高频调用开销。
 

@@ -1,0 +1,96 @@
+﻿name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'apps/desktop/**'
+      - 'apps/android_flutter/**'
+      - 'scripts/**'
+      - 'README.md'
+      - 'docs/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'apps/desktop/**'
+      - 'apps/android_flutter/**'
+      - 'scripts/**'
+      - 'README.md'
+      - 'docs/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  rust-core:
+    name: Rust check + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+      - name: cargo check
+        run: cargo check
+      - name: cargo test -p lan_audio_protocol -p lan_audio_server
+        run: cargo test -p lan_audio_protocol -p lan_audio_server
+
+  rust-desktop:
+    name: Desktop crate check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+      - name: cargo check -p lan_audio_desktop
+        run: cargo check -p lan_audio_desktop
+
+  flutter:
+    name: Flutter analyze + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android_flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: flutter pub get
+        run: flutter pub get
+      - name: flutter analyze
+        run: flutter analyze
+      - name: flutter test
+        run: flutter test
+
+  android-debug:
+    name: Android assembleDebug
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: flutter pub get
+        working-directory: apps/android_flutter
+        run: flutter pub get
+      - name: gradlew assembleDebug
+        working-directory: apps/android_flutter/android
+        run: ./gradlew assembleDebug

@@ -377,6 +377,11 @@
             <button id="dataPlaneLegacy" class="source-btn"></button>
             <button id="dataPlaneV2Header" class="source-btn"></button>
           </div>
+          <div class="device-subtitle" id="codecTitle"></div>
+          <div class="source-picker">
+            <button id="codecPcm16" class="source-btn"></button>
+            <button id="codecOpus" class="source-btn"></button>
+          </div>
           <label class="toggle">
             <input type="checkbox" id="fallbackToggle" />
             <span id="fallbackLabel"></span>
@@ -405,6 +410,10 @@
             <div class="row"><span class="label" id="sourceLabel"></span><span class="value" id="sourceValue"></span></div>
             <div class="row"><span class="label" id="dataPlaneLabel"></span><span class="value" id="dataPlaneValue"></span></div>
             <div class="row"><span class="label" id="modeLabel"></span><span class="value" id="modeValue"></span></div>
+            <div class="row"><span class="label" id="strategyLabel"></span><span class="value" id="strategyValue"></span></div>
+            <div class="row"><span class="label" id="codecLabel"></span><span class="value" id="codecValue"></span></div>
+            <div class="row"><span class="label" id="grayLabel"></span><span class="value" id="grayValue"></span></div>
+            <div class="row"><span class="label" id="connectionTipLabel"></span><span class="value" id="connectionTipValue"></span></div>
             <div class="row"><span class="label" id="protocolLabel"></span><span class="value" id="protocolValue"></span></div>
             <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
           </div>
@@ -452,11 +461,14 @@
           subtitle: 'Windows 系统音频推送到 Android 手机',
           sourceTitle: '音频源设置',
           dataPlaneTitle: '数据面',
+          codecTitle: 'Codec（实验入口）',
           deviceTitle: '设备 / 会话',
           loopback: '系统音频',
           synthetic: '测试音',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
+          pcm16: 'PCM16',
+          opusExperimental: 'Opus 实验（回退）',
           fallback: '采集失败自动回退到测试音',
           loopbackV2Gray: '仅在显式灰度下允许 loopback 使用 v2_header',
           dump: '导出 capture wav（调试）',
@@ -467,12 +479,19 @@
           source: '当前音频源',
           dataPlane: '数据面',
           mode: '当前模式',
+          strategy: '模式策略',
+          codec: 'Codec',
+          grayMode: '灰度状态',
+          recommendedConnection: '推荐连接',
           protocol: '协议',
           version: '版本',
           healthTitle: '运行健康摘要',
           healthStream: '推流状态',
           healthDevices: '设备',
           healthSource: '音频源',
+          grayOn: '已启用受控灰度',
+          grayOff: '默认安全路径',
+          codecFallback: '请求 Opus 实验，当前仍回退 PCM16',
           healthOk: '正常',
           healthNotStarted: '未启动',
           healthError: '异常',
@@ -531,11 +550,14 @@
           subtitle: 'Stream Windows system audio to Android devices',
           sourceTitle: 'Audio Source',
           dataPlaneTitle: 'Data Plane',
+          codecTitle: 'Codec (experimental entry)',
           deviceTitle: 'Devices / Session',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
+          pcm16: 'PCM16',
+          opusExperimental: 'Opus experimental (fallback)',
           fallback: 'Fallback to test tone when capture fails',
           loopbackV2Gray: 'Allow loopback to use v2_header only behind explicit gray switch',
           dump: 'Export capture wav (debug)',
@@ -546,12 +568,19 @@
           source: 'Audio Source',
           dataPlane: 'Data Plane',
           mode: 'Current Mode',
+          strategy: 'Mode Strategy',
+          codec: 'Codec',
+          grayMode: 'Gray Status',
+          recommendedConnection: 'Recommended Link',
           protocol: 'Protocol',
           version: 'Version',
           healthTitle: 'Runtime Health',
           healthStream: 'Streaming',
           healthDevices: 'Devices',
           healthSource: 'Source',
+          grayOn: 'Controlled gray path enabled',
+          grayOff: 'Default safe path',
+          codecFallback: 'Opus experimental requested, PCM16 still used',
           healthOk: 'Healthy',
           healthNotStarted: 'Not started',
           healthError: 'Abnormal',
@@ -696,11 +725,14 @@
         document.getElementById('subtitle').textContent = t('subtitle');
         document.getElementById('sourceTitle').textContent = t('sourceTitle');
         document.getElementById('dataPlaneTitle').textContent = t('dataPlaneTitle');
+        document.getElementById('codecTitle').textContent = t('codecTitle');
         document.getElementById('deviceTitle').textContent = t('deviceTitle');
         document.getElementById('sourceLoopback').textContent = t('loopback');
         document.getElementById('sourceSynthetic').textContent = t('synthetic');
         document.getElementById('dataPlaneLegacy').textContent = t('legacy');
         document.getElementById('dataPlaneV2Header').textContent = t('v2Header');
+        document.getElementById('codecPcm16').textContent = t('pcm16');
+        document.getElementById('codecOpus').textContent = t('opusExperimental');
         document.getElementById('fallbackLabel').textContent = t('fallback');
         document.getElementById('loopbackV2GrayLabel').textContent = t('loopbackV2Gray');
         document.getElementById('dumpLabel').textContent = t('dump');
@@ -710,6 +742,10 @@
         document.getElementById('sourceLabel').textContent = t('source');
         document.getElementById('dataPlaneLabel').textContent = t('dataPlane');
         document.getElementById('modeLabel').textContent = t('mode');
+        document.getElementById('strategyLabel').textContent = t('strategy');
+        document.getElementById('codecLabel').textContent = t('codec');
+        document.getElementById('grayLabel').textContent = t('grayMode');
+        document.getElementById('connectionTipLabel').textContent = t('recommendedConnection');
         document.getElementById('protocolLabel').textContent = t('protocol');
         document.getElementById('versionLabel').textContent = t('version');
         document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
@@ -753,6 +789,15 @@
         document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
         document.getElementById('dataPlaneValue').textContent = dataPlaneName(snapshot.data_plane_format);
         document.getElementById('modeValue').textContent = snapshot.current_audio_mode || 'balanced';
+        document.getElementById('strategyValue').textContent =
+          `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
+          `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
+        const codecText = snapshot.codec_selection === 'opus_experimental'
+          ? `${snapshot.effective_codec} · ${t('codecFallback')}`
+          : snapshot.effective_codec;
+        document.getElementById('codecValue').textContent = codecText;
+        document.getElementById('grayValue').textContent = snapshot.gray_mode ? t('grayOn') : t('grayOff');
+        document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
         document.getElementById('errorText').textContent = snapshot.error_message || '';
@@ -761,6 +806,8 @@
         document.getElementById('sourceSynthetic').classList.toggle('active', snapshot.audio_source === 'synthetic');
         document.getElementById('dataPlaneLegacy').classList.toggle('active', snapshot.data_plane_format === 'legacy_las1');
         document.getElementById('dataPlaneV2Header').classList.toggle('active', snapshot.data_plane_format === 'v2_header');
+        document.getElementById('codecPcm16').classList.toggle('active', snapshot.codec_selection === 'pcm16');
+        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus_experimental');
         document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
         document.getElementById('loopbackV2GrayToggle').checked = snapshot.loopback_v2_header_gray_enabled;
         document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
@@ -805,6 +852,8 @@
           `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
           `<div>${t('dataPlane')}: ${snapshot.data_plane_format}</div>` +
           `<div>${t('mode')}: ${snapshot.current_audio_mode}</div>` +
+          `<div>${t('codec')}: ${snapshot.effective_codec}</div>` +
+          `<div>${t('strategy')}: ${JSON.stringify(snapshot.mode_profile || {})}</div>` +
           `<div>capabilities: ${Object.entries(snapshot.capabilities || {}).filter(([, v]) => v).map(([k]) => k).join(', ')}</div>` +
           `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
           `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
@@ -824,6 +873,8 @@
         document.getElementById('sourceSynthetic').disabled = disabled;
         document.getElementById('dataPlaneLegacy').disabled = disabled;
         document.getElementById('dataPlaneV2Header').disabled = disabled;
+        document.getElementById('codecPcm16').disabled = disabled;
+        document.getElementById('codecOpus').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
         document.getElementById('loopbackV2GrayToggle').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
@@ -857,6 +908,8 @@
             audio_source: nextAudioSource || state.snapshot.audio_source,
             data_plane_format:
               document.getElementById('dataPlaneV2Header').classList.contains('active') ? 'v2_header' : 'legacy_las1',
+            codec_selection:
+              document.getElementById('codecOpus').classList.contains('active') ? 'opus_experimental' : 'pcm16',
             allow_loopback_v2_header_gray: document.getElementById('loopbackV2GrayToggle').checked,
             fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
             capture_dump_wav: document.getElementById('dumpToggle').checked,
@@ -897,6 +950,16 @@
         document.getElementById('dataPlaneV2Header').addEventListener('click', async () => {
           document.getElementById('dataPlaneLegacy').classList.remove('active');
           document.getElementById('dataPlaneV2Header').classList.add('active');
+          await applySettings();
+        });
+        document.getElementById('codecPcm16').addEventListener('click', async () => {
+          document.getElementById('codecPcm16').classList.add('active');
+          document.getElementById('codecOpus').classList.remove('active');
+          await applySettings();
+        });
+        document.getElementById('codecOpus').addEventListener('click', async () => {
+          document.getElementById('codecPcm16').classList.remove('active');
+          document.getElementById('codecOpus').classList.add('active');
           await applySettings();
         });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
