@@ -146,6 +146,7 @@ class StreamSessionManager(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(logTag, "ws open")
                     val localUdpPort = udpSocket?.localPort ?: 0
+                    val opusAvailable = OpusFrameDecoder.isAvailable()
                     val hello = JSONObject(
                         mapOf(
                             "type" to "hello",
@@ -161,8 +162,8 @@ class StreamSessionManager(
                                 "supports_f32" to false,
                                 "supports_modes" to true,
                                 "supports_metrics" to true,
-                                "supports_opus_future" to false,
-                                "supports_opus_experimental" to false,
+                                "supports_opus_future" to opusAvailable,
+                                "supports_opus_experimental" to opusAvailable,
                                 "supports_low_latency" to true,
                                 "supports_high_quality" to true,
                                 "supports_native_audio_track" to true,

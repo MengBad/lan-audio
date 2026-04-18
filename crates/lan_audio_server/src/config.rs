@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{anyhow, Result};
-use lan_audio_protocol::{AudioCodecPreference, AudioMode};
+use lan_audio_protocol::{AudioCodecPreference, AudioMode, UdpAudioCodecV2};
 use lan_audio_protocol::{DISCOVERY_PORT, UDP_AUDIO_PORT, WS_PORT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +65,13 @@ impl CodecSelection {
         match self {
             Self::Pcm16 => AudioCodecPreference::Pcm16,
             Self::OpusExperimental => AudioCodecPreference::OpusExperimental,
+        }
+    }
+
+    pub fn as_udp_codec(self) -> UdpAudioCodecV2 {
+        match self {
+            Self::Pcm16 => UdpAudioCodecV2::Pcm16,
+            Self::OpusExperimental => UdpAudioCodecV2::OpusExperimental,
         }
     }
 }
@@ -140,6 +147,23 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
+    pub fn selected_data_plane_format(&self) -> DataPlaneFormat {
+        select_data_plane_format(
+            self.data_plane_format,
+            self.audio_source,
+            self.allow_loopback_v2_header_gray,
+        )
+    }
+
+    pub fn effective_codec_selection(&self) -> CodecSelection {
+        match (self.codec_selection, self.selected_data_plane_format()) {
+            (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header) => {
+                CodecSelection::OpusExperimental
+            }
+            _ => CodecSelection::Pcm16,
+        }
+    }
+
     pub fn apply_args<I>(&mut self, args: I) -> Result<()>
     where
         I: IntoIterator<Item = String>,
@@ -223,6 +247,22 @@ impl ServerConfig {
     }
 }
 
+pub fn select_data_plane_format(
+    desired: DataPlaneFormat,
+    audio_source: AudioSourceKind,
+    allow_loopback_v2_header_gray: bool,
+) -> DataPlaneFormat {
+    if desired != DataPlaneFormat::V2Header {
+        return desired;
+    }
+
+    match audio_source {
+        AudioSourceKind::Synthetic => desired,
+        AudioSourceKind::WindowsLoopback if allow_loopback_v2_header_gray => desired,
+        AudioSourceKind::WindowsLoopback => DataPlaneFormat::LegacyLas1,
+    }
+}
+
 fn whoami_fallback() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
@@ -298,5 +338,37 @@ mod tests {
             CodecSelection::OpusExperimental.as_protocol_preference(),
             AudioCodecPreference::OpusExperimental
         );
+    }
+
+    #[test]
+    fn effective_codec_requires_v2_header() {
+        let mut cfg = ServerConfig {
+            codec_selection: CodecSelection::OpusExperimental,
+            ..ServerConfig::default()
+        };
+        assert_eq!(cfg.effective_codec_selection(), CodecSelection::Pcm16);
+
+        cfg.data_plane_format = DataPlaneFormat::V2Header;
+        cfg.audio_source = AudioSourceKind::Synthetic;
+        assert_eq!(
+            cfg.effective_codec_selection(),
+            CodecSelection::OpusExperimental
+        );
+    }
+
+    #[test]
+    fn loopback_v2_header_stays_explicit_gray_only() {
+        let mut cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            audio_source: AudioSourceKind::WindowsLoopback,
+            ..ServerConfig::default()
+        };
+        assert_eq!(
+            cfg.selected_data_plane_format(),
+            DataPlaneFormat::LegacyLas1
+        );
+
+        cfg.allow_loopback_v2_header_gray = true;
+        assert_eq!(cfg.selected_data_plane_format(), DataPlaneFormat::V2Header);
     }
 }

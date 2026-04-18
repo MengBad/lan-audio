@@ -142,6 +142,7 @@ class _DebugPageState extends State<DebugPage> {
   String _connectionPath = 'lan_ip_wifi_or_usb';
   String _protocolPath = 'legacy_or_v2_auto';
   String _playbackBackend = 'audiotrack_stable';
+  String _effectiveCodec = 'pcm16';
   bool _experimentalPath = false;
 
   @override
@@ -268,6 +269,7 @@ class _DebugPageState extends State<DebugPage> {
       _connectionPath = snapshot.connectionPath;
       _protocolPath = snapshot.protocolPath;
       _playbackBackend = snapshot.playbackBackend;
+      _effectiveCodec = snapshot.effectiveCodec;
       _experimentalPath = snapshot.experimentalPath;
 
       if (servicePlayback == 'playing') {
@@ -699,6 +701,7 @@ class _DebugPageState extends State<DebugPage> {
           'supports_modes': true,
           'supports_metrics': true,
           'supports_opus_future': false,
+          'supports_opus_experimental': false,
           'supports_low_latency': true,
           'supports_high_quality': true,
           'supports_native_audio_track': true,
@@ -1383,6 +1386,11 @@ class _DebugPageState extends State<DebugPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
+                    'Codec: $_effectiveCodec',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
                     '${tr('播放后端', 'Playback backend')}: $_playbackBackend  ·  '
                     '${tr('连接来源', 'Connection path')}: ${_connectionPathLabel(_connectionPath)}',
                     style: const TextStyle(color: Colors.black54),
@@ -1481,6 +1489,8 @@ class _DebugPageState extends State<DebugPage> {
                   '${tr('协议版本', 'Protocol')}: v${_protocolVersion ?? 1}  ·  '
                   '${tr('当前模式', 'Mode')}: ${_audioModeLabel(_currentAudioMode)}',
                 ),
+                const SizedBox(height: 6),
+                Text('Codec: $_effectiveCodec'),
                 const SizedBox(height: 6),
                 if (_serverPlatform != null || _serverAppVersion != null)
                   Text(

@@ -33,8 +33,9 @@
 
 - 已完成：Protocol v2 控制面联动、capabilities、mode 同步、`config_changed/discontinuity`。
 - 已有骨架：数据面 `LAV2` header、codec 枚举、Opus 实验入口。
-- 尚未启用：Opus 实际编码/解码、v2 数据面默认主路径。
-- 后续扩展：v1/v2 双栈灰度扩大、Opus 低延迟实验链路。
+- 已有实验链路：服务端 `opus-rs` 编码、Android `MediaCodec audio/opus` 解码、桌面 V2 Opus 选择入口。
+- 尚未启用：Opus 默认路径、v2 数据面默认主路径。
+- 后续扩展：v1/v2 双栈灰度扩大、Opus synthetic/loopback 真机验收。
 
 ### 诊断能力
 
@@ -68,7 +69,8 @@
 
 - 已完成：v2 协议草案、Rust v2 结构体、UDP v2 header 编解码、session 协商入口。
 - 已有骨架：Opus experimental、USB capabilities、数据面双栈。
-- 尚未启用：默认 UDP 运行流量切到 v2 header；Opus 真实链路。
+- 已有实验链路：Opus 在 `v2_header` 下可显式启用，但尚未稳定验收。
+- 尚未启用：默认 UDP 运行流量切到 v2 header；Opus 作为默认或稳定 codec。
 - 后续扩展：先扩大 synthetic/loopback 灰度，再做默认路径切换。
 
 ## 5) 产品化 UI / 桌面端交付

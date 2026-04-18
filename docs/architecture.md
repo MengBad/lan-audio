@@ -33,5 +33,5 @@
 - 已实现代码路径：Android AudioTrack 真播放链路。
 - v26 已将后台播放服务切为默认路径（`kUseBackgroundPlaybackService=true`），legacy 路径仍保留用于回退调试。
 - v26 新增 Android `PARTIAL_WAKE_LOCK + WifiLock` 保活基础能力（服务启动时获取、停止时释放）。
-- 未完成项：Opus、复杂重采样、自适应 jitter、多设备同步。
+- 未完成项：Opus 真机稳定性验收、复杂重采样、自适应 jitter、多设备同步。
 - 未在当前提交环境完成真实机型回放验收（需按 README 步骤实测）。

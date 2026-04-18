@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lan_audio_protocol::{
     audio_mode_profile, AudioMode, AudioModeProfile, ProtocolCapabilities, PROTOCOL_VERSION_V2,
 };
-use lan_audio_server::config::{AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig};
+use lan_audio_server::config::{
+    select_data_plane_format, AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig,
+};
 use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use serde::{Deserialize, Serialize};
@@ -191,9 +193,9 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .map(|svc| svc.current_audio_mode())
         .unwrap_or(cfg.current_audio_mode);
     let mode_profile = audio_mode_profile(current_audio_mode);
-    let gray_mode = cfg.data_plane_format == DataPlaneFormat::V2Header
-        && (cfg.audio_source == AudioSourceKind::Synthetic || cfg.allow_loopback_v2_header_gray);
-    let effective_codec = "pcm16";
+    let selected_data_plane = selected_data_plane_for_desktop_config(&cfg);
+    let gray_mode = selected_data_plane == DataPlaneFormat::V2Header;
+    let effective_codec = effective_codec_for_desktop_config(&cfg);
 
     let local_ip = detect_local_ip();
     let connected_devices = metrics.active_sessions;
@@ -229,10 +231,10 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         error_message: last_error,
         audio_source: cfg.audio_source.as_str().to_string(),
         data_plane_format: cfg.data_plane_format.as_str().to_string(),
-        protocol_path: cfg.data_plane_format.as_str().to_string(),
+        protocol_path: selected_data_plane.as_str().to_string(),
         gray_mode,
         codec_selection: cfg.codec_selection.as_str().to_string(),
-        effective_codec: effective_codec.to_string(),
+        effective_codec: effective_codec.as_str().to_string(),
         recommended_connection: recommended_connection(&cfg).to_string(),
         loopback_v2_header_gray_enabled: cfg.allow_loopback_v2_header_gray,
         fallback_to_synthetic: cfg.fallback_to_synthetic,
@@ -438,10 +440,30 @@ fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, Strin
 }
 
 fn recommended_connection(cfg: &DesktopServiceConfig) -> &'static str {
-    if cfg.data_plane_format == DataPlaneFormat::V2Header {
+    if selected_data_plane_for_desktop_config(cfg) == DataPlaneFormat::V2Header {
         "USB tethering or 5GHz Wi-Fi"
     } else {
         "Same Wi-Fi network"
+    }
+}
+
+fn selected_data_plane_for_desktop_config(cfg: &DesktopServiceConfig) -> DataPlaneFormat {
+    select_data_plane_format(
+        cfg.data_plane_format,
+        cfg.audio_source,
+        cfg.allow_loopback_v2_header_gray,
+    )
+}
+
+fn effective_codec_for_desktop_config(cfg: &DesktopServiceConfig) -> CodecSelection {
+    match (
+        cfg.codec_selection,
+        selected_data_plane_for_desktop_config(cfg),
+    ) {
+        (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header) => {
+            CodecSelection::OpusExperimental
+        }
+        _ => CodecSelection::Pcm16,
     }
 }
 
@@ -497,8 +519,8 @@ fn default_protocol_capabilities() -> ProtocolCapabilities {
         supports_f32: false,
         supports_modes: true,
         supports_metrics: true,
-        supports_opus_future: false,
-        supports_opus_experimental: false,
+        supports_opus_future: true,
+        supports_opus_experimental: true,
         supports_low_latency: true,
         supports_high_quality: true,
         supports_native_audio_track: true,

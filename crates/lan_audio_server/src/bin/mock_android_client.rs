@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
     detect_data_plane_packet_kind, AudioMode, ClientControlMessage, ClientInfo, ControlMessageV2,
     DataPlanePacketKind, DiscoveryBeacon, Hello, ProtocolCapabilities, SetAudioMode,
-    UdpAudioPacket, UdpAudioPacketV2, DISCOVERY_PORT, PROTOCOL_VERSION_V2,
+    UdpAudioCodecV2, UdpAudioPacket, UdpAudioPacketV2, DISCOVERY_PORT, PROTOCOL_VERSION_V2,
     UDP_FLAG_V2_CONFIG_CHANGED, UDP_FLAG_V2_DISCONTINUITY,
 };
 use tokio::net::UdpSocket;
@@ -91,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
     let mut losses = 0_u64;
     let mut rx_v1 = 0_u64;
     let mut rx_v2 = 0_u64;
+    let mut rx_pcm16 = 0_u64;
+    let mut rx_opus = 0_u64;
     let mut rx_config_changed = 0_u64;
     let mut rx_discontinuity = 0_u64;
     let mut window_start = Instant::now();
@@ -118,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
                     DataPlanePacketKind::LegacyLas1 => {
                         if let Ok(packet) = UdpAudioPacket::decode(&buf[..n]) {
                             rx_v1 += 1;
+                            rx_pcm16 += 1;
                             if let Some(prev) = last_seq {
                                 if packet.sequence != prev.wrapping_add(1) {
                                     losses += packet.sequence.wrapping_sub(prev.wrapping_add(1)) as u64;
@@ -129,6 +132,11 @@ async fn main() -> anyhow::Result<()> {
                     DataPlanePacketKind::V2Lav2 => {
                         if let Ok(packet) = UdpAudioPacketV2::decode(&buf[..n]) {
                             rx_v2 += 1;
+                            match packet.header.codec {
+                                UdpAudioCodecV2::OpusExperimental => rx_opus += 1,
+                                UdpAudioCodecV2::Pcm16 => rx_pcm16 += 1,
+                                UdpAudioCodecV2::F32 => {}
+                            }
                             if packet.header.flags & UDP_FLAG_V2_CONFIG_CHANGED != 0 {
                                 rx_config_changed += 1;
                             }
@@ -160,8 +168,8 @@ async fn main() -> anyhow::Result<()> {
 
         if window_start.elapsed() >= Duration::from_secs(1) {
             println!(
-                "udp stats: packets={} bytes={} v1={} v2={} losses={} cfg_changed={} discontinuity={} last_seq={:?}",
-                rx_packets, rx_bytes, rx_v1, rx_v2, losses, rx_config_changed, rx_discontinuity, last_seq
+                "udp stats: packets={} bytes={} v1={} v2={} pcm16={} opus={} losses={} cfg_changed={} discontinuity={} last_seq={:?}",
+                rx_packets, rx_bytes, rx_v1, rx_v2, rx_pcm16, rx_opus, losses, rx_config_changed, rx_discontinuity, last_seq
             );
             mode_switch_step = mode_switch_step.saturating_add(1);
             if mode_switch_step == 3 {

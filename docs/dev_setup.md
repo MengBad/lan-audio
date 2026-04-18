@@ -29,5 +29,6 @@ flutter run
 ## Notes
 
 - 若 Windows 防火墙阻止 UDP/WS，请放行 39990/39991/39992。
-- 当前 Android 播放链路为 PCM16 + 简单 jitter buffer（非 Opus）。
+- 当前默认 Android 播放链路为 PCM16 + jitter buffer。
+- `v2_header + opus_experimental` 已有受控实验链路：Android 后台服务用系统 `MediaCodec audio/opus` 解码后复用 PCM jitter buffer / AudioTrack；该路径仍需单独验收。
 - 当前仓库代码已接入真播放路径，但仍需你在真实设备上完成最终验收。

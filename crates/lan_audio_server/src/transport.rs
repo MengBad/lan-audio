@@ -9,6 +9,7 @@ use lan_audio_protocol::{
     UDP_AUDIO_HEADER_V2_LEN, UDP_AUDIO_MAGIC_V2, UDP_FLAG_V2_CONFIG_CHANGED,
     UDP_FLAG_V2_DISCONTINUITY, UDP_FLAG_V2_SILENCE,
 };
+use opus_rs::{Application, OpusEncoder};
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, trace, warn};
@@ -18,7 +19,9 @@ use crate::audio_capture::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
     CaptureSourceState, PacketKind, SyntheticAudioSource, WindowsLoopbackCapture,
 };
-use crate::config::{AudioSourceKind, DataPlaneFormat, ServerConfig, SyntheticSignalKind};
+use crate::config::{
+    AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig, SyntheticSignalKind,
+};
 use crate::metrics::Metrics;
 
 #[derive(Clone)]
@@ -35,6 +38,10 @@ struct EncodedFrame {
     sample_rate: u32,
     channels: u8,
     frames_per_packet: u16,
+    codec: UdpAudioCodecV2,
+    is_silence: bool,
+    source_peak: f32,
+    source_rms: f32,
     payload: Vec<u8>,
 }
 
@@ -252,6 +259,22 @@ impl UdpTransport {
             self.cfg.audio_source,
             self.cfg.allow_loopback_v2_header_gray,
         );
+        let requested_codec = self.cfg.codec_selection;
+        let effective_codec = match (requested_codec, selected_data_plane) {
+            (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header) => {
+                CodecSelection::OpusExperimental
+            }
+            _ => CodecSelection::Pcm16,
+        };
+        if requested_codec == CodecSelection::OpusExperimental
+            && effective_codec == CodecSelection::Pcm16
+        {
+            warn!(
+                requested_codec = %requested_codec.as_str(),
+                selected_data_plane = %selected_data_plane.as_str(),
+                "opus experimental requires v2_header; falling back to pcm16"
+            );
+        }
         let current_audio_mode = Arc::clone(&self.current_audio_mode);
 
         let handle = tokio::spawn(async move {
@@ -262,6 +285,8 @@ impl UdpTransport {
                 active_source = %source_name,
                 desired_data_plane = %desired_data_plane.as_str(),
                 selected_data_plane = %selected_data_plane.as_str(),
+                requested_codec = %requested_codec.as_str(),
+                effective_codec = %effective_codec.as_str(),
                 "start udp stream"
             );
 
@@ -339,8 +364,13 @@ impl UdpTransport {
 
             let encode_metrics = Arc::clone(&metrics);
             let mut encode_shutdown = shutdown.resubscribe();
+            let encode_audio_mode = Arc::clone(&current_audio_mode);
             let encode_handle = tokio::spawn(async move {
                 let mut packet_build_stats = PacketBuildStatsWindow::new();
+                let mut frame_encoder = AudioFrameEncoder::new(
+                    effective_codec,
+                    read_current_audio_mode(&encode_audio_mode),
+                );
                 loop {
                     tokio::select! {
                         _ = encode_shutdown.recv() => break,
@@ -348,7 +378,8 @@ impl UdpTransport {
                             match maybe_frame {
                                 Ok(Some(frame)) => {
                                     let frame_age_ms_before_build = now_ms().saturating_sub(frame.pts_ms);
-                                    let encoded = encode_passthrough(frame);
+                                    let active_mode = read_current_audio_mode(&encode_audio_mode);
+                                    let encoded = frame_encoder.encode(frame, active_mode);
                                     packet_build_stats.record_packet_built(
                                         encoded.frames_per_packet,
                                         encoded.payload.len(),
@@ -398,6 +429,9 @@ impl UdpTransport {
                                     "audio mode changed; mark config_changed/discontinuity in outgoing packet"
                                 );
                             }
+                            let packet_codec = encoded.codec;
+                            let source_peak = encoded.source_peak;
+                            let source_rms = encoded.source_rms;
                             let packet = UdpAudioPacket {
                                 version: 1,
                                 flags: legacy_flags_for_frame(&encoded),
@@ -409,7 +443,7 @@ impl UdpTransport {
                                 payload: encoded.payload,
                             };
                             let v2_flags = v2_flags_for_frame(&packet, mode_changed, first_packet);
-                            let bytes = encode_packet_by_data_plane(&packet, selected_data_plane, v2_flags);
+                            let bytes = encode_packet_by_data_plane(&packet, selected_data_plane, v2_flags, packet_codec);
                             let detected_wire_kind = detect_data_plane_packet_kind(&bytes);
                             if packet_sample_budget > 0 {
                                 debug!(
@@ -419,6 +453,7 @@ impl UdpTransport {
                                     payload_size = packet.payload.len(),
                                     wire_bytes = bytes.len(),
                                     detected_wire_kind = ?detected_wire_kind,
+                                    codec = ?packet_codec,
                                     v2_flags,
                                     flush_reason = FLUSH_REASON_IMMEDIATE_FRAME_READY,
                                     "packet sample"
@@ -437,6 +472,9 @@ impl UdpTransport {
                                         detected_wire_kind,
                                         v2_flags,
                                         mode_changed,
+                                        packet_codec,
+                                        source_peak,
+                                        source_rms,
                                     );
                                     tx_stats.maybe_log(sequence);
                                 }
@@ -536,6 +574,7 @@ struct TxStats {
     udp_send_await_max_ms: f64,
     data_plane: DataPlaneFormat,
     last_detected_wire_kind: DataPlanePacketKind,
+    last_codec: UdpAudioCodecV2,
     last_v2_flags: u16,
     mode_changed_count: u64,
 }
@@ -558,6 +597,7 @@ impl TxStats {
             udp_send_await_max_ms: 0.0,
             data_plane: DataPlaneFormat::LegacyLas1,
             last_detected_wire_kind: DataPlanePacketKind::Unknown,
+            last_codec: UdpAudioCodecV2::Pcm16,
             last_v2_flags: 0,
             mode_changed_count: 0,
         }
@@ -572,6 +612,9 @@ impl TxStats {
         detected_wire_kind: DataPlanePacketKind,
         v2_flags: u16,
         mode_changed: bool,
+        codec: UdpAudioCodecV2,
+        source_peak: f32,
+        source_rms: f32,
     ) {
         self.packets += 1;
         self.bytes_sent += wire_bytes as u64;
@@ -586,6 +629,7 @@ impl TxStats {
         };
         self.data_plane = data_plane;
         self.last_detected_wire_kind = detected_wire_kind;
+        self.last_codec = codec;
         self.last_v2_flags = v2_flags;
         if mode_changed {
             self.mode_changed_count += 1;
@@ -598,21 +642,26 @@ impl TxStats {
             self.udp_send_await_max_ms = udp_send_await_ms;
         }
 
-        let mut peak = 0.0f32;
-        let mut sum_sq = 0.0f32;
-        let mut samples = 0usize;
-        for chunk in packet.payload.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / i16::MAX as f32;
-            peak = peak.max(sample.abs());
-            sum_sq += sample * sample;
-            samples += 1;
-        }
-        self.last_peak = peak;
-        self.last_rms = if samples == 0 {
-            0.0
+        if codec == UdpAudioCodecV2::Pcm16 {
+            let mut peak = 0.0f32;
+            let mut sum_sq = 0.0f32;
+            let mut samples = 0usize;
+            for chunk in packet.payload.chunks_exact(2) {
+                let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / i16::MAX as f32;
+                peak = peak.max(sample.abs());
+                sum_sq += sample * sample;
+                samples += 1;
+            }
+            self.last_peak = peak;
+            self.last_rms = if samples == 0 {
+                0.0
+            } else {
+                (sum_sq / samples as f32).sqrt()
+            };
         } else {
-            (sum_sq / samples as f32).sqrt()
-        };
+            self.last_peak = source_peak;
+            self.last_rms = source_rms;
+        }
     }
 
     fn maybe_log(&mut self, seq: u32) {
@@ -642,6 +691,7 @@ impl TxStats {
             wire_bytes = self.last_wire_bytes,
             data_plane = %self.data_plane.as_str(),
             detected_wire_kind = ?self.last_detected_wire_kind,
+            codec = ?self.last_codec,
             v2_flags_last = self.last_v2_flags,
             mode_changed_count = self.mode_changed_count,
             sample_rate = self.last_sample_rate,
@@ -655,19 +705,128 @@ impl TxStats {
             started_at: Instant::now(),
             data_plane: self.data_plane,
             last_detected_wire_kind: self.last_detected_wire_kind,
+            last_codec: self.last_codec,
             last_v2_flags: self.last_v2_flags,
             ..Self::new()
         };
     }
 }
 
+struct AudioFrameEncoder {
+    codec: CodecSelection,
+    opus: Option<ExperimentalOpusEncoder>,
+}
+
+impl AudioFrameEncoder {
+    fn new(codec: CodecSelection, initial_mode: AudioMode) -> Self {
+        let opus = if codec == CodecSelection::OpusExperimental {
+            match ExperimentalOpusEncoder::new(initial_mode) {
+                Ok(encoder) => Some(encoder),
+                Err(err) => {
+                    warn!(error = %err, "opus encoder init failed; falling back to pcm16");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        Self { codec, opus }
+    }
+
+    fn encode(&mut self, frame: AudioFrame, mode: AudioMode) -> EncodedFrame {
+        let samples = to_fixed_48k_stereo_10ms(&frame);
+        if self.codec == CodecSelection::OpusExperimental {
+            if let Some(opus) = self.opus.as_mut() {
+                match opus.encode(
+                    &samples,
+                    frame.pts_ms,
+                    frame.is_silence,
+                    frame.peak,
+                    frame.rms,
+                    mode,
+                ) {
+                    Ok(encoded) => return encoded,
+                    Err(err) => {
+                        warn!(error = %err, "opus encode failed for one frame; falling back to pcm16")
+                    }
+                }
+            }
+        }
+        encode_pcm16_from_samples(&frame, &samples)
+    }
+}
+
+struct ExperimentalOpusEncoder {
+    inner: OpusEncoder,
+    mode: AudioMode,
+}
+
+impl ExperimentalOpusEncoder {
+    fn new(mode: AudioMode) -> anyhow::Result<Self> {
+        let mut inner = OpusEncoder::new(48_000, 2, Application::Audio)
+            .map_err(|err| anyhow!("opus init: {err}"))?;
+        apply_opus_mode_settings(&mut inner, mode);
+        Ok(Self { inner, mode })
+    }
+
+    fn encode(
+        &mut self,
+        samples: &[f32],
+        pts_ms: u64,
+        is_silence: bool,
+        source_peak: f32,
+        source_rms: f32,
+        mode: AudioMode,
+    ) -> anyhow::Result<EncodedFrame> {
+        if self.mode != mode {
+            apply_opus_mode_settings(&mut self.inner, mode);
+            self.mode = mode;
+        }
+
+        let mut payload = vec![0_u8; 4000];
+        let encoded_len = self
+            .inner
+            .encode(samples, 480, &mut payload)
+            .map_err(|err| anyhow!("opus encode: {err}"))?;
+        payload.truncate(encoded_len);
+
+        Ok(EncodedFrame {
+            pts_ms,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            codec: UdpAudioCodecV2::OpusExperimental,
+            is_silence,
+            source_peak,
+            source_rms,
+            payload,
+        })
+    }
+}
+
+fn apply_opus_mode_settings(encoder: &mut OpusEncoder, mode: AudioMode) {
+    let (bitrate_bps, complexity, use_cbr) = match mode {
+        AudioMode::LowLatency => (64_000, 1, true),
+        AudioMode::Balanced => (96_000, 2, false),
+        AudioMode::HighQuality => (128_000, 4, false),
+    };
+    encoder.bitrate_bps = bitrate_bps;
+    encoder.complexity = complexity;
+    encoder.use_cbr = use_cbr;
+    encoder.use_inband_fec = false;
+    encoder.packet_loss_perc = 0;
+}
+
+#[cfg(test)]
 fn encode_passthrough(frame: AudioFrame) -> EncodedFrame {
-    // TODO(real-opus): replace this stage with actual Opus encoder output.
-    // v7 intentionally performs no loudness normalization, AGC, or limiter.
-    // Network payload is fixed for Android diagnostics: 48kHz stereo PCM16 LE, 10ms.
     let samples = to_fixed_48k_stereo_10ms(&frame);
+    encode_pcm16_from_samples(&frame, &samples)
+}
+
+fn encode_pcm16_from_samples(frame: &AudioFrame, samples: &[f32]) -> EncodedFrame {
+    // v1/default path remains fixed for Android diagnostics: 48kHz stereo PCM16 LE, 10ms.
     let mut payload = Vec::with_capacity(samples.len() * 2);
-    for sample in &samples {
+    for sample in samples {
         let v = sample.clamp(-1.0, 1.0);
         let s = (v * i16::MAX as f32) as i16;
         payload.extend_from_slice(&s.to_le_bytes());
@@ -677,6 +836,10 @@ fn encode_passthrough(frame: AudioFrame) -> EncodedFrame {
         sample_rate: 48_000,
         channels: 2,
         frames_per_packet: 480,
+        codec: UdpAudioCodecV2::Pcm16,
+        is_silence: frame.is_silence,
+        source_peak: frame.peak,
+        source_rms: frame.rms,
         payload,
     }
 }
@@ -686,7 +849,7 @@ fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {
     // `config_changed` and `discontinuity` are intentionally left as reserved
     // insertion points for future mode/sample-format transitions.
     let mut flags: u16 = 0;
-    if frame.payload.iter().all(|b| *b == 0) {
+    if frame.is_silence {
         flags |= UDP_FLAG_V2_SILENCE;
     }
     let _reserved_config_changed = UDP_FLAG_V2_CONFIG_CHANGED;
@@ -695,7 +858,11 @@ fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {
     (flags & 0xFF) as u8
 }
 
-fn build_v2_header_preview(packet: &UdpAudioPacket, flags: u16) -> UdpAudioHeaderV2 {
+fn build_v2_header_preview(
+    packet: &UdpAudioPacket,
+    flags: u16,
+    codec: UdpAudioCodecV2,
+) -> UdpAudioHeaderV2 {
     UdpAudioHeaderV2 {
         magic: UDP_AUDIO_MAGIC_V2,
         protocol_version: PROTOCOL_VERSION_V2,
@@ -703,7 +870,7 @@ fn build_v2_header_preview(packet: &UdpAudioPacket, flags: u16) -> UdpAudioHeade
         flags,
         sequence: packet.sequence,
         timestamp_ms: packet.timestamp_ms,
-        codec: UdpAudioCodecV2::Pcm16,
+        codec,
         channels: packet.channels,
         sample_rate: packet.sample_rate,
         frame_duration_ms: if packet.sample_rate == 0 {
@@ -733,12 +900,13 @@ fn encode_packet_by_data_plane(
     packet: &UdpAudioPacket,
     data_plane: DataPlaneFormat,
     v2_flags: u16,
+    codec: UdpAudioCodecV2,
 ) -> Vec<u8> {
     match data_plane {
         DataPlaneFormat::LegacyLas1 => packet.encode(),
         DataPlaneFormat::V2Header => {
             let v2 = UdpAudioPacketV2 {
-                header: build_v2_header_preview(packet, v2_flags),
+                header: build_v2_header_preview(packet, v2_flags, codec),
                 payload: packet.payload.clone(),
             };
             v2.encode()
@@ -836,7 +1004,38 @@ mod tests {
         assert_eq!(encoded.sample_rate, 48_000);
         assert_eq!(encoded.channels, 2);
         assert_eq!(encoded.frames_per_packet, 480);
+        assert_eq!(encoded.codec, UdpAudioCodecV2::Pcm16);
         assert_eq!(encoded.payload.len(), 1920);
+    }
+
+    #[test]
+    fn opus_experimental_encoder_outputs_v2_codec_payload() {
+        let frame = AudioFrame {
+            pts_ms: 123,
+            format: AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                frame_duration_ms: 10,
+            },
+            samples_f32: vec![0.1; 480 * 2],
+            is_silence: false,
+            packet_kind: PacketKind::Synthetic,
+            peak: 0.1,
+            rms: 0.1,
+            source_buffer_frames: None,
+        };
+        let mut encoder =
+            AudioFrameEncoder::new(CodecSelection::OpusExperimental, AudioMode::Balanced);
+
+        let encoded = encoder.encode(frame, AudioMode::Balanced);
+
+        assert_eq!(encoded.codec, UdpAudioCodecV2::OpusExperimental);
+        assert_eq!(encoded.sample_rate, 48_000);
+        assert_eq!(encoded.channels, 2);
+        assert_eq!(encoded.frames_per_packet, 480);
+        assert!(!encoded.payload.is_empty());
+        assert!(encoded.payload.len() < 1920);
     }
 
     #[test]
@@ -896,10 +1095,42 @@ mod tests {
             frames_per_packet: 480,
             payload: vec![1, 2, 3, 4],
         };
-        let v1 = encode_packet_by_data_plane(&packet, DataPlaneFormat::LegacyLas1, 0);
+        let v1 = encode_packet_by_data_plane(
+            &packet,
+            DataPlaneFormat::LegacyLas1,
+            0,
+            UdpAudioCodecV2::Pcm16,
+        );
         assert_eq!(&v1[0..4], b"LAS1");
 
-        let v2 = encode_packet_by_data_plane(&packet, DataPlaneFormat::V2Header, 0);
+        let v2 = encode_packet_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Pcm16,
+        );
         assert_eq!(&v2[0..4], b"LAV2");
+    }
+
+    #[test]
+    fn v2_header_carries_opus_codec() {
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 7,
+            timestamp_ms: 100,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            payload: vec![1, 2, 3, 4],
+        };
+        let bytes = encode_packet_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::OpusExperimental,
+        );
+        let decoded = UdpAudioPacketV2::decode(&bytes).expect("decode v2");
+        assert_eq!(decoded.header.codec, UdpAudioCodecV2::OpusExperimental);
     }
 }

@@ -21,6 +21,7 @@ void main() {
     final packet = LasPacket.parse(bytes.toBytes());
     expect(packet, isNotNull);
     expect(packet!.version, 1);
+    expect(packet.codec, LasPacket.codecPcm16);
     expect(packet.sequence, 7);
     expect(packet.payload.length, 4);
   });
@@ -46,9 +47,36 @@ void main() {
     final packet = LasPacket.parse(bytes.toBytes());
     expect(packet, isNotNull);
     expect(packet!.version, 2);
+    expect(packet.codec, LasPacket.codecPcm16);
     expect(packet.hasConfigChanged, isTrue);
     expect(packet.hasDiscontinuity, isTrue);
     expect(packet.sequence, 9);
+  });
+
+  test('parse v2 LAV2 opus experimental packet', () {
+    final payload = Uint8List.fromList([9, 8, 7]);
+    const headerSize = 33;
+    final bytes = BytesBuilder()
+      ..add('LAV2'.codeUnits)
+      ..add([2])
+      ..add(_u16(headerSize))
+      ..add(_u16(0))
+      ..add(_u32(10))
+      ..add(_u64(789))
+      ..add([LasPacket.codecOpusExperimental])
+      ..add([2])
+      ..add(_u32(48000))
+      ..add(_u16(10))
+      ..add(_u16(payload.length))
+      ..add(_u16(0))
+      ..add(payload);
+
+    final packet = LasPacket.parse(bytes.toBytes());
+
+    expect(packet, isNotNull);
+    expect(packet!.codec, LasPacket.codecOpusExperimental);
+    expect(packet.sequence, 10);
+    expect(packet.payload.length, payload.length);
   });
 }
 

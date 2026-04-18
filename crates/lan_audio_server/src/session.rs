@@ -6,9 +6,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
-    audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeChanged, ClientControlMessage,
-    ClientInfo, ControlMessageV2, ErrorMessage, Hello, HelloAck, ProtocolCapabilities,
-    ServerControlMessage, ServerInfo, SetAudioMode, PROTOCOL_VERSION_V2,
+    audio_mode_profile, AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo,
+    ControlMessageV2, ErrorMessage, Hello, HelloAck, ProtocolCapabilities, ServerControlMessage,
+    ServerInfo, SetAudioMode, PROTOCOL_VERSION_V2,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
@@ -134,6 +134,8 @@ impl SessionServer {
                     )
                 }
             };
+        let selected_data_plane = self.cfg.selected_data_plane_format();
+        let effective_codec = self.cfg.effective_codec_selection();
 
         if v2_session {
             let hello_ack = ControlMessageV2::HelloAck(HelloAck {
@@ -159,9 +161,9 @@ impl SessionServer {
                 protocol_version: PROTOCOL_VERSION_V2,
                 current_audio_mode,
                 mode_profile: audio_mode_profile(current_audio_mode),
-                codec: AudioCodecPreference::Pcm16,
-                data_plane: self.cfg.data_plane_format.as_str().to_string(),
-                gray_mode: self.cfg.allow_loopback_v2_header_gray,
+                codec: effective_codec.as_protocol_preference(),
+                data_plane: selected_data_plane.as_str().to_string(),
+                gray_mode: selected_data_plane != crate::config::DataPlaneFormat::LegacyLas1,
                 recommended_connection: "usb_tethering_or_5ghz_wifi".to_string(),
             });
             ws_tx
@@ -173,17 +175,18 @@ impl SessionServer {
         self.metrics
             .note_client_connected(&client_name, &peer.ip().to_string());
         self.metrics.inc_sessions();
-        if self.cfg.codec_selection.as_str() != "pcm16" {
+        if self.cfg.codec_selection != effective_codec {
             warn!(
                 requested_codec = %self.cfg.codec_selection.as_str(),
-                effective_codec = "pcm16",
-                "requested codec is not wired yet; falling back to pcm16"
+                effective_codec = %effective_codec.as_str(),
+                selected_data_plane = %selected_data_plane.as_str(),
+                "requested codec is not active on this data plane; using effective codec"
             );
         }
 
         let welcome = ServerControlMessage::ServerWelcome {
             session_id,
-            codec: "pcm16".to_string(),
+            codec: effective_codec.as_str().to_string(),
             sample_rate: desired_sample_rate.max(8_000),
             channels,
             frames_per_packet: self.cfg.frames_per_packet,
@@ -431,8 +434,8 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_f32: false,
         supports_modes: true,
         supports_metrics: true,
-        supports_opus_future: false,
-        supports_opus_experimental: false,
+        supports_opus_future: true,
+        supports_opus_experimental: true,
         supports_low_latency: true,
         supports_high_quality: true,
         supports_native_audio_track: true,

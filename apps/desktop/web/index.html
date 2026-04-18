@@ -461,14 +461,14 @@
           subtitle: 'Windows 系统音频推送到 Android 手机',
           sourceTitle: '音频源设置',
           dataPlaneTitle: '数据面',
-          codecTitle: 'Codec（实验入口）',
+          codecTitle: 'Codec（V2 实验）',
           deviceTitle: '设备 / 会话',
           loopback: '系统音频',
           synthetic: '测试音',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus 实验（回退）',
+          opusExperimental: 'Opus 实验（V2）',
           fallback: '采集失败自动回退到测试音',
           loopbackV2Gray: '仅在显式灰度下允许 loopback 使用 v2_header',
           dump: '导出 capture wav（调试）',
@@ -491,7 +491,8 @@
           healthSource: '音频源',
           grayOn: '已启用受控灰度',
           grayOff: '默认安全路径',
-          codecFallback: '请求 Opus 实验，当前仍回退 PCM16',
+          codecFallback: 'Opus 需要 V2 Header；当前有效 Codec 为 PCM16',
+          codecExperimentalActive: 'Opus 实验链路已启用',
           healthOk: '正常',
           healthNotStarted: '未启动',
           healthError: '异常',
@@ -550,14 +551,14 @@
           subtitle: 'Stream Windows system audio to Android devices',
           sourceTitle: 'Audio Source',
           dataPlaneTitle: 'Data Plane',
-          codecTitle: 'Codec (experimental entry)',
+          codecTitle: 'Codec (V2 experiment)',
           deviceTitle: 'Devices / Session',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus experimental (fallback)',
+          opusExperimental: 'Opus experimental (V2)',
           fallback: 'Fallback to test tone when capture fails',
           loopbackV2Gray: 'Allow loopback to use v2_header only behind explicit gray switch',
           dump: 'Export capture wav (debug)',
@@ -580,7 +581,8 @@
           healthSource: 'Source',
           grayOn: 'Controlled gray path enabled',
           grayOff: 'Default safe path',
-          codecFallback: 'Opus experimental requested, PCM16 still used',
+          codecFallback: 'Opus requires V2 Header; effective codec is PCM16',
+          codecExperimentalActive: 'Opus experimental path is active',
           healthOk: 'Healthy',
           healthNotStarted: 'Not started',
           healthError: 'Abnormal',
@@ -793,7 +795,9 @@
           `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
           `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
         const codecText = snapshot.codec_selection === 'opus_experimental'
-          ? `${snapshot.effective_codec} · ${t('codecFallback')}`
+          ? (snapshot.effective_codec === 'opus_experimental'
+            ? `${snapshot.effective_codec} · ${t('codecExperimentalActive')}`
+            : `${snapshot.effective_codec} · ${t('codecFallback')}`)
           : snapshot.effective_codec;
         document.getElementById('codecValue').textContent = codecText;
         document.getElementById('grayValue').textContent = snapshot.gray_mode ? t('grayOn') : t('grayOff');
@@ -945,6 +949,8 @@
         document.getElementById('dataPlaneLegacy').addEventListener('click', async () => {
           document.getElementById('dataPlaneLegacy').classList.add('active');
           document.getElementById('dataPlaneV2Header').classList.remove('active');
+          document.getElementById('codecPcm16').classList.add('active');
+          document.getElementById('codecOpus').classList.remove('active');
           await applySettings();
         });
         document.getElementById('dataPlaneV2Header').addEventListener('click', async () => {
@@ -958,6 +964,8 @@
           await applySettings();
         });
         document.getElementById('codecOpus').addEventListener('click', async () => {
+          document.getElementById('dataPlaneLegacy').classList.remove('active');
+          document.getElementById('dataPlaneV2Header').classList.add('active');
           document.getElementById('codecPcm16').classList.remove('active');
           document.getElementById('codecOpus').classList.add('active');
           await applySettings();

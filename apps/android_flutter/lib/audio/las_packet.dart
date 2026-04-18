@@ -6,6 +6,7 @@ class LasPacket {
     this.flags = 0,
     required this.sequence,
     required this.timestampMs,
+    this.codec = codecPcm16,
     required this.sampleRate,
     required this.channels,
     required this.framesPerPacket,
@@ -16,10 +17,14 @@ class LasPacket {
   final int flags;
   final int sequence;
   final int timestampMs;
+  final int codec;
   final int sampleRate;
   final int channels;
   final int framesPerPacket;
   final Uint8List payload;
+
+  static const int codecPcm16 = 1;
+  static const int codecOpusExperimental = 3;
 
   static LasPacket? parse(Uint8List bytes) {
     if (bytes.length < 4) {
@@ -59,6 +64,7 @@ class LasPacket {
       flags: flags,
       sequence: sequence,
       timestampMs: timestampMs,
+      codec: codecPcm16,
       sampleRate: sampleRate,
       channels: channels,
       framesPerPacket: framesPerPacket,
@@ -83,8 +89,7 @@ class LasPacket {
     final sequence = bd.getUint32(9, Endian.little);
     final timestampMs = bd.getUint64(13, Endian.little);
     final codec = bd.getUint8(21);
-    if (codec != 1) {
-      // Gray stage: v2 data plane currently validates only PCM16.
+    if (codec != codecPcm16 && codec != codecOpusExperimental) {
       return null;
     }
     final channels = bd.getUint8(22);
@@ -103,6 +108,7 @@ class LasPacket {
       flags: flags16 & 0xFF,
       sequence: sequence,
       timestampMs: timestampMs,
+      codec: codec,
       sampleRate: sampleRate,
       channels: channels,
       framesPerPacket: framesPerPacket,

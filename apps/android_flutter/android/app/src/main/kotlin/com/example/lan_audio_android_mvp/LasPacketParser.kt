@@ -9,13 +9,25 @@ data class LasPacket(
     val flags: Int,
     val sequence: Int,
     val timestampMs: Long,
+    val codec: Int,
     val sampleRate: Int,
     val channels: Int,
     val framesPerPacket: Int,
     val payload: ByteArray,
 ) {
+    companion object {
+        const val CODEC_PCM16 = 1
+        const val CODEC_OPUS_EXPERIMENTAL = 3
+    }
+
     val frameDurationMs: Int
         get() = if (sampleRate <= 0) 0 else ((framesPerPacket * 1000.0) / sampleRate).toInt()
+
+    val codecLabel: String
+        get() = when (codec) {
+            CODEC_OPUS_EXPERIMENTAL -> "opus_experimental"
+            else -> "pcm16"
+        }
 
     val hasConfigChanged: Boolean
         get() = (flags and 0x02) != 0
@@ -62,6 +74,7 @@ object LasPacketParser {
             flags = flags,
             sequence = sequence,
             timestampMs = timestampMs,
+            codec = LasPacket.CODEC_PCM16,
             sampleRate = sampleRate,
             channels = channels,
             framesPerPacket = framesPerPacket,
@@ -86,8 +99,7 @@ object LasPacketParser {
         val sequence = bb.getInt(9)
         val timestampMs = bb.getLong(13)
         val codec = bb.get(21).toInt() and 0xFF
-        if (codec != 1) {
-            // Gray stage: only pcm16 is supported.
+        if (codec != LasPacket.CODEC_PCM16 && codec != LasPacket.CODEC_OPUS_EXPERIMENTAL) {
             return null
         }
         val channels = bb.get(22).toInt() and 0xFF
@@ -106,6 +118,7 @@ object LasPacketParser {
             flags = flags,
             sequence = sequence,
             timestampMs = timestampMs,
+            codec = codec,
             sampleRate = sampleRate,
             channels = channels,
             framesPerPacket = framesPerPacket,

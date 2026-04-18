@@ -17,6 +17,7 @@ class PlaybackServiceSnapshot {
     required this.playbackBackend,
     required this.protocolPath,
     required this.experimentalPath,
+    required this.effectiveCodec,
     required this.clientPlatform,
     required this.clientAppVersion,
     required this.serverPlatform,
@@ -40,6 +41,7 @@ class PlaybackServiceSnapshot {
   final String playbackBackend;
   final String protocolPath;
   final bool experimentalPath;
+  final String effectiveCodec;
   final String clientPlatform;
   final String clientAppVersion;
   final String? serverPlatform;
@@ -75,6 +77,7 @@ class PlaybackServiceSnapshot {
           '${normalized['playbackBackend'] ?? 'audiotrack_stable'}',
       protocolPath: '${normalized['protocolPath'] ?? 'legacy_or_v2_auto'}',
       experimentalPath: normalized['experimentalPath'] == true,
+      effectiveCodec: '${normalized['effectiveCodec'] ?? 'pcm16'}',
       clientPlatform: '${normalized['clientPlatform'] ?? 'android'}',
       clientAppVersion: '${normalized['clientAppVersion'] ?? ''}',
       serverPlatform: normalized['serverPlatform']?.toString(),

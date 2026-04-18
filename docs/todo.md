@@ -55,8 +55,9 @@
 ## Opus
 
 - [x] 工程可接入状态：协议枚举、capabilities、服务端 `--codec opus_experimental`、桌面实验入口已具备
-- [x] 回退策略：当前请求 Opus 时仍声明/使用 PCM16，不破坏可出声主路径
-- [ ] 实验链路：接入真实 Opus encoder/decoder（先限制 `synthetic + v2_header + opus_experimental`）
+- [x] 回退策略：当有效数据面不是 `v2_header` 时，Opus 请求仍自动回退 PCM16，不破坏可出声主路径
+- [x] 实验链路：服务端 `opus-rs` 编码 + Android `MediaCodec audio/opus` 解码已接入（限制 `v2_header + opus_experimental`）
+- [ ] 验收：`synthetic + v2_header + opus_experimental` 本地/真机播放验证
 - [ ] 稳定性验证：Opus 与 PCM16 的延迟、CPU、丢包恢复对比
 
 ## Protocol Evolution (v2)
@@ -76,7 +77,7 @@
 - [x] `windows_loopback + v2_header` 真机小流量灰度已完成（可播，模式切换全序列已跑通，默认路径未切换）
 - [ ] 下一阶段：稳定性优化（模式切换后缓冲峰值与 late frame 累积）
 - [ ] 下一阶段：USB tethering 低延迟样本验收（Wi-Fi 与 USB 样本分开记录）
-- [ ] 下一阶段：Opus 实验链路本地验证（不替代 PCM16 默认主路径）
+- [ ] 下一阶段：Opus 实验链路本地与真机验证（不替代 PCM16 默认主路径）
 - [ ] 灰度启用：双端协商后按连接动态切换到 v2 数据面 header（当前仍以配置开关为主）
 - [ ] 全量启用：默认路径切换到 v2，并保留 v1 回退策略
 

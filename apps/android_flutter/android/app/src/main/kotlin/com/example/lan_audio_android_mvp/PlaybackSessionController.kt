@@ -25,6 +25,7 @@ class PlaybackSessionController(
     private val logTag = "lan_audio_session"
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val audioTrackController = AudioTrackController()
+    private val opusDecoder = OpusFrameDecoder()
     private val controlExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
@@ -91,6 +92,7 @@ class PlaybackSessionController(
                 playbackBackend = playbackBackendLabel(options),
                 protocolPath = "legacy_or_v2_auto",
                 experimentalPath = false,
+                effectiveCodec = "pcm16",
                 targetHost = target.host,
                 targetName = target.serverName,
                 recentLog = "connecting:${target.serverName}(${target.host})",
@@ -322,12 +324,14 @@ class PlaybackSessionController(
         if (packet.hasDiscontinuity) {
             discontinuityCount += 1
             jitterBuffer.clear()
+            opusDecoder.release()
             lastSeq = null
             stateStore.update { it.copy(recentLog = "udp_discontinuity_reset") }
         }
 
         if (packet.hasConfigChanged) {
             cfgChangedCount += 1
+            opusDecoder.release()
             if (options.resetBufferOnSwitch) {
                 audioTrackController.stop()
                 audioTrackController.release()
@@ -337,41 +341,65 @@ class PlaybackSessionController(
             stateStore.update { it.copy(recentLog = "udp_config_changed_resync") }
         }
 
+        val wireBytes = packet.payload.size + packet.headerSize
+        val playbackPacket = decodePacketForPlayback(packet) ?: return
+
         if (lastSeq != null) {
             val expected = ((lastSeq!! + 1L) and 0xFFFFFFFFL).toInt()
-            if (packet.sequence != expected) {
-                udpLoss += ((packet.sequence.toLong() - expected.toLong()) and 0xFFFFFFFFL).toInt()
+            if (playbackPacket.sequence != expected) {
+                udpLoss += ((playbackPacket.sequence.toLong() - expected.toLong()) and 0xFFFFFFFFL).toInt()
             }
         }
-        lastSeq = packet.sequence.toLong() and 0xFFFFFFFFL
-        jitterBuffer.push(packet)
+        lastSeq = playbackPacket.sequence.toLong() and 0xFFFFFFFFL
+        jitterBuffer.push(playbackPacket)
 
         val stats = jitterBuffer.stats
         stateStore.update {
             val current = it.metrics
             it.copy(
                 metrics = current.copy(
-                    sampleRate = packet.sampleRate,
-                    channels = packet.channels,
+                    sampleRate = playbackPacket.sampleRate,
+                    channels = playbackPacket.channels,
                     bufferedMs = jitterBuffer.bufferedMs(),
                     jitterUnderrun = stats.underrunCount,
                     jitterDropped = stats.droppedFrames,
                     jitterLate = stats.lateFrames,
                     udpPackets = current.udpPackets + 1,
-                    udpBytes = current.udpBytes + packet.payload.size + packet.headerSize,
+                    udpBytes = current.udpBytes + wireBytes,
                     lossEstimate = udpLoss,
                     lastSeq = lastSeq,
                     silenceFillCount = silenceFillCount,
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
                 ),
-                protocolVersion = packet.protocolVersion,
-                protocolPath = if (packet.protocolVersion == 2) "v2_header" else "legacy_las1",
-                experimentalPath = packet.protocolVersion == 2,
+                protocolVersion = playbackPacket.protocolVersion,
+                protocolPath = if (playbackPacket.protocolVersion == 2) "v2_header" else "legacy_las1",
+                experimentalPath = playbackPacket.protocolVersion == 2,
+                effectiveCodec = packet.codecLabel,
                 playbackBackend = playbackBackendLabel(options),
             )
         }
         maybeLogMetrics()
+    }
+
+    private fun decodePacketForPlayback(packet: LasPacket): LasPacket? {
+        return when (packet.codec) {
+            LasPacket.CODEC_PCM16 -> packet
+            LasPacket.CODEC_OPUS_EXPERIMENTAL -> {
+                try {
+                    val pcm = opusDecoder.decode(packet)
+                    packet.copy(payload = pcm)
+                } catch (t: Throwable) {
+                    Log.e(logTag, "opus decode failed: ${t.message}")
+                    publishError("opus_decode_failed", t.message ?: "opus decode failed")
+                    null
+                }
+            }
+            else -> {
+                publishError("unsupported_codec", "unsupported codec=${packet.codec}")
+                null
+            }
+        }
     }
 
     private fun playoutTick() {
@@ -457,6 +485,7 @@ class PlaybackSessionController(
             audioTrackController.release()
             audioInit = false
             audioStarted = false
+            opusDecoder.release()
             jitterBuffer.clear()
             streamManager = StreamSessionManager(target, options.pingIntervalMs, object : StreamSessionManager.Callback {
                 override fun onLog(message: String) {
@@ -545,6 +574,7 @@ class PlaybackSessionController(
         streamManager = null
         playoutFuture?.cancel(true)
         playoutFuture = null
+        opusDecoder.release()
         audioTrackController.stop()
         audioTrackController.release()
         audioInit = false
@@ -647,6 +677,7 @@ class PlaybackSessionController(
             audioTrackController.release()
             audioInit = false
             audioStarted = false
+            opusDecoder.release()
             lastSeq = null
         }
         Log.i(
