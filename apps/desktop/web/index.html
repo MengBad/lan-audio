@@ -387,8 +387,8 @@
             <span id="fallbackLabel"></span>
           </label>
           <label class="toggle">
-            <input type="checkbox" id="loopbackV2GrayToggle" />
-            <span id="loopbackV2GrayLabel"></span>
+            <button class="copy-btn" id="safeModeBtn" type="button"></button>
+            <span id="safeModeHint"></span>
           </label>
           <label class="toggle">
             <input type="checkbox" id="dumpToggle" />
@@ -461,16 +461,19 @@
           subtitle: 'Windows 系统音频推送到 Android 手机',
           sourceTitle: '音频源设置',
           dataPlaneTitle: '数据面',
-          codecTitle: 'Codec（V2 实验）',
+          codecTitle: 'Codec（推荐路径）',
           deviceTitle: '设备 / 会话',
           loopback: '系统音频',
           synthetic: '测试音',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus 实验（V2）',
+          opusExperimental: 'Opus',
           fallback: '采集失败自动回退到测试音',
-          loopbackV2Gray: '仅在显式灰度下允许 loopback 使用 v2_header',
+          safeMode: '安全模式',
+          safeModeEnable: '切回安全模式',
+          safeModeDisable: '恢复推荐路径',
+          safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
           dump: '导出 capture wav（调试）',
           address: '连接地址',
           copy: '复制',
@@ -489,10 +492,10 @@
           healthStream: '推流状态',
           healthDevices: '设备',
           healthSource: '音频源',
-          grayOn: '已启用受控灰度',
-          grayOff: '默认安全路径',
+          grayOn: '推荐路径',
+          grayOff: '回滚路径',
           codecFallback: 'Opus 需要 V2 Header；当前有效 Codec 为 PCM16',
-          codecExperimentalActive: 'Opus 实验链路已启用',
+          codecExperimentalActive: 'Opus 稳定链路已启用',
           healthOk: '正常',
           healthNotStarted: '未启动',
           healthError: '异常',
@@ -551,16 +554,19 @@
           subtitle: 'Stream Windows system audio to Android devices',
           sourceTitle: 'Audio Source',
           dataPlaneTitle: 'Data Plane',
-          codecTitle: 'Codec (V2 experiment)',
+          codecTitle: 'Codec (Recommended Path)',
           deviceTitle: 'Devices / Session',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus experimental (V2)',
+          opusExperimental: 'Opus',
           fallback: 'Fallback to test tone when capture fails',
-          loopbackV2Gray: 'Allow loopback to use v2_header only behind explicit gray switch',
+          safeMode: 'Safe mode',
+          safeModeEnable: 'Switch to safe mode',
+          safeModeDisable: 'Restore recommended path',
+          safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
           dump: 'Export capture wav (debug)',
           address: 'Connect Address',
           copy: 'Copy',
@@ -579,10 +585,10 @@
           healthStream: 'Streaming',
           healthDevices: 'Devices',
           healthSource: 'Source',
-          grayOn: 'Controlled gray path enabled',
-          grayOff: 'Default safe path',
+          grayOn: 'Recommended path',
+          grayOff: 'Rollback path',
           codecFallback: 'Opus requires V2 Header; effective codec is PCM16',
-          codecExperimentalActive: 'Opus experimental path is active',
+          codecExperimentalActive: 'Opus stable path is active',
           healthOk: 'Healthy',
           healthNotStarted: 'Not started',
           healthError: 'Abnormal',
@@ -736,7 +742,7 @@
         document.getElementById('codecPcm16').textContent = t('pcm16');
         document.getElementById('codecOpus').textContent = t('opusExperimental');
         document.getElementById('fallbackLabel').textContent = t('fallback');
-        document.getElementById('loopbackV2GrayLabel').textContent = t('loopbackV2Gray');
+        document.getElementById('safeModeHint').textContent = t('safeModeHint');
         document.getElementById('dumpLabel').textContent = t('dump');
         document.getElementById('addrLabel').textContent = t('address');
         document.getElementById('copyAddrBtn').textContent = t('copy');
@@ -794,13 +800,14 @@
         document.getElementById('strategyValue').textContent =
           `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
           `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
-        const codecText = snapshot.codec_selection === 'opus_experimental'
-          ? (snapshot.effective_codec === 'opus_experimental'
+        const isSafeMode = snapshot.data_plane_format === 'legacy_las1' && snapshot.codec_selection === 'pcm16';
+        const codecText = snapshot.codec_selection === 'opus'
+          ? (snapshot.effective_codec === 'opus'
             ? `${snapshot.effective_codec} · ${t('codecExperimentalActive')}`
             : `${snapshot.effective_codec} · ${t('codecFallback')}`)
           : snapshot.effective_codec;
         document.getElementById('codecValue').textContent = codecText;
-        document.getElementById('grayValue').textContent = snapshot.gray_mode ? t('grayOn') : t('grayOff');
+        document.getElementById('grayValue').textContent = isSafeMode ? t('grayOff') : t('grayOn');
         document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
@@ -811,10 +818,12 @@
         document.getElementById('dataPlaneLegacy').classList.toggle('active', snapshot.data_plane_format === 'legacy_las1');
         document.getElementById('dataPlaneV2Header').classList.toggle('active', snapshot.data_plane_format === 'v2_header');
         document.getElementById('codecPcm16').classList.toggle('active', snapshot.codec_selection === 'pcm16');
-        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus_experimental');
+        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus');
         document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
-        document.getElementById('loopbackV2GrayToggle').checked = snapshot.loopback_v2_header_gray_enabled;
         document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
+        const safeModeBtn = document.getElementById('safeModeBtn');
+        safeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
+        safeModeBtn.title = t('safeModeHint');
 
         const recent = snapshot.recent_clients || [];
         const currentDevice = snapshot.connected_devices > 0 && recent.length > 0 ? recent[0] : t('noDevice');
@@ -880,7 +889,7 @@
         document.getElementById('codecPcm16').disabled = disabled;
         document.getElementById('codecOpus').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
-        document.getElementById('loopbackV2GrayToggle').disabled = disabled;
+        document.getElementById('safeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
       }
@@ -913,12 +922,34 @@
             data_plane_format:
               document.getElementById('dataPlaneV2Header').classList.contains('active') ? 'v2_header' : 'legacy_las1',
             codec_selection:
-              document.getElementById('codecOpus').classList.contains('active') ? 'opus_experimental' : 'pcm16',
-            allow_loopback_v2_header_gray: document.getElementById('loopbackV2GrayToggle').checked,
+              document.getElementById('codecOpus').classList.contains('active') ? 'opus' : 'pcm16',
+            allow_loopback_v2_header_gray: false,
             fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
             capture_dump_wav: document.getElementById('dumpToggle').checked,
           }
         });
+      }
+
+      async function toggleSafeMode() {
+        if (!state.snapshot) return;
+        const isSafeMode = state.snapshot.data_plane_format === 'legacy_las1' && state.snapshot.codec_selection === 'pcm16';
+        document.getElementById('sourceLoopback').classList.add('active');
+        document.getElementById('sourceSynthetic').classList.remove('active');
+        document.getElementById('fallbackToggle').checked = state.snapshot.fallback_to_synthetic;
+        document.getElementById('dumpToggle').checked = state.snapshot.capture_dump_wav;
+        if (isSafeMode) {
+          document.getElementById('dataPlaneLegacy').classList.remove('active');
+          document.getElementById('dataPlaneV2Header').classList.add('active');
+          document.getElementById('codecPcm16').classList.remove('active');
+          document.getElementById('codecOpus').classList.add('active');
+          await applySettings('windows_loopback');
+          return;
+        }
+        document.getElementById('dataPlaneLegacy').classList.add('active');
+        document.getElementById('dataPlaneV2Header').classList.remove('active');
+        document.getElementById('codecPcm16').classList.add('active');
+        document.getElementById('codecOpus').classList.remove('active');
+        await applySettings('windows_loopback');
       }
 
       async function copyAddress() {
@@ -971,7 +1002,7 @@
           await applySettings();
         });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
-        document.getElementById('loopbackV2GrayToggle').addEventListener('change', () => applySettings());
+        document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
       }

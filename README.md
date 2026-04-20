@@ -2,9 +2,10 @@
 
 Windows-to-Android LAN audio streaming. Use a Windows PC as the sender and an Android phone as a speaker on the same local network.
 
-Current version: `1.1`
+Current release: `1.1`
+Mainline target: `1.2`
 
-> Status: usable MVP. The default path is still the safe PCM legacy path. Protocol v2, V2 header, and Opus are available as explicit gray/experimental paths.
+> Status: usable MVP. The mainline recommended path is now `windows_loopback + v2_header + opus`, and `legacy_las1 + pcm16` remains the maintained rollback path.
 
 ## What It Does
 
@@ -16,31 +17,32 @@ Current version: `1.1`
 
 ## Current Release Focus
 
-Version `1.1` is focused on productizing the first usable release path:
+Release `1.1` is the last safe-path release. Current mainline work for `1.2` is focused on:
 
 - Android app size reduction with release shrink and split-per-ABI APKs.
 - Android background playback and controlled auto reconnect.
 - Protocol v2 control plane and data-plane gray path retained.
-- Opus experimental path wired through standard libopus/JNI.
+- Opus stabilization on the recommended V2 path with fixed 20ms packets and Android PLC fallback.
 - GitHub Actions release workflow builds Android release APKs and Windows exe artifacts.
 
 ## Current Stability
 
-Current conclusion: **audio is playable, but not yet declared long-term stable across devices**.
+Current conclusion: **the recommended V2 + Opus path is code-complete and synthetic-stress validated, but Android real-device latency revalidation is still pending before release**.
 
 Validated so far:
 
 - Android real device can connect to Windows and play audio.
-- `synthetic + v2_header + opus_experimental` has passed real-device listening validation.
+- `synthetic + v2_header + opus` has passed real-device listening validation.
+- `synthetic + v2_header + opus` has passed a 5-minute server-side stress test with fixed 20ms Opus packets (`p99 encode ~= 0.509 ms`, channel-full drop rate `0.000000`).
 - Android auto reconnect behavior has passed real-device validation:
   - abnormal disconnect retries up to 3 times;
   - after retries are exhausted, playback stops instead of retrying forever;
   - reopening the app restores the last successful streaming server.
 
-Still gray/experimental:
+Still pending for release sign-off:
 
-- `windows_loopback + v2_header`
-- `opus_experimental` on real system audio
+- Android real-device revalidation for `windows_loopback + v2_header + opus`
+- balanced-mode end-to-end latency confirmation on device
 - long-duration, multi-device stability
 - USB low-latency validation
 
@@ -57,22 +59,25 @@ Android client
   ├─ Flutter UI                  discovery, controls, status, diagnostics
   ├─ Foreground playback service background playback and reconnect
   ├─ AudioTrack playback         PCM output
-  └─ libopus JNI                 experimental Opus decode path
+  └─ libopus JNI                 stable Opus decode path with PLC fallback
 ```
 
 ## Protocol And Codec Status
 
-Default path:
+Recommended default path:
 
-- Data plane: `legacy_las1`
-- Codec: `pcm16`
-- Recommended for normal use and rollback
+- Audio source: `windows_loopback`
+- Data plane: `v2_header`
+- Codec: `opus`
 
-Gray paths:
+Maintained rollback path:
 
-- `synthetic + v2_header`
-- `windows_loopback + v2_header` only with explicit gray flag
-- `opus_experimental` only when V2 header is active and capabilities allow it
+- `legacy_las1 + pcm16`
+
+Additional validation paths:
+
+- `synthetic + v2_header + pcm16`
+- `synthetic + v2_header + opus`
 
 Protocol v2 currently provides:
 
@@ -108,7 +113,7 @@ Behavior:
 Real-device validation on `2026-04-21`:
 
 - Device: `5391d451 / Xiaomi 24129PN74C`
-- Path: `synthetic + v2_header + opus_experimental`
+- Path: `synthetic + v2_header + opus`
 - Initial playback: `playing`, `buffered_ms≈70-80`, `rx_frames_per_sec≈99-101`, underrun/late/silence all 0
 - Disconnect test: observed `attempt=1/3`, `2/3`, `3/3`, then `auto reconnect exhausted`
 - Reopen test: app restored `10.0.0.185:39991/39992` and returned to `playing`
@@ -138,22 +143,22 @@ For debug or regression testing:
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic
 ```
 
-System audio capture:
+Recommended system audio capture:
 
 ```powershell
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
 ```
 
-V2 + Opus experimental test tone:
+Rollback-safe legacy path:
 
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --data-plane v2_header --codec opus_experimental
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --data-plane legacy_las1 --codec pcm16
 ```
 
-Loopback + V2 gray path requires an explicit flag:
+Synthetic V2 + Opus validation:
 
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --data-plane v2_header --allow-loopback-v2-header-gray
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --data-plane v2_header --codec opus
 ```
 
 ### Android Client
@@ -235,10 +240,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.1
 
 ## Rollback
 
-If a V2 or Opus path is unstable, use one of these safe paths:
+If the recommended path is unstable, use one of these rollback paths:
 
 - `legacy_las1 + pcm16`
-- `synthetic + legacy_las1`
+- `windows_loopback + legacy_las1 + pcm16`
 - `synthetic + v2_header + pcm16`
-
-Do not make V2 header or Opus the default until long-duration loopback validation passes.

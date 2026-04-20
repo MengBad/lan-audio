@@ -38,9 +38,9 @@ flutter run
 
 ## 限制
 
-- 默认仍优先 PCM 16-bit 直通。
-- `v2_header + opus_experimental` 已接入 Android 后台播放实验链路：收到 `LAV2 codec=3` 后通过系统 `MediaCodec audio/opus` 解码，再进入现有 PCM jitter buffer / AudioTrack。
-- Opus 尚未完成真机稳定性验收，不作为默认播放路径。
+- 推荐默认链路已切到 `windows_loopback + v2_header + opus`，`legacy_las1 + pcm16` 仍保留为回滚路径。
+- `v2_header + opus` 已接入 Android 后台播放链路：收到 `LAV2 codec=3` 后通过 `libopus` JNI 解码，再进入现有 PCM jitter buffer / AudioTrack；decode 失败时会走 PLC concealment。
+- `windows_loopback + v2_header + opus` 仍需补齐真机长稳与延迟样本后再做 release sign-off。
 - jitter buffer 为最小版本（固定起播缓冲，无自适应）。
 - 仍需真实机型覆盖验证稳定性与延迟表现。
 - v26 新增 `WAKE_LOCK` + `PARTIAL_WAKE_LOCK` + `WifiLock`，用于降低锁屏/后台场景中断概率。

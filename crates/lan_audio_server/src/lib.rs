@@ -5,3 +5,4 @@ pub mod metrics;
 pub mod service;
 pub mod session;
 pub mod transport;
+pub mod usb_transport;

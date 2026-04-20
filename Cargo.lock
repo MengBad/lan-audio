@@ -1763,6 +1763,7 @@ dependencies = [
  "if-addrs",
  "lan_audio_protocol",
  "opus",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

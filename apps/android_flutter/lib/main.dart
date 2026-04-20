@@ -134,6 +134,7 @@ class _DebugPageState extends State<DebugPage> {
   int _serviceUdpBytes = 0;
   int _serviceLoss = 0;
   int? _serviceLastSeq;
+  int? _serviceAudioTrackLatencyMs;
   int? _protocolVersion;
   Map<String, bool> _negotiatedCapabilities = const {};
   String? _serverPlatform;
@@ -260,6 +261,8 @@ class _DebugPageState extends State<DebugPage> {
           (metrics['udpBytes'] as num?)?.toInt() ?? _serviceUdpBytes;
       _serviceLoss = (metrics['lossEstimate'] as num?)?.toInt() ?? _serviceLoss;
       _serviceLastSeq = (metrics['lastSeq'] as num?)?.toInt();
+      _serviceAudioTrackLatencyMs =
+          (metrics['audioTrackLatencyMs'] as num?)?.toInt();
       _currentAudioMode = _audioModeFromWire(snapshot.currentAudioMode);
       _protocolVersion = snapshot.protocolVersion;
       _negotiatedCapabilities = snapshot.negotiatedCapabilities;
@@ -701,6 +704,7 @@ class _DebugPageState extends State<DebugPage> {
           'supports_modes': true,
           'supports_metrics': true,
           'supports_opus_future': false,
+          'supports_opus': false,
           'supports_opus_experimental': false,
           'supports_low_latency': true,
           'supports_high_quality': true,
@@ -1055,6 +1059,9 @@ class _DebugPageState extends State<DebugPage> {
 
   int? get _uiLastSeq =>
       kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
+
+  int? get _uiAudioTrackLatencyMs =>
+      kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
 
   Widget _metricTile(String label, String value) {
     return Container(
@@ -1511,6 +1518,13 @@ class _DebugPageState extends State<DebugPage> {
                 _metricTile('channels', '$_channels'),
                 const SizedBox(height: 8),
                 _metricTile('buffered_ms', '$_uiBufferedMs'),
+                const SizedBox(height: 8),
+                _metricTile(
+                  tr('AudioTrack 延迟', 'AudioTrack reported latency'),
+                  _uiAudioTrackLatencyMs == null
+                      ? '-'
+                      : '${_uiAudioTrackLatencyMs} ms',
+                ),
                 const SizedBox(height: 8),
                 _metricTile('jitter_underrun', '$_uiUnderrun'),
                 const SizedBox(height: 8),

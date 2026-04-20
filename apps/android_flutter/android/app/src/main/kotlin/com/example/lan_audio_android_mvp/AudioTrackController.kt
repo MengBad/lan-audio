@@ -10,11 +10,14 @@ import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 data class AudioTrackStats(
     val nativeQueuedFrames: Int,
+    val nativeQueuedAudioFrames: Int,
     val audioTrackWriteFrames: Long,
     val audioTrackShortWriteCount: Long,
+    val reportedLatencyMs: Int? = null,
     val lastPcmPeak: Int = 0,
     val lastPcmRms: Double = 0.0,
     val lastPlayState: Int = AudioTrack.PLAYSTATE_STOPPED,
@@ -24,7 +27,10 @@ class AudioTrackController {
     private val logTag = "lan_audio_track"
     private var audioTrack: AudioTrack? = null
     private var frameBytesPerPacket: Int = 1920
-    private var writeQueue: ArrayBlockingQueue<ByteArray>? = null
+    private var audioEncoding: Int = AudioFormat.ENCODING_PCM_16BIT
+    private var writeQueue: ArrayBlockingQueue<QueuedChunk>? = null
+    private val queuedAudioFrames = AtomicInteger(0)
+    private val queueFrameSoftCap = AtomicInteger(24)
 
     @Volatile
     private var writerRunning: Boolean = false
@@ -48,7 +54,13 @@ class AudioTrackController {
     @Volatile
     private var writerStoppedSignal: CountDownLatch? = null
 
-    fun init(sampleRate: Int, channels: Int, frameSamplesPerChannel: Int) {
+    fun init(
+        sampleRate: Int,
+        channels: Int,
+        frameSamplesPerChannel: Int,
+        preferLowLatency: Boolean,
+        encoding: Int = AudioFormat.ENCODING_PCM_16BIT,
+    ) {
         Log.i(
             logTag,
             "audio writer init sampleRate=$sampleRate channels=$channels frameSamplesPerChannel=$frameSamplesPerChannel"
@@ -57,6 +69,7 @@ class AudioTrackController {
         audioTrack?.release()
         writeFrames = 0
         shortWriteCount = 0
+        queuedAudioFrames.set(0)
 
         val channelConfig = if (channels == 1) {
             AudioFormat.CHANNEL_OUT_MONO
@@ -64,31 +77,43 @@ class AudioTrackController {
             AudioFormat.CHANNEL_OUT_STEREO
         }
 
+        val channelCount = channels.coerceAtLeast(1)
         val minBuffer = AudioTrack.getMinBufferSize(
             sampleRate,
             channelConfig,
-            AudioFormat.ENCODING_PCM_16BIT,
+            encoding,
         )
         require(minBuffer > 0) { "AudioTrack.getMinBufferSize failed: $minBuffer" }
 
-        val frameBytes = frameSamplesPerChannel * channels * 2
+        val bytesPerSample = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+        val frameBytes = frameSamplesPerChannel * channelCount * bytesPerSample
         frameBytesPerPacket = frameBytes
-        val desiredBuffer = maxOf(minBuffer, frameBytes * 12)
+        audioEncoding = encoding
+        val desiredBuffer = maxOf(minBuffer * 2, frameBytes * 2)
 
-        val track = AudioTrack(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build(),
-            AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(sampleRate)
-                .setChannelMask(channelConfig)
-                .build(),
-            desiredBuffer,
-            AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE,
-        )
+        val builder = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(encoding)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(channelConfig)
+                    .build(),
+            )
+            .setBufferSizeInBytes(desiredBuffer)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
+
+        if (preferLowLatency) {
+            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        }
+
+        val track = builder.build()
         if (track.state != AudioTrack.STATE_INITIALIZED) {
             track.release()
             throw IllegalStateException("AudioTrack init failed")
@@ -104,17 +129,36 @@ class AudioTrackController {
         audioTrack?.play() ?: throw IllegalStateException("AudioTrack is not initialized")
     }
 
-    fun writePcm16(data: ByteArray) {
+    fun setQueueSoftCapFrames(maxQueuedFrames: Int) {
+        val clamped = maxQueuedFrames.coerceIn(4, 96)
+        queueFrameSoftCap.set(clamped)
+    }
+
+    fun writePcm16(data: ByteArray, frames: Int) {
         val track = audioTrack ?: throw IllegalStateException("AudioTrack is not initialized")
         val queue = writeQueue ?: throw IllegalStateException("AudioTrack writer is not initialized")
         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
             track.play()
         }
+        val safeFrames = frames.coerceAtLeast(1)
         val copy = data.copyOf()
-        if (!queue.offer(copy)) {
-            queue.poll()
-            queue.offer(copy)
+        if (queuedAudioFrames.get() >= queueFrameSoftCap.get()) {
+            val dropped = queue.poll()
+            if (dropped != null) {
+                queuedAudioFrames.addAndGet(-dropped.frames)
+            }
         }
+        val chunk = QueuedChunk(copy, safeFrames)
+        if (!queue.offer(chunk)) {
+            val dropped = queue.poll()
+            if (dropped != null) {
+                queuedAudioFrames.addAndGet(-dropped.frames)
+            }
+            if (!queue.offer(chunk)) {
+                return
+            }
+        }
+        queuedAudioFrames.addAndGet(safeFrames)
     }
 
     fun stop() {
@@ -134,8 +178,10 @@ class AudioTrackController {
     fun stats(): AudioTrackStats {
         return AudioTrackStats(
             nativeQueuedFrames = writeQueue?.size ?: 0,
+            nativeQueuedAudioFrames = queuedAudioFrames.get(),
             audioTrackWriteFrames = writeFrames,
             audioTrackShortWriteCount = shortWriteCount,
+            reportedLatencyMs = readReportedLatencyMs(),
             lastPcmPeak = lastPcmPeak,
             lastPcmRms = lastPcmRms,
             lastPlayState = audioTrack?.playState ?: AudioTrack.PLAYSTATE_STOPPED,
@@ -143,7 +189,7 @@ class AudioTrackController {
     }
 
     private fun startWriter() {
-        val queue = ArrayBlockingQueue<ByteArray>(240)
+        val queue = ArrayBlockingQueue<QueuedChunk>(96)
         writeQueue = queue
         writerRunning = true
         val stopped = CountDownLatch(1)
@@ -167,13 +213,14 @@ class AudioTrackController {
             }
             try {
                 while (writerRunning || queue.isNotEmpty()) {
-                    val data = try {
+                    val chunk = try {
                         queue.poll(50, TimeUnit.MILLISECONDS)
                     } catch (_: InterruptedException) {
                         break
                     } ?: continue
+                    queuedAudioFrames.addAndGet(-chunk.frames)
                     val track = audioTrack ?: continue
-                    writeFully(track, data)
+                    writeFully(track, chunk)
                 }
             } finally {
                 stopped.countDown()
@@ -185,6 +232,7 @@ class AudioTrackController {
         Log.i(logTag, "audio writer thread stopping")
         writerRunning = false
         writeQueue?.clear()
+        queuedAudioFrames.set(0)
         writerThread?.interrupt()
         writerStoppedSignal?.await(100, TimeUnit.MILLISECONDS)
         writerThread = null
@@ -193,7 +241,8 @@ class AudioTrackController {
         Log.i(logTag, "audio writer thread stopped")
     }
 
-    private fun writeFully(track: AudioTrack, data: ByteArray) {
+    private fun writeFully(track: AudioTrack, chunk: QueuedChunk) {
+        val data = chunk.payload
         updatePcmLevel(data)
         var offset = 0
         var shortWrite = false
@@ -235,9 +284,7 @@ class AudioTrackController {
         if (shortWrite) {
             shortWriteCount += 1
         }
-        val perFrame = frameBytesPerPacket.coerceAtLeast(1)
-        val framesInWrite = (data.size / perFrame).coerceAtLeast(1)
-        writeFrames += framesInWrite.toLong()
+        writeFrames += chunk.frames.toLong()
         maybeLogWriterSummary(track)
     }
 
@@ -278,7 +325,23 @@ class AudioTrackController {
         lastWriterSummaryAtMs = now
         Log.i(
             logTag,
-            "audio_writer_summary playState=${track.playState} queue=${writeQueue?.size ?: 0} writeFrames=$writeFrames shortWrites=$shortWriteCount pcmPeak=$lastPcmPeak pcmRms=$lastPcmRms",
+            "audio_writer_summary playState=${track.playState} queue=${writeQueue?.size ?: 0} queuedFrames=${queuedAudioFrames.get()} writeFrames=$writeFrames shortWrites=$shortWriteCount latencyMs=${readReportedLatencyMs()} pcmPeak=$lastPcmPeak pcmRms=$lastPcmRms encoding=$audioEncoding",
         )
     }
+
+    private fun readReportedLatencyMs(): Int? {
+        val track = audioTrack ?: return null
+        return try {
+            val method = AudioTrack::class.java.getMethod("getLatency")
+            val value = method.invoke(track) as? Number
+            value?.toInt()?.takeIf { it >= 0 }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private data class QueuedChunk(
+        val payload: ByteArray,
+        val frames: Int,
+    )
 }

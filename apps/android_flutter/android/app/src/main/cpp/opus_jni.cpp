@@ -80,35 +80,46 @@ Java_com_example_lan_1audio_1android_1mvp_OpusNativeDecoder_nativeDecode(
     jint offset,
     jint length,
     jshortArray pcm_out,
-    jint max_frames) {
+    jint max_frames,
+    jboolean use_plc) {
     DecoderHandle *handle = from_handle(handle_value);
     if (handle == nullptr || handle->decoder == nullptr) {
         return throw_illegal_state(env, "opus decoder is closed");
     }
-    if (packet == nullptr || pcm_out == nullptr || offset < 0 || length <= 0 || max_frames <= 0) {
+    if (pcm_out == nullptr || offset < 0 || length < 0 || max_frames <= 0) {
         return throw_illegal_state(env, "invalid opus decode input");
     }
 
-    const jsize packet_size = env->GetArrayLength(packet);
     const jsize out_size = env->GetArrayLength(pcm_out);
-    if (offset + length > packet_size) {
-        return throw_illegal_state(env, "opus packet range is out of bounds");
-    }
     if (out_size < max_frames * handle->channels) {
         return throw_illegal_state(env, "opus pcm output buffer is too small");
     }
 
-    std::vector<unsigned char> encoded(static_cast<size_t>(length));
-    env->GetByteArrayRegion(packet, offset, length, reinterpret_cast<jbyte *>(encoded.data()));
-    if (env->ExceptionCheck()) {
-        return -1;
+    std::vector<unsigned char> encoded;
+    const unsigned char *encoded_ptr = nullptr;
+    int encoded_length = 0;
+    if (!use_plc) {
+        if (packet == nullptr || length <= 0) {
+            return throw_illegal_state(env, "opus packet is required when PLC is disabled");
+        }
+        const jsize packet_size = env->GetArrayLength(packet);
+        if (offset + length > packet_size) {
+            return throw_illegal_state(env, "opus packet range is out of bounds");
+        }
+        encoded.resize(static_cast<size_t>(length));
+        env->GetByteArrayRegion(packet, offset, length, reinterpret_cast<jbyte *>(encoded.data()));
+        if (env->ExceptionCheck()) {
+            return -1;
+        }
+        encoded_ptr = encoded.data();
+        encoded_length = length;
     }
 
     std::vector<opus_int16> decoded(static_cast<size_t>(max_frames * handle->channels));
     const int frames = opus_decode(
         handle->decoder,
-        encoded.data(),
-        length,
+        encoded_ptr,
+        encoded_length,
         decoded.data(),
         max_frames,
         0);

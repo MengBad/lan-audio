@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             supports_modes: true,
             supports_metrics: true,
             supports_opus_future: supports_opus,
+            supports_opus: supports_opus,
             supports_opus_experimental: supports_opus,
             supports_low_latency: true,
             supports_high_quality: true,
@@ -134,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
                         if let Ok(packet) = UdpAudioPacketV2::decode(&buf[..n]) {
                             rx_v2 += 1;
                             match packet.header.codec {
-                                UdpAudioCodecV2::OpusExperimental => rx_opus += 1,
+                                UdpAudioCodecV2::Opus => rx_opus += 1,
                                 UdpAudioCodecV2::Pcm16 => rx_pcm16 += 1,
                                 UdpAudioCodecV2::F32 => {}
                             }

@@ -166,6 +166,7 @@ class StreamSessionManager(
                                 "supports_modes" to true,
                                 "supports_metrics" to true,
                                 "supports_opus_future" to platformOpusDecoderAvailable,
+                                "supports_opus" to supportsVerifiedOpusPlayback,
                                 "supports_opus_experimental" to supportsVerifiedOpusPlayback,
                                 "supports_low_latency" to true,
                                 "supports_high_quality" to true,

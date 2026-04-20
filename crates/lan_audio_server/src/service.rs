@@ -1,5 +1,4 @@
-use std::sync::{Arc, Mutex};
-
+use std::sync::Arc;
 use lan_audio_protocol::AudioMode;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -8,14 +7,15 @@ use uuid::Uuid;
 use crate::config::ServerConfig;
 use crate::discovery::{run_discovery_broadcast, DiscoveryConfig};
 use crate::metrics::{Metrics, MetricsSnapshot};
-use crate::session::SessionServer;
-use crate::transport::UdpTransport;
+use crate::session::{ClientRegistry, SessionServer};
+use crate::transport::BroadcastTransport;
+use crate::usb_transport::{setup_adb_forward, AdbForwardManager};
 
 pub struct LanAudioService {
     cfg: Arc<ServerConfig>,
     metrics: Arc<Metrics>,
-    current_audio_mode: Arc<Mutex<AudioMode>>,
     shutdown_tx: broadcast::Sender<()>,
+    adb_forward_manager: AdbForwardManager,
 }
 
 impl LanAudioService {
@@ -26,13 +26,19 @@ impl LanAudioService {
         metrics.set_capture_source_state("created");
         metrics.set_capture_device_name("n/a");
         metrics.set_capture_format(cfg.sample_rate, cfg.channels as u16);
-        let current_audio_mode = Arc::new(Mutex::new(cfg.current_audio_mode));
         let (shutdown_tx, _) = broadcast::channel(16);
+        let adb_forward_manager = AdbForwardManager::default();
+        if let Some(serial) = cfg.transport_mode.adb_serial() {
+            setup_adb_forward(serial, cfg.ws_bind.port(), cfg.ws_bind.port())?;
+            adb_forward_manager.track_forward(serial.to_string(), cfg.ws_bind.port());
+            setup_adb_forward(serial, cfg.udp_bind.port(), cfg.udp_bind.port())?;
+            adb_forward_manager.track_forward(serial.to_string(), cfg.udp_bind.port());
+        }
         Ok(Self {
             cfg,
             metrics,
-            current_audio_mode,
             shutdown_tx,
+            adb_forward_manager,
         })
     }
 
@@ -41,32 +47,20 @@ impl LanAudioService {
     }
 
     pub fn current_audio_mode(&self) -> AudioMode {
-        *self
-            .current_audio_mode
-            .lock()
-            .expect("current_audio_mode lock")
+        self.cfg.current_audio_mode
     }
 
     pub fn set_current_audio_mode(&self, mode: AudioMode) {
-        *self
-            .current_audio_mode
-            .lock()
-            .expect("current_audio_mode lock") = mode;
+        let _ = mode;
     }
 
     pub async fn run_until_shutdown(&self) -> anyhow::Result<()> {
-        let transport = UdpTransport::new(
-            Arc::clone(&self.cfg),
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.current_audio_mode),
-        )
-        .await?;
-        let session_server = SessionServer::new(
-            Arc::clone(&self.cfg),
-            Arc::clone(&self.metrics),
-            transport,
-            Arc::clone(&self.current_audio_mode),
-        );
+        let registry = ClientRegistry::new(Arc::clone(&self.metrics));
+        let transport =
+            BroadcastTransport::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics), registry.clone())
+                .await?;
+        let session_server =
+            SessionServer::new(Arc::clone(&self.cfg), Arc::clone(&self.metrics), registry);
 
         let discovery_cfg = DiscoveryConfig {
             server_id: Uuid::new_v4(),
@@ -78,11 +72,16 @@ impl LanAudioService {
         };
 
         let mut handles = Vec::new();
-        {
+        if self.cfg.transport_mode.as_str() == "wifi" {
             let rx = self.shutdown_tx.subscribe();
             handles.push(tokio::spawn(async move {
                 run_discovery_broadcast(discovery_cfg, rx).await
             }));
+        }
+        {
+            let transport = transport.clone();
+            let rx = self.shutdown_tx.subscribe();
+            handles.push(tokio::spawn(async move { transport.run(rx).await }));
         }
         {
             let rx = self.shutdown_tx.subscribe();
@@ -151,6 +150,7 @@ impl LanAudioService {
     }
 
     pub fn stop(&self) {
+        let _ = &self.adb_forward_manager;
         let _ = self.shutdown_tx.send(());
     }
 }

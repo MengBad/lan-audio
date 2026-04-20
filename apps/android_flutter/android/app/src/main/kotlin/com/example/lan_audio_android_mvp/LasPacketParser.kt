@@ -25,7 +25,7 @@ data class LasPacket(
 
     val codecLabel: String
         get() = when (codec) {
-            CODEC_OPUS_EXPERIMENTAL -> "opus_experimental"
+            CODEC_OPUS_EXPERIMENTAL -> "opus"
             else -> "pcm16"
         }
 

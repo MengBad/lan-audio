@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -51,6 +52,13 @@ class PlaybackSessionController(
     private var lastLoggedUdpPackets: Int = 0
     private var lastLoggedAudioTrackWriteFrames: Long = 0
     private var currentPacketCodecLabel: String = "pcm16"
+    private var nextPlayoutAtMs: Long = 0
+    private var consecutivePlayoutMisses: Int = 0
+    private var consecutiveEmptyQueueMisses: Int = 0
+    private var consecutivePlayoutHits: Int = 0
+    private var bufferingCandidateSinceMs: Long = 0
+    private var playbackStateStableSinceMs: Long = 0
+    private var lastLatencyGuardAtMs: Long = 0
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -86,6 +94,14 @@ class PlaybackSessionController(
         lastLoggedUdpPackets = 0
         lastLoggedAudioTrackWriteFrames = 0
         currentPacketCodecLabel = "pcm16"
+        nextPlayoutAtMs = 0
+        consecutivePlayoutMisses = 0
+        consecutiveEmptyQueueMisses = 0
+        consecutivePlayoutHits = 0
+        bufferingCandidateSinceMs = 0
+        playbackStateStableSinceMs = SystemClock.elapsedRealtime()
+        lastLatencyGuardAtMs = 0
+        audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
 
         stateStore.update {
             it.copy(
@@ -260,6 +276,7 @@ class PlaybackSessionController(
             "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
         )
         options = next
+        audioTrackController.setQueueSoftCapFrames(msToFrames(next.audioQueueSoftCapMs))
         jitterBuffer = newJitterBuffer(options)
         stateStore.update {
             it.copy(
@@ -415,12 +432,55 @@ class PlaybackSessionController(
     }
 
     private fun playoutTick() {
+        val now = SystemClock.elapsedRealtime()
+        if (playbackStateStableSinceMs == 0L) {
+            playbackStateStableSinceMs = now
+        }
+        if (nextPlayoutAtMs > 0L && now < nextPlayoutAtMs) {
+            maybeLogMetrics()
+            return
+        }
+
         val frame = jitterBuffer.pop()
         val stats = jitterBuffer.stats
         if (frame == null) {
+            consecutivePlayoutHits = 0
+            consecutivePlayoutMisses += 1
+            val audioStats = audioTrackController.stats()
+            val audioQueuedMs = framesToMs(audioStats.nativeQueuedAudioFrames)
+            val totalBufferedMs = jitterBuffer.bufferedMs() + audioQueuedMs
+            val hasQueuedAudio = audioStarted && audioStats.nativeQueuedAudioFrames > 0
+            if (hasQueuedAudio) {
+                consecutiveEmptyQueueMisses = 0
+                bufferingCandidateSinceMs = 0
+            } else {
+                consecutiveEmptyQueueMisses += 1
+                if (bufferingCandidateSinceMs == 0L) {
+                    bufferingCandidateSinceMs = now
+                }
+            }
+            val frameDurationMs = options.frameDurationMs.coerceAtLeast(10)
+            val targetFramesForStateSwitch = ((options.startBufferMs + frameDurationMs - 1) / frameDurationMs)
+                .coerceIn(options.batchFrames.coerceAtLeast(1), 24)
+            val bufferingThreshold = if (options.preferLowLatencyPath) {
+                options.batchFrames.coerceIn(1, 4)
+            } else {
+                targetFramesForStateSwitch
+            }
+            val starvationMs = if (bufferingCandidateSinceMs > 0L) now - bufferingCandidateSinceMs else 0L
+            val bufferingDelayMs = options.bufferingEnterDelayMs.toLong().coerceIn(80L, 1200L)
+            val enterBufferFloorMs = (options.startBufferMs / 2).coerceAtLeast(options.frameDurationMs)
+            val shouldEnterBuffering = consecutiveEmptyQueueMisses >= bufferingThreshold &&
+                starvationMs >= bufferingDelayMs &&
+                totalBufferedMs <= enterBufferFloorMs
             stateStore.update {
+                val nextPlaybackState = stabilizedPlaybackState(
+                    current = it.playbackState,
+                    desired = if (shouldEnterBuffering) "buffering" else it.playbackState,
+                    now = now,
+                )
                 it.copy(
-                    playbackState = "buffering",
+                    playbackState = nextPlaybackState,
                     metrics = it.metrics.copy(
                         bufferedMs = jitterBuffer.bufferedMs(),
                         jitterUnderrun = stats.underrunCount,
@@ -435,6 +495,10 @@ class PlaybackSessionController(
             maybeLogMetrics()
             return
         }
+        consecutivePlayoutMisses = 0
+        consecutiveEmptyQueueMisses = 0
+        bufferingCandidateSinceMs = 0
+        consecutivePlayoutHits += 1
 
         if (!audioInit) {
             Log.i(logTag, "init AudioTrack sr=${frame.sampleRate} ch=${frame.channels}")
@@ -442,23 +506,66 @@ class PlaybackSessionController(
                 sampleRate = frame.sampleRate,
                 channels = frame.channels,
                 frameSamplesPerChannel = frame.frameDurationMs * frame.sampleRate / 1000,
+                preferLowLatency = options.preferLowLatencyPath,
+                encoding = AudioFormat.ENCODING_PCM_16BIT,
             )
+            audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
             audioInit = true
         }
         if (!audioStarted) {
             audioTrackController.start()
             audioStarted = true
         }
-        val writePayload = collectWritePayload(frame)
-        audioTrackController.writePcm16(writePayload)
+        val writeBatch = collectWritePayload(frame)
+        audioTrackController.writePcm16(writeBatch.payload, writeBatch.frames)
+        val writtenFrameCount = writeBatch.frames.coerceAtLeast(1)
+        val frameDurationMs = frame.frameDurationMs.takeIf { it > 0 } ?: 10
         val audioStats = audioTrackController.stats()
+        val audioQueuedMs = framesToMs(audioStats.nativeQueuedAudioFrames)
+        var totalBufferedMs = jitterBuffer.bufferedMs() + audioQueuedMs
+        val latencyGuardCooldownMs = 220L
+        if (totalBufferedMs > options.maxTotalLatencyMs && now - lastLatencyGuardAtMs >= latencyGuardCooldownMs) {
+            val dropMs = (totalBufferedMs - options.targetTotalLatencyMs)
+                .coerceAtLeast(frameDurationMs)
+                .coerceAtMost(frameDurationMs * 3)
+            val dropped = jitterBuffer.dropOldestMs(dropMs)
+            if (dropped > 0) {
+                lastLatencyGuardAtMs = now
+                totalBufferedMs = jitterBuffer.bufferedMs() + audioQueuedMs
+                stateStore.update { it.copy(recentLog = "latency_guard_drop:$dropped") }
+            }
+        }
+        val catchupMs = (totalBufferedMs - options.targetTotalLatencyMs).coerceAtLeast(0)
+        val paceAdjustMs = when {
+            catchupMs >= 120 -> 4
+            catchupMs >= 70 -> 3
+            catchupMs >= 35 -> 2
+            else -> 0
+        }
+        val effectiveIntervalMs = (writtenFrameCount * frameDurationMs - paceAdjustMs)
+            .coerceIn(frameDurationMs, writtenFrameCount * frameDurationMs)
+        nextPlayoutAtMs = now + effectiveIntervalMs.toLong()
+        val resumeThreshold = if (options.preferLowLatencyPath) {
+            1
+        } else {
+            options.batchFrames.coerceIn(2, 4)
+        }
+        val resumeBufferFloorMs = (options.startBufferMs / 2).coerceAtLeast(frameDurationMs)
         stateStore.update {
+            val shouldResumePlaying = it.playbackState != "buffering" ||
+                (consecutivePlayoutHits >= resumeThreshold && totalBufferedMs >= resumeBufferFloorMs)
+            val nextPlaybackState = stabilizedPlaybackState(
+                current = it.playbackState,
+                desired = if (shouldResumePlaying) "playing" else "buffering",
+                now = now,
+            )
             it.copy(
-                playbackState = "playing",
+                playbackState = nextPlaybackState,
                 metrics = it.metrics.copy(
                     sampleRate = frame.sampleRate,
                     channels = frame.channels,
                     bufferedMs = jitterBuffer.bufferedMs(),
+                    audioTrackLatencyMs = audioStats.reportedLatencyMs,
                     jitterUnderrun = stats.underrunCount,
                     jitterDropped = stats.droppedFrames,
                     jitterLate = stats.lateFrames,
@@ -620,6 +727,13 @@ class PlaybackSessionController(
         audioInit = false
         audioStarted = false
         currentPacketCodecLabel = "pcm16"
+        nextPlayoutAtMs = 0
+        consecutivePlayoutMisses = 0
+        consecutiveEmptyQueueMisses = 0
+        consecutivePlayoutHits = 0
+        bufferingCandidateSinceMs = 0
+        playbackStateStableSinceMs = 0
+        lastLatencyGuardAtMs = 0
         jitterBuffer.clear()
     }
 
@@ -712,6 +826,7 @@ class PlaybackSessionController(
         val normalized = PlaybackModeProfiles.normalize(mode)
         val profile = PlaybackModeProfiles.forMode(normalized)
         options = profile.toOptions(options.pingIntervalMs)
+        audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
         val streamActive = streamManager != null
         if (profile.resetBufferOnSwitch && !streamActive) {
             jitterBuffer = newJitterBuffer(options)
@@ -737,28 +852,49 @@ class PlaybackSessionController(
         return PlaybackJitterBuffer(opts.startBufferMs, opts.maxBufferMs, opts.dropThresholdMs)
     }
 
+    private fun msToFrames(ms: Int): Int {
+        val safeFrameMs = options.frameDurationMs.coerceAtLeast(10)
+        return ((ms + safeFrameMs - 1) / safeFrameMs).coerceAtLeast(1)
+    }
+
+    private fun framesToMs(frames: Int): Int {
+        return frames.coerceAtLeast(0) * options.frameDurationMs.coerceAtLeast(10)
+    }
+
+    private fun stabilizedPlaybackState(current: String, desired: String, now: Long): String {
+        if (current == desired) {
+            return current
+        }
+        val minDwellMs = if (options.preferLowLatencyPath) 160L else 280L
+        if (now - playbackStateStableSinceMs < minDwellMs) {
+            return current
+        }
+        playbackStateStableSinceMs = now
+        return desired
+    }
+
     private fun playbackBackendLabel(opts: PlaybackOptions): String {
         return if (opts.preferLowLatencyPath) "audiotrack_fast_path" else "audiotrack_stable"
     }
 
-    private fun collectWritePayload(first: PcmFrame): ByteArray {
-        if (currentPacketCodecLabel == "opus_experimental") {
-            return first.payload
+    private fun collectWritePayload(first: PcmFrame): WriteBatch {
+        if (currentPacketCodecLabel == "opus") {
+            return WriteBatch(first.payload, 1)
         }
         val batchSize = options.batchFrames.coerceIn(1, 4)
         if (batchSize == 1) {
-            return first.payload
+            return WriteBatch(first.payload, 1)
         }
         val chunks = ArrayList<ByteArray>(batchSize)
         chunks.add(first.payload)
         repeat(batchSize - 1) {
-            val next = jitterBuffer.pop() ?: return@repeat
+            val next = jitterBuffer.popContiguousForBatch() ?: return@repeat
             if (next.sampleRate == first.sampleRate && next.channels == first.channels) {
                 chunks.add(next.payload)
             }
         }
         if (chunks.size == 1) {
-            return first.payload
+            return WriteBatch(first.payload, 1)
         }
         val total = chunks.sumOf { it.size }
         val out = ByteArray(total)
@@ -767,7 +903,7 @@ class PlaybackSessionController(
             System.arraycopy(chunk, 0, out, offset, chunk.size)
             offset += chunk.size
         }
-        return out
+        return WriteBatch(out, chunks.size)
     }
 
     private fun maybeLogMetrics(force: Boolean = false, reason: String = "periodic") {
@@ -836,4 +972,9 @@ class PlaybackSessionController(
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
         private const val AUTO_RECONNECT_DELAY_MS = 2000L
     }
+
+    private data class WriteBatch(
+        val payload: ByteArray,
+        val frames: Int,
+    )
 }

@@ -175,9 +175,9 @@ jobs:
 
             First productized release path for the Windows-to-Android LAN audio client.
 
-            - Default path: `legacy_las1 + pcm16`.
-            - Protocol v2: control plane connected; v2 data plane remains explicit gray path.
-            - Opus: `opus_experimental` is available only on explicit V2 header paths.
+            - Recommended path: `windows_loopback + v2_header + opus`.
+            - Protocol v2: recommended desktop path is on `v2_header`; `legacy_las1 + pcm16` remains the rollback path.
+            - Opus: stable on the recommended V2 path, with legacy `opus_experimental` text kept only for compatibility parsing.
             - Android: release APKs are split per ABI and use `versionCode=2101`.
             - Android auto reconnect: abnormal disconnect retries up to 3 times; reopening the app restores the last successful server.
             - Windows: artifact is EXE only, no MSI/NSIS installer bundle.

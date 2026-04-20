@@ -48,23 +48,24 @@
 - [x] 后台恢复增强：保存最近成功播放目标，`START_STICKY + AlarmManager` 在任务移除/服务回收后尝试恢复连接
 - [x] 断线重连语义收敛：WebSocket transient failure 进入 reconnecting，不再先发布致命 error
 - [x] 自动重连边界收敛：连接异常中断后最多自动重连 3 次；重开 App 时尝试恢复上一次成功的推流服务器
-- [x] 自动重连真机验收：`synthetic + v2_header + opus_experimental` 下验证异常断开最多 3 次重连，重开 App 可恢复上次服务器
+- [x] 自动重连真机验收：`synthetic + v2_header + opus` 下验证异常断开最多 3 次重连，重开 App 可恢复上次服务器
 - [x] release 体积收敛：release 构建启用 R8/resource shrink，发布 APK 按 ABI 拆分
 - [x] V2 模式策略接入：`low_latency/balanced/high_quality` 已映射到 start/max buffer、batch、drop threshold、后端偏好
 - [x] Android 产品诊断入口：新增连接帮助折叠区（同网段、AP isolation、扫描/手动地址、USB、后台电池优化）
 - [x] 首次使用提示改为持久化只提示一次（不再因 App 进程重启重复弹出）
 - [ ] 稳定性优化：v26 后台链路实机验收（锁屏/切后台/熄屏连续播放，多机型）
-- [ ] 稳定性优化：多机型 AudioTrack 稳定性与延迟调优（当前已实现基础可播放路径）
+- [ ] 稳定性优化：多机型 AudioTrack 稳定性与延迟调优（本轮已切 Builder + LOW_LATENCY + reported latency 诊断，仍待真机确认 <=40ms）
 - [ ] 稳定性优化：jitter buffer 自适应策略（当前固定起播缓冲）
 - [ ] 稳定性优化：播放线程优先级/抗抖动增强
 
 ## Opus
 
-- [x] 工程可接入状态：协议枚举、capabilities、服务端 `--codec opus_experimental`、桌面实验入口已具备
+- [x] 工程可接入状态：协议枚举、capabilities、服务端 `--codec opus`（兼容旧 `opus_experimental`）、桌面入口已具备
 - [x] 回退策略：当有效数据面不是 `v2_header` 时，Opus 请求仍自动回退 PCM16，不破坏可出声主路径
-- [x] 实验链路：服务端标准 libopus 编码 + Android `libopus` JNI 解码已接入（限制 `v2_header + opus_experimental`）
-- [x] 验收：`synthetic + v2_header + opus_experimental` 真机非零 PCM 与听感验证通过（用户确认测试音可听，且没有卡顿破音）
-- [ ] 稳定性验证：Opus 与 PCM16 的延迟、CPU、丢包恢复对比
+- [x] 稳定链路：服务端标准 libopus 编码 + Android `libopus` JNI 解码已接入（推荐路径 `v2_header + opus`）
+- [x] PLC 回退：Android JNI decode 失败时改走 libopus PLC concealment，不直接 silence
+- [x] 5 分钟压力测试：synthetic + Opus 固定 20ms 帧连续编码通过，`p99 encode ~= 0.509 ms`，channel-full drop rate `0.000000`
+- [ ] 稳定性验证：Opus 与 PCM16 的真机延迟、CPU、丢包恢复对比
 
 ## Protocol Evolution (v2)
 
@@ -73,27 +74,40 @@
 - [x] 控制面联动已接通：`hello/hello_ack + client_info/server_info + set_audio_mode/audio_mode_changed`
 - [x] V2 低延迟产品模型：连接、发送、播放、协议、诊断五类能力已写入 README/roadmap/protocol
 - [x] `AudioModeProfile` 策略系统：协议层 + 服务端 + Android + 桌面端语义一致
-- [x] capabilities 扩展：fast path、stable AudioTrack、USB tethering、USB direct future、Opus experimental
-- [x] 数据面双栈灰度准备：服务端可选 `legacy_las1/v2_header`（默认 legacy）+ 客户端 `LAS1/LAV2` 双栈识别
+- [x] capabilities 扩展：fast path、stable AudioTrack、USB tethering、USB direct future、Opus
+- [x] 数据面双栈准备：服务端可选 `legacy_las1/v2_header`（桌面默认 `v2_header`）+ 客户端 `LAS1/LAV2` 双栈识别
 - [x] config_changed/discontinuity 最小处理：服务端打 flag + 客户端最小重同步
-- [x] loopback + v2_header 显式灰度开关：默认关闭，未带 `--allow-loopback-v2-header-gray` 时自动回退 `legacy_las1`
+- [x] 默认路径切换：desktop 默认改为 `windows_loopback + v2_header + opus`，`legacy_las1 + pcm16` 保留为显式回滚
 - [x] synthetic + v2_header 本地灰度验收（LAV2 识别、模式切换、flags 与重同步联调通过）
 - [x] synthetic + v2_header 真机灰度验收（真实 Android 设备完成播放、模式切换、指标采样，结论：通过）
 - [x] 双端模式状态联动：服务端持有 `current_audio_mode`，Android + Windows 可显示并同步（默认 `balanced`）
-- [x] `windows_loopback + v2_header` 真机小流量灰度已完成（可播，模式切换全序列已跑通，默认路径未切换）
+- [x] `windows_loopback + v2_header` 已晋升为推荐默认路径；安全模式可显式回滚到 `legacy_las1 + pcm16`
 - [ ] 下一阶段：稳定性优化（模式切换后缓冲峰值与 late frame 累积）
 - [ ] 下一阶段：USB tethering 低延迟样本验收（Wi-Fi 与 USB 样本分开记录）
-- [ ] 下一阶段：Opus loopback 灰度与长稳验证（不替代 PCM16 默认主路径）
+- [ ] 下一阶段：Opus loopback 真机长稳验证（默认已切换，发布前仍需补足实测样本）
 - [ ] 灰度启用：双端协商后按连接动态切换到 v2 数据面 header（当前仍以配置开关为主）
 - [ ] 全量启用：默认路径切换到 v2，并保留 v1 回退策略
 
+## v1.2 Phase 1 记录
+
+- 日期：`2026-04-21`
+- 结论：Phase 1 代码路径已完成，推荐默认路径已切到 `windows_loopback + v2_header + opus`
+- 已完成：
+  - Opus 编码固定为 20ms / 960 samples per channel，对齐层已加入
+  - Android Opus decode 失败时走 PLC concealment
+  - `desktop_headless --help`、Tauri UI、README、协议文档已统一到 `opus`
+  - Tauri UI 新增“安全模式”回滚按钮，回滚到 `legacy_las1 + pcm16`
+- 未完成：
+  - Android 真机 `balanced` 延迟 <=40ms 复核
+  - 多机型 / 长时间 / USB 样本补齐
+- 发布判断：暂不发版，继续灰度 / 继续修复
+
 ## loopback + v2_header 小流量灰度结论
 
-- 结论：可播，但暂不稳定
+- 结论：已从灰度提升为推荐路径，回滚路径保留
 - 已到位：
-  - `windows_loopback + v2_header` 仅在显式灰度开关下允许启用
-  - 默认主路径仍是 `legacy_las1`
-  - 可回滚到 `windows_loopback + legacy_las1` 与 `synthetic + v2_header`
+  - 默认推荐路径：`windows_loopback + v2_header + opus`
+  - 可回滚到 `windows_loopback + legacy_las1 + pcm16` 与 `synthetic + v2_header + pcm16`
 - 本轮验收（2026-04-15）：
   - Android 真机连续播放 >2 分钟，`Playback=playing`
   - 模式切换已覆盖：`balanced -> low_latency -> high_quality -> balanced`
@@ -102,7 +116,7 @@
 - 当前风险：
   - 模式切换后 `buffered_ms` 峰值可达 300
   - `dropped_late_frames` 可累积（本轮到 104）
-  - 尚不建议放大全量流量或切默认主路径
+  - 发布前仍需补齐 Android 真机 latency / 多机型样本
 - 额外说明：
   - 本轮日志未出现 `capture source is not started`
   - 回滚路径保持可用：`legacy_las1` / `synthetic + v2_header`

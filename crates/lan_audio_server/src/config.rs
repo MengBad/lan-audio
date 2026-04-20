@@ -39,17 +39,49 @@ pub enum DataPlaneFormat {
     V2Header,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CodecSelection {
     Pcm16,
-    OpusExperimental,
+    Opus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportMode {
+    WiFi,
+    Usb { serial: String },
+}
+
+impl TransportMode {
+    pub fn parse(input: &str, adb_serial: Option<String>) -> Result<Self> {
+        match input {
+            "wifi" => Ok(Self::WiFi),
+            "usb" => Ok(Self::Usb {
+                serial: adb_serial.ok_or_else(|| anyhow!("--transport usb requires --adb-serial"))?,
+            }),
+            other => Err(anyhow!("unsupported transport mode: {other}")),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::WiFi => "wifi",
+            Self::Usb { .. } => "usb",
+        }
+    }
+
+    pub fn adb_serial(&self) -> Option<&str> {
+        match self {
+            Self::WiFi => None,
+            Self::Usb { serial } => Some(serial.as_str()),
+        }
+    }
 }
 
 impl CodecSelection {
     pub fn parse(input: &str) -> Result<Self> {
         match input {
             "pcm16" | "pcm" => Ok(Self::Pcm16),
-            "opus_experimental" | "opus" => Ok(Self::OpusExperimental),
+            "opus" | "opus_experimental" => Ok(Self::Opus),
             other => Err(anyhow!("unsupported codec: {other}")),
         }
     }
@@ -57,21 +89,21 @@ impl CodecSelection {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pcm16 => "pcm16",
-            Self::OpusExperimental => "opus_experimental",
+            Self::Opus => "opus",
         }
     }
 
     pub fn as_protocol_preference(self) -> AudioCodecPreference {
         match self {
             Self::Pcm16 => AudioCodecPreference::Pcm16,
-            Self::OpusExperimental => AudioCodecPreference::OpusExperimental,
+            Self::Opus => AudioCodecPreference::Opus,
         }
     }
 
     pub fn as_udp_codec(self) -> UdpAudioCodecV2 {
         match self {
             Self::Pcm16 => UdpAudioCodecV2::Pcm16,
-            Self::OpusExperimental => UdpAudioCodecV2::OpusExperimental,
+            Self::Opus => UdpAudioCodecV2::Opus,
         }
     }
 }
@@ -115,6 +147,7 @@ pub struct ServerConfig {
     pub codec_selection: CodecSelection,
     pub data_plane_format: DataPlaneFormat,
     pub allow_loopback_v2_header_gray: bool,
+    pub transport_mode: TransportMode,
 }
 
 impl Default for ServerConfig {
@@ -131,7 +164,7 @@ impl Default for ServerConfig {
             channels: 2,
             frames_per_packet: 480,
             packet_interval_ms: 10,
-            audio_source: AudioSourceKind::Synthetic,
+            audio_source: AudioSourceKind::WindowsLoopback,
             audio_source_fallback_to_synthetic: true,
             synthetic_signal: SyntheticSignalKind::Sine,
             synthetic_frequency_hz: 440.0,
@@ -139,9 +172,10 @@ impl Default for ServerConfig {
             capture_debug_dump_seconds: 5,
             capture_debug_dump_dir: "debug_captures".to_string(),
             current_audio_mode: AudioMode::Balanced,
-            codec_selection: CodecSelection::Pcm16,
-            data_plane_format: DataPlaneFormat::LegacyLas1,
+            codec_selection: CodecSelection::Opus,
+            data_plane_format: DataPlaneFormat::V2Header,
             allow_loopback_v2_header_gray: false,
+            transport_mode: TransportMode::WiFi,
         }
     }
 }
@@ -157,9 +191,7 @@ impl ServerConfig {
 
     pub fn effective_codec_selection(&self) -> CodecSelection {
         match (self.codec_selection, self.selected_data_plane_format()) {
-            (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header) => {
-                CodecSelection::OpusExperimental
-            }
+            (CodecSelection::Opus, DataPlaneFormat::V2Header) => CodecSelection::Opus,
             _ => CodecSelection::Pcm16,
         }
     }
@@ -168,6 +200,8 @@ impl ServerConfig {
     where
         I: IntoIterator<Item = String>,
     {
+        let mut transport_mode_name = self.transport_mode.as_str().to_string();
+        let mut adb_serial = self.transport_mode.adb_serial().map(ToOwned::to_owned);
         let mut iter = args.into_iter();
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -240,9 +274,21 @@ impl ServerConfig {
                 "--allow-loopback-v2-header-gray" | "--enable-loopback-v2-header-gray" => {
                     self.allow_loopback_v2_header_gray = true;
                 }
+                "--transport" => {
+                    transport_mode_name = iter
+                        .next()
+                        .ok_or_else(|| anyhow!("missing value for --transport"))?;
+                }
+                "--adb-serial" => {
+                    adb_serial = Some(
+                        iter.next()
+                            .ok_or_else(|| anyhow!("missing value for --adb-serial"))?,
+                    );
+                }
                 _ => {}
             }
         }
+        self.transport_mode = TransportMode::parse(&transport_mode_name, adb_serial)?;
         Ok(())
     }
 }
@@ -250,7 +296,7 @@ impl ServerConfig {
 pub fn select_data_plane_format(
     desired: DataPlaneFormat,
     audio_source: AudioSourceKind,
-    allow_loopback_v2_header_gray: bool,
+    _allow_loopback_v2_header_gray: bool,
 ) -> DataPlaneFormat {
     if desired != DataPlaneFormat::V2Header {
         return desired;
@@ -258,8 +304,7 @@ pub fn select_data_plane_format(
 
     match audio_source {
         AudioSourceKind::Synthetic => desired,
-        AudioSourceKind::WindowsLoopback if allow_loopback_v2_header_gray => desired,
-        AudioSourceKind::WindowsLoopback => DataPlaneFormat::LegacyLas1,
+        AudioSourceKind::WindowsLoopback => desired,
     }
 }
 
@@ -331,44 +376,58 @@ mod tests {
         ));
         assert!(matches!(
             CodecSelection::parse("opus"),
-            Ok(CodecSelection::OpusExperimental)
+            Ok(CodecSelection::Opus)
         ));
         assert!(CodecSelection::parse("bad").is_err());
         assert_eq!(
-            CodecSelection::OpusExperimental.as_protocol_preference(),
-            AudioCodecPreference::OpusExperimental
+            CodecSelection::Opus.as_protocol_preference(),
+            AudioCodecPreference::Opus
         );
     }
 
     #[test]
     fn effective_codec_requires_v2_header() {
         let mut cfg = ServerConfig {
-            codec_selection: CodecSelection::OpusExperimental,
+            codec_selection: CodecSelection::Opus,
             ..ServerConfig::default()
         };
+        cfg.data_plane_format = DataPlaneFormat::LegacyLas1;
         assert_eq!(cfg.effective_codec_selection(), CodecSelection::Pcm16);
 
         cfg.data_plane_format = DataPlaneFormat::V2Header;
         cfg.audio_source = AudioSourceKind::Synthetic;
-        assert_eq!(
-            cfg.effective_codec_selection(),
-            CodecSelection::OpusExperimental
-        );
+        assert_eq!(cfg.effective_codec_selection(), CodecSelection::Opus);
     }
 
     #[test]
-    fn loopback_v2_header_stays_explicit_gray_only() {
+    fn loopback_v2_header_is_recommended_without_gray_flag() {
         let mut cfg = ServerConfig {
             data_plane_format: DataPlaneFormat::V2Header,
             audio_source: AudioSourceKind::WindowsLoopback,
             ..ServerConfig::default()
         };
-        assert_eq!(
-            cfg.selected_data_plane_format(),
-            DataPlaneFormat::LegacyLas1
-        );
+        assert_eq!(cfg.selected_data_plane_format(), DataPlaneFormat::V2Header);
 
         cfg.allow_loopback_v2_header_gray = true;
         assert_eq!(cfg.selected_data_plane_format(), DataPlaneFormat::V2Header);
+    }
+
+    #[test]
+    fn apply_args_parses_usb_transport_mode() {
+        let mut cfg = ServerConfig::default();
+        cfg.apply_args(vec![
+            "--transport".to_string(),
+            "usb".to_string(),
+            "--adb-serial".to_string(),
+            "device-123".to_string(),
+        ])
+        .expect("apply args");
+
+        assert_eq!(
+            cfg.transport_mode,
+            TransportMode::Usb {
+                serial: "device-123".to_string()
+            }
+        );
     }
 }

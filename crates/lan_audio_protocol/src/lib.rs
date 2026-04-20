@@ -27,7 +27,7 @@ pub enum DataPlanePacketKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioMode {
     LowLatency,
@@ -46,7 +46,8 @@ pub enum SampleFormatPreference {
 #[serde(rename_all = "snake_case")]
 pub enum AudioCodecPreference {
     Pcm16,
-    OpusExperimental,
+    #[serde(alias = "opus_experimental")]
+    Opus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,7 +75,7 @@ pub fn audio_mode_profile(mode: AudioMode) -> AudioModeProfile {
             drop_threshold_ms: 140,
             prefer_low_latency_path: true,
             prefer_stable_audio_track: false,
-            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_codec: AudioCodecPreference::Opus,
             preferred_sample_format: SampleFormatPreference::Pcm16,
             frame_duration_ms: 10,
             reset_buffer_on_switch: true,
@@ -87,7 +88,7 @@ pub fn audio_mode_profile(mode: AudioMode) -> AudioModeProfile {
             drop_threshold_ms: 220,
             prefer_low_latency_path: false,
             prefer_stable_audio_track: true,
-            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_codec: AudioCodecPreference::Opus,
             preferred_sample_format: SampleFormatPreference::Pcm16,
             frame_duration_ms: 10,
             reset_buffer_on_switch: true,
@@ -100,7 +101,7 @@ pub fn audio_mode_profile(mode: AudioMode) -> AudioModeProfile {
             drop_threshold_ms: 420,
             prefer_low_latency_path: false,
             prefer_stable_audio_track: true,
-            preferred_codec: AudioCodecPreference::Pcm16,
+            preferred_codec: AudioCodecPreference::Opus,
             preferred_sample_format: SampleFormatPreference::Pcm16,
             frame_duration_ms: 10,
             reset_buffer_on_switch: false,
@@ -128,6 +129,7 @@ pub struct ProtocolCapabilities {
     pub supports_modes: bool,
     pub supports_metrics: bool,
     pub supports_opus_future: bool,
+    pub supports_opus: bool,
     pub supports_opus_experimental: bool,
     pub supports_low_latency: bool,
     pub supports_high_quality: bool,
@@ -204,6 +206,30 @@ pub struct AudioModeChanged {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientListEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub mode: AudioMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientList {
+    pub clients: Vec<ClientListEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientJoined {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientLeft {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackStateKind {
     Idle,
@@ -248,6 +274,9 @@ pub enum ControlMessageV2 {
     HelloAck(HelloAck),
     ServerInfo(ServerInfo),
     ClientInfo(ClientInfo),
+    ClientList(ClientList),
+    ClientJoined(ClientJoined),
+    ClientLeft(ClientLeft),
     SetAudioMode(SetAudioMode),
     AudioModeChanged(AudioModeChanged),
     PlaybackState(PlaybackState),
@@ -312,7 +341,7 @@ pub enum ServerControlMessage {
 pub enum UdpAudioCodecV2 {
     Pcm16 = 1,
     F32 = 2,
-    OpusExperimental = 3,
+    Opus = 3,
 }
 
 impl UdpAudioCodecV2 {
@@ -320,7 +349,7 @@ impl UdpAudioCodecV2 {
         match value {
             1 => Some(Self::Pcm16),
             2 => Some(Self::F32),
-            3 => Some(Self::OpusExperimental),
+            3 => Some(Self::Opus),
             _ => None,
         }
     }
@@ -594,14 +623,13 @@ mod tests {
     }
 
     #[test]
-    fn codec_preference_marks_opus_as_experimental() {
-        let json =
-            serde_json::to_string(&AudioCodecPreference::OpusExperimental).expect("serialize");
-        assert_eq!(json, "\"opus_experimental\"");
-        assert_eq!(
-            UdpAudioCodecV2::from_u8(3),
-            Some(UdpAudioCodecV2::OpusExperimental)
-        );
+    fn codec_preference_marks_opus_as_stable() {
+        let json = serde_json::to_string(&AudioCodecPreference::Opus).expect("serialize");
+        assert_eq!(json, "\"opus\"");
+        let legacy: AudioCodecPreference =
+            serde_json::from_str("\"opus_experimental\"").expect("legacy opus alias");
+        assert_eq!(legacy, AudioCodecPreference::Opus);
+        assert_eq!(UdpAudioCodecV2::from_u8(3), Some(UdpAudioCodecV2::Opus));
     }
 
     #[test]
@@ -612,6 +640,7 @@ mod tests {
             supports_modes: true,
             supports_metrics: true,
             supports_opus_future: true,
+            supports_opus: true,
             supports_opus_experimental: true,
             supports_low_latency: true,
             supports_high_quality: true,
@@ -641,6 +670,7 @@ mod tests {
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: true,
+                supports_opus: false,
                 supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
@@ -674,6 +704,7 @@ mod tests {
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: false,
+                supports_opus: false,
                 supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
@@ -702,6 +733,22 @@ mod tests {
         assert!(json.contains("\"type\":\"set_audio_mode\""));
         let decoded: ControlMessageV2 =
             serde_json::from_str(&json).expect("deserialize set audio mode");
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn v2_control_message_client_list_round_trip() {
+        let msg = ControlMessageV2::ClientList(ClientList {
+            clients: vec![ClientListEntry {
+                id: Uuid::new_v4(),
+                name: "Pixel 8".to_string(),
+                mode: AudioMode::Balanced,
+            }],
+        });
+        let json = serde_json::to_string(&msg).expect("serialize client list");
+        assert!(json.contains("\"type\":\"client_list\""));
+        let decoded: ControlMessageV2 =
+            serde_json::from_str(&json).expect("deserialize client list");
         assert_eq!(decoded, msg);
     }
 
