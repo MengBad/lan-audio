@@ -33,7 +33,8 @@
 4. 判断是否满足发布条件
    - 若满足，按发布流程执行
    - 若不满足，明确停在“继续灰度/继续修复”
-5. 按固定格式汇报
+5. 需要发版时，先通过 `scripts/package_release.ps1` 生成 Android release APK 与 Windows exe
+6. 按固定格式汇报
 
 ## 当前运行与迁移原则
 
@@ -61,6 +62,7 @@
 - `flutter analyze`
 - `flutter test`
 - `android/gradlew.bat assembleDebug`
+- 发版前额外执行：`scripts/package_release.ps1`
 
 命令失败时：
 
@@ -104,8 +106,8 @@
 达到发布条件后，按此顺序执行：
 
 1. 运行 `scripts/validate_local.ps1`
-2. 运行 `scripts/bump_version.ps1`
-3. 运行 `scripts/release.ps1`（提交、打 tag、推送）
+2. 运行 `scripts/package_release.ps1` 做本地 release 产物预检
+3. 运行 `scripts/release.ps1`（内部执行版本递增、release 打包、提交、打 tag、推送）
 4. 检查 GitHub Actions
 5. Actions 通过后创建/发布 Release
 
@@ -126,6 +128,7 @@ Release 说明必须包含：
   - Windows 桌面版本（Cargo / Tauri）
   - Android 版本（pubspec + local.properties）
   - 文档中的当前版本信息
+- Android `versionCode` 采用 `2000 + major * 100 + minor`（例如 `1.1 -> 2101`），避免低于历史测试包导致安装 downgrade。
 
 ## 禁止事项
 

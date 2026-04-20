@@ -30,6 +30,7 @@ class PlaybackSessionController(
         Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
     private var reconnectFuture: ScheduledFuture<*>? = null
+    private var reconnectAttemptCount = 0
     private var streamManager: StreamSessionManager? = null
     private var options = PlaybackModeProfiles.forMode("balanced").toOptions()
     private var jitterBuffer = newJitterBuffer(options)
@@ -49,6 +50,7 @@ class PlaybackSessionController(
     private var lastMetricsLogAtMs: Long = 0
     private var lastLoggedUdpPackets: Int = 0
     private var lastLoggedAudioTrackWriteFrames: Long = 0
+    private var currentPacketCodecLabel: String = "pcm16"
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -63,6 +65,7 @@ class PlaybackSessionController(
         currentTarget = target
         reconnectFuture?.cancel(false)
         reconnectFuture = null
+        reconnectAttemptCount = 0
         stopStreamAndAudio()
         val generation = ++streamGeneration
 
@@ -82,6 +85,7 @@ class PlaybackSessionController(
         lastMetricsLogAtMs = 0
         lastLoggedUdpPackets = 0
         lastLoggedAudioTrackWriteFrames = 0
+        currentPacketCodecLabel = "pcm16"
 
         stateStore.update {
             it.copy(
@@ -127,6 +131,7 @@ class PlaybackSessionController(
                 Log.i(logTag, "ws connected")
                 reconnectFuture?.cancel(false)
                 reconnectFuture = null
+                reconnectAttemptCount = 0
                 stateStore.update {
                     it.copy(
                         connectionState = "connected",
@@ -217,6 +222,7 @@ class PlaybackSessionController(
         Log.i(logTag, "stopPlayback reason=$reason")
         reconnectFuture?.cancel(false)
         reconnectFuture = null
+        reconnectAttemptCount = 0
         stateStore.update {
             it.copy(
                 serviceState = "stopping",
@@ -241,6 +247,10 @@ class PlaybackSessionController(
     fun reconnect(reason: String = "manual_reconnect") {
         Log.i(logTag, "reconnect reason=$reason")
         scheduleReconnect(reason, immediate = true)
+    }
+
+    fun hasActiveTarget(): Boolean {
+        return currentTarget != null
     }
 
     fun setOptions(next: PlaybackOptions) {
@@ -315,6 +325,7 @@ class PlaybackSessionController(
             try {
                 playoutTick()
             } catch (t: Throwable) {
+                Log.e(logTag, "playout tick failed", t)
                 publishError("playout_tick_failed", t.message ?: "playout failed")
             }
         }, 10L, 10L, TimeUnit.MILLISECONDS)
@@ -343,6 +354,7 @@ class PlaybackSessionController(
 
         val wireBytes = packet.payload.size + packet.headerSize
         val playbackPacket = decodePacketForPlayback(packet) ?: return
+        currentPacketCodecLabel = packet.codecLabel
 
         if (lastSeq != null) {
             val expected = ((lastSeq!! + 1L) and 0xFFFFFFFFL).toInt()
@@ -387,7 +399,7 @@ class PlaybackSessionController(
             LasPacket.CODEC_PCM16 -> packet
             LasPacket.CODEC_OPUS_EXPERIMENTAL -> {
                 try {
-                    val pcm = opusDecoder.decode(packet)
+                    val pcm = opusDecoder.decode(packet) ?: return null
                     packet.copy(payload = pcm)
                 } catch (t: Throwable) {
                     Log.e(logTag, "opus decode failed: ${t.message}")
@@ -464,7 +476,34 @@ class PlaybackSessionController(
 
     private fun scheduleReconnect(reason: String, immediate: Boolean = false) {
         val target = currentTarget ?: return
-        Log.w(logTag, "scheduleReconnect reason=$reason immediate=$immediate")
+        if (immediate) {
+            reconnectAttemptCount = 0
+        }
+        if (!immediate && reconnectAttemptCount >= MAX_AUTO_RECONNECT_ATTEMPTS) {
+            Log.w(logTag, "auto reconnect exhausted reason=$reason attempts=$reconnectAttemptCount")
+            reconnectFuture?.cancel(false)
+            reconnectFuture = null
+            stopStreamAndAudio()
+            stateStore.update {
+                it.copy(
+                    serviceState = "running",
+                    connectionState = "disconnected",
+                    playbackState = "stopped",
+                    recentLog = "reconnect_exhausted:$reason",
+                )
+            }
+            return
+        }
+
+        val attemptNumber = if (immediate) 0 else reconnectAttemptCount + 1
+        if (!immediate) {
+            reconnectAttemptCount = attemptNumber
+        }
+        val delayMs = if (immediate) 0L else AUTO_RECONNECT_DELAY_MS
+        Log.w(
+            logTag,
+            "scheduleReconnect reason=$reason immediate=$immediate attempt=$attemptNumber/$MAX_AUTO_RECONNECT_ATTEMPTS delayMs=$delayMs",
+        )
         reconnectFuture?.cancel(false)
         val generation = ++streamGeneration
         reconnectFuture = controlExecutor.schedule({
@@ -476,7 +515,7 @@ class PlaybackSessionController(
                     serviceState = "running",
                     connectionState = "reconnecting",
                     playbackState = "buffering",
-                    recentLog = "reconnect:$reason",
+                    recentLog = if (immediate) "reconnect:$reason" else "reconnect:$attemptNumber/$MAX_AUTO_RECONNECT_ATTEMPTS:$reason",
                 )
             }
             streamManager?.stop()
@@ -497,6 +536,7 @@ class PlaybackSessionController(
                     if (generation != streamGeneration) return
                     reconnectFuture?.cancel(false)
                     reconnectFuture = null
+                    reconnectAttemptCount = 0
                     stateStore.update {
                         it.copy(connectionState = "connected", playbackState = "buffering", recentLog = "ws_reconnected")
                     }
@@ -565,7 +605,7 @@ class PlaybackSessionController(
             })
             streamManager?.start()
             ensurePlayoutLoop()
-        }, if (immediate) 0L else 2000L, TimeUnit.MILLISECONDS)
+        }, delayMs, TimeUnit.MILLISECONDS)
     }
 
     private fun stopStreamAndAudio() {
@@ -579,6 +619,7 @@ class PlaybackSessionController(
         audioTrackController.release()
         audioInit = false
         audioStarted = false
+        currentPacketCodecLabel = "pcm16"
         jitterBuffer.clear()
     }
 
@@ -671,7 +712,8 @@ class PlaybackSessionController(
         val normalized = PlaybackModeProfiles.normalize(mode)
         val profile = PlaybackModeProfiles.forMode(normalized)
         options = profile.toOptions(options.pingIntervalMs)
-        if (profile.resetBufferOnSwitch) {
+        val streamActive = streamManager != null
+        if (profile.resetBufferOnSwitch && !streamActive) {
             jitterBuffer = newJitterBuffer(options)
             audioTrackController.stop()
             audioTrackController.release()
@@ -679,6 +721,11 @@ class PlaybackSessionController(
             audioStarted = false
             opusDecoder.release()
             lastSeq = null
+        } else if (profile.resetBufferOnSwitch) {
+            Log.i(
+                logTag,
+                "defer playback reset to udp discontinuity mode=$normalized reason=$reason",
+            )
         }
         Log.i(
             logTag,
@@ -695,6 +742,9 @@ class PlaybackSessionController(
     }
 
     private fun collectWritePayload(first: PcmFrame): ByteArray {
+        if (currentPacketCodecLabel == "opus_experimental") {
+            return first.payload
+        }
         val batchSize = options.batchFrames.coerceIn(1, 4)
         if (batchSize == 1) {
             return first.payload
@@ -780,5 +830,10 @@ class PlaybackSessionController(
         lastMetricsLogAtMs = now
         lastLoggedUdpPackets = metrics.udpPackets
         lastLoggedAudioTrackWriteFrames = metrics.audioTrackWriteFrames
+    }
+
+    companion object {
+        private const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
+        private const val AUTO_RECONNECT_DELAY_MS = 2000L
     }
 }

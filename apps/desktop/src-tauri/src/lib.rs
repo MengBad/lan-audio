@@ -42,6 +42,8 @@ struct DesktopMetrics {
     current_audio_source: String,
     capture_source_state: String,
     capture_device_name: String,
+    negotiated_data_plane: String,
+    negotiated_codec: String,
     capture_sample_rate: u64,
     capture_channels: u64,
     capture_buffer_frames: u64,
@@ -68,6 +70,8 @@ impl From<MetricsSnapshot> for DesktopMetrics {
             current_audio_source: value.current_audio_source,
             capture_source_state: value.capture_source_state,
             capture_device_name: value.capture_device_name,
+            negotiated_data_plane: value.negotiated_data_plane,
+            negotiated_codec: value.negotiated_codec,
             capture_sample_rate: value.capture_sample_rate,
             capture_channels: value.capture_channels,
             capture_buffer_frames: value.capture_buffer_frames,
@@ -194,8 +198,19 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .unwrap_or(cfg.current_audio_mode);
     let mode_profile = audio_mode_profile(current_audio_mode);
     let selected_data_plane = selected_data_plane_for_desktop_config(&cfg);
-    let gray_mode = selected_data_plane == DataPlaneFormat::V2Header;
-    let effective_codec = effective_codec_for_desktop_config(&cfg);
+    let configured_effective_codec = effective_codec_for_desktop_config(&cfg);
+    let protocol_path = if metrics.active_sessions > 0 && !metrics.negotiated_data_plane.is_empty()
+    {
+        metrics.negotiated_data_plane.clone()
+    } else {
+        selected_data_plane.as_str().to_string()
+    };
+    let gray_mode = protocol_path == DataPlaneFormat::V2Header.as_str();
+    let effective_codec = if metrics.active_sessions > 0 && !metrics.negotiated_codec.is_empty() {
+        metrics.negotiated_codec.clone()
+    } else {
+        configured_effective_codec.as_str().to_string()
+    };
 
     let local_ip = detect_local_ip();
     let connected_devices = metrics.active_sessions;
@@ -231,10 +246,10 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         error_message: last_error,
         audio_source: cfg.audio_source.as_str().to_string(),
         data_plane_format: cfg.data_plane_format.as_str().to_string(),
-        protocol_path: selected_data_plane.as_str().to_string(),
+        protocol_path,
         gray_mode,
         codec_selection: cfg.codec_selection.as_str().to_string(),
-        effective_codec: effective_codec.as_str().to_string(),
+        effective_codec,
         recommended_connection: recommended_connection(&cfg).to_string(),
         loopback_v2_header_gray_enabled: cfg.allow_loopback_v2_header_gray,
         fallback_to_synthetic: cfg.fallback_to_synthetic,
@@ -503,6 +518,8 @@ fn empty_metrics(audio_source: &str) -> DesktopMetrics {
         current_audio_source: audio_source.to_string(),
         capture_source_state: "idle".to_string(),
         capture_device_name: "n/a".to_string(),
+        negotiated_data_plane: String::new(),
+        negotiated_codec: String::new(),
         capture_sample_rate: 0,
         capture_channels: 0,
         capture_buffer_frames: 0,

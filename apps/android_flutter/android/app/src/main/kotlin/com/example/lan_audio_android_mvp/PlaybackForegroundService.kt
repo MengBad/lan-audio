@@ -4,10 +4,12 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -25,6 +27,9 @@ class PlaybackForegroundService : MediaSessionService() {
     private var foregroundStarted = false
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var explicitStopRequested = false
+    private var lastNotificationAtMs = 0L
+    private var lastNotificationKey = ""
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
         updateNotification(snapshot)
@@ -65,6 +70,8 @@ class PlaybackForegroundService : MediaSessionService() {
                         )
                     }
                 } else {
+                    explicitStopRequested = false
+                    persistTarget(host, wsPort, udpPort, serverName)
                     acquirePlaybackLocks()
                     Log.i(logTag, "startPlayback target=$serverName host=$host ws=$wsPort udp=$udpPort")
                     sessionController.startPlayback(
@@ -80,6 +87,8 @@ class PlaybackForegroundService : MediaSessionService() {
 
             PlaybackActions.ACTION_STOP -> {
                 Log.i(logTag, "stopPlayback from notification/service command")
+                explicitStopRequested = true
+                clearPersistedTarget()
                 sessionController.stopPlayback("notification_stop")
                 releasePlaybackLocks()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -88,8 +97,27 @@ class PlaybackForegroundService : MediaSessionService() {
 
             PlaybackActions.ACTION_RECONNECT -> {
                 acquirePlaybackLocks()
-                Log.i(logTag, "manual reconnect requested")
-                sessionController.reconnect("notification_reconnect")
+                val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "notification_reconnect"
+                Log.i(logTag, "manual reconnect requested reason=$reason")
+                if (sessionController.hasActiveTarget()) {
+                    sessionController.reconnect(reason)
+                } else {
+                    restorePersistedPlayback(reason)
+                }
+            }
+
+            PlaybackActions.ACTION_RESTORE_LAST -> {
+                val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "app_open_restore"
+                val snapshot = stateStore.current()
+                if (sessionController.hasActiveTarget() && snapshot.connectionState != "connected") {
+                    Log.i(logTag, "restore last reconnects active target reason=$reason state=${snapshot.connectionState}")
+                    sessionController.reconnect(reason)
+                } else if (sessionController.hasActiveTarget()) {
+                    Log.i(logTag, "restore last ignored: active target already exists reason=$reason")
+                } else {
+                    Log.i(logTag, "restore last requested reason=$reason")
+                    restorePersistedPlayback(reason)
+                }
             }
 
             PlaybackActions.ACTION_SET_OPTIONS -> {
@@ -115,6 +143,13 @@ class PlaybackForegroundService : MediaSessionService() {
                 val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "adb_request"
                 sessionController.dumpMetrics(reason)
             }
+
+            else -> {
+                if (intent == null) {
+                    Log.w(logTag, "sticky restart with null intent; trying persisted target")
+                    restorePersistedPlayback("sticky_restart")
+                }
+            }
         }
         return START_STICKY
     }
@@ -130,6 +165,9 @@ class PlaybackForegroundService : MediaSessionService() {
             "onDestroy serviceState=${snapshot.serviceState} connectionState=${snapshot.connectionState} playbackState=${snapshot.playbackState}"
         )
         stateStore.removeListener(storeListener)
+        if (!explicitStopRequested && shouldRestoreAfterDestroy(snapshot)) {
+            schedulePlaybackRestore("service_destroyed")
+        }
         sessionController.destroy()
         releasePlaybackLocks()
         mediaSession?.release()
@@ -140,7 +178,27 @@ class PlaybackForegroundService : MediaSessionService() {
     }
 
     private fun updateNotification(snapshot: PlaybackSnapshot) {
+        val now = SystemClock.elapsedRealtime()
+        val notificationKey = listOf(
+            snapshot.serviceState,
+            snapshot.connectionState,
+            snapshot.playbackState,
+            snapshot.targetHost ?: "",
+            snapshot.targetName ?: "",
+            snapshot.currentAudioMode,
+            snapshot.protocolPath,
+            snapshot.effectiveCodec,
+        ).joinToString("|")
+        if (foregroundStarted &&
+            notificationKey == lastNotificationKey &&
+            now - lastNotificationAtMs < NOTIFICATION_UPDATE_MIN_INTERVAL_MS
+        ) {
+            return
+        }
+
         val notification = buildNotification(snapshot)
+        lastNotificationAtMs = now
+        lastNotificationKey = notificationKey
         if (!foregroundStarted) {
             Log.i(
                 logTag,
@@ -160,6 +218,9 @@ class PlaybackForegroundService : MediaSessionService() {
             logTag,
             "onTaskRemoved foregroundStarted=$foregroundStarted serviceState=${snapshot.serviceState} connectionState=${snapshot.connectionState} playbackState=${snapshot.playbackState}"
         )
+        if (shouldRestoreAfterDestroy(snapshot)) {
+            schedulePlaybackRestore("task_removed")
+        }
         super.onTaskRemoved(rootIntent)
     }
 
@@ -267,9 +328,100 @@ class PlaybackForegroundService : MediaSessionService() {
         Log.i(logTag, "playback locks released")
     }
 
+    private fun persistTarget(host: String, wsPort: Int, udpPort: Int, serverName: String) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_HOST, host)
+            .putInt(KEY_WS_PORT, wsPort)
+            .putInt(KEY_UDP_PORT, udpPort)
+            .putString(KEY_SERVER_NAME, serverName)
+            .putBoolean(KEY_AUTO_RESTORE, true)
+            .apply()
+    }
+
+    private fun clearPersistedTarget() {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .apply()
+    }
+
+    private fun restorePersistedPlayback(reason: String): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_AUTO_RESTORE, false)) {
+            Log.w(logTag, "restore skipped: auto restore disabled reason=$reason")
+            return false
+        }
+        val host = prefs.getString(KEY_HOST, null).orEmpty()
+        if (host.isBlank()) {
+            Log.w(logTag, "restore skipped: missing persisted host reason=$reason")
+            return false
+        }
+        explicitStopRequested = false
+        acquirePlaybackLocks()
+        val target = PlaybackTarget(
+            host = host,
+            wsPort = prefs.getInt(KEY_WS_PORT, 39991),
+            udpPort = prefs.getInt(KEY_UDP_PORT, 39992),
+            serverName = prefs.getString(KEY_SERVER_NAME, null) ?: "manual:$host",
+        )
+        Log.i(logTag, "restore persisted playback reason=$reason target=${target.serverName} host=${target.host}")
+        sessionController.startPlayback(target)
+        return true
+    }
+
+    private fun shouldRestoreAfterDestroy(snapshot: PlaybackSnapshot): Boolean {
+        if (explicitStopRequested) {
+            return false
+        }
+        if (!hasPersistedTarget()) {
+            return false
+        }
+        return snapshot.serviceState == "running" ||
+            snapshot.connectionState == "connected" ||
+            snapshot.connectionState == "connecting" ||
+            snapshot.connectionState == "reconnecting" ||
+            snapshot.playbackState == "playing" ||
+            snapshot.playbackState == "buffering"
+    }
+
+    private fun hasPersistedTarget(): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_AUTO_RESTORE, false) && !prefs.getString(KEY_HOST, null).isNullOrBlank()
+    }
+
+    private fun schedulePlaybackRestore(reason: String) {
+        try {
+            val intent = Intent(this, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_RECONNECT)
+                .putExtra(PlaybackActions.EXTRA_REASON, "auto_restore:$reason")
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(this, RESTORE_REQUEST_CODE, intent, flags)
+            } else {
+                PendingIntent.getService(this, RESTORE_REQUEST_CODE, intent, flags)
+            }
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val triggerAt = SystemClock.elapsedRealtime() + RESTORE_DELAY_MS
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pendingIntent)
+            Log.w(logTag, "scheduled playback restore reason=$reason delayMs=$RESTORE_DELAY_MS")
+        } catch (t: Throwable) {
+            Log.e(logTag, "schedule playback restore failed reason=$reason error=${t.message}")
+        }
+    }
+
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "lan_audio_playback"
         private const val NOTIFICATION_ID = 2591
+        private const val NOTIFICATION_UPDATE_MIN_INTERVAL_MS = 1000L
+        private const val RESTORE_REQUEST_CODE = 2592
+        private const val RESTORE_DELAY_MS = 2500L
+        private const val PREFS_NAME = "lan_audio_playback_restore"
+        private const val KEY_HOST = "host"
+        private const val KEY_WS_PORT = "ws_port"
+        private const val KEY_UDP_PORT = "udp_port"
+        private const val KEY_SERVER_NAME = "server_name"
+        private const val KEY_AUTO_RESTORE = "auto_restore"
 
         fun startPlayback(context: Context, target: PlaybackTarget) {
             val intent = Intent(context, PlaybackForegroundService::class.java)
@@ -295,6 +447,17 @@ class PlaybackForegroundService : MediaSessionService() {
             val intent = Intent(context, PlaybackForegroundService::class.java)
                 .setAction(PlaybackActions.ACTION_RECONNECT)
             context.startService(intent)
+        }
+
+        fun restoreLastPlayback(context: Context, reason: String = "app_open_restore") {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_RESTORE_LAST)
+                .putExtra(PlaybackActions.EXTRA_REASON, reason)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun setOptions(context: Context, options: PlaybackOptions) {

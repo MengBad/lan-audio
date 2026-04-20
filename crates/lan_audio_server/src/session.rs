@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::config::ServerConfig;
+use crate::config::{CodecSelection, DataPlaneFormat, ServerConfig};
 use crate::metrics::Metrics;
 use crate::transport::UdpTransport;
 
@@ -99,43 +99,55 @@ impl SessionServer {
 
         let mut current_audio_mode = self.read_current_audio_mode();
         let session_id = Uuid::new_v4();
-        let (client_name, udp_port, desired_sample_rate, channels, v2_session, client_id) =
-            match parse_session_hello(&hello_text)? {
-                SessionHello::Legacy {
-                    client_name,
-                    udp_port,
-                    desired_sample_rate,
-                    channels,
-                } => (
-                    client_name,
-                    udp_port,
-                    desired_sample_rate,
-                    channels,
-                    false,
-                    "legacy-client".to_string(),
-                ),
-                SessionHello::V2(hello) => {
-                    info!(
-                        session = %session_id,
-                        client_id = %hello.client_id,
-                        device_name = %hello.device_name,
-                        protocol_version = hello.protocol_version,
-                        preferred_audio_mode = ?hello.preferred_audio_mode,
-                        capabilities = ?hello.capabilities,
-                        "protocol v2 hello received"
-                    );
-                    (
-                        hello.device_name,
-                        hello.udp_port,
-                        hello.desired_sample_rate,
-                        hello.channels,
-                        true,
-                        hello.client_id,
-                    )
-                }
-            };
-        let selected_data_plane = self.cfg.selected_data_plane_format();
-        let effective_codec = self.cfg.effective_codec_selection();
+        let (
+            client_name,
+            udp_port,
+            desired_sample_rate,
+            channels,
+            v2_session,
+            client_id,
+            client_capabilities,
+        ) = match parse_session_hello(&hello_text)? {
+            SessionHello::Legacy {
+                client_name,
+                udp_port,
+                desired_sample_rate,
+                channels,
+            } => (
+                client_name,
+                udp_port,
+                desired_sample_rate,
+                channels,
+                false,
+                "legacy-client".to_string(),
+                legacy_client_capabilities(),
+            ),
+            SessionHello::V2(hello) => {
+                info!(
+                    session = %session_id,
+                    client_id = %hello.client_id,
+                    device_name = %hello.device_name,
+                    protocol_version = hello.protocol_version,
+                    preferred_audio_mode = ?hello.preferred_audio_mode,
+                    capabilities = ?hello.capabilities,
+                    "protocol v2 hello received"
+                );
+                (
+                    hello.device_name,
+                    hello.udp_port,
+                    hello.desired_sample_rate,
+                    hello.channels,
+                    true,
+                    hello.client_id,
+                    hello.capabilities,
+                )
+            }
+        };
+        let negotiated_path = negotiate_session_path(&self.cfg, v2_session, &client_capabilities);
+        let selected_data_plane = negotiated_path.data_plane;
+        let effective_codec = negotiated_path.codec;
+        self.metrics
+            .set_negotiated_session_path(selected_data_plane.as_str(), effective_codec.as_str());
 
         if v2_session {
             let hello_ack = ControlMessageV2::HelloAck(HelloAck {
@@ -175,12 +187,23 @@ impl SessionServer {
         self.metrics
             .note_client_connected(&client_name, &peer.ip().to_string());
         self.metrics.inc_sessions();
+        if self.cfg.data_plane_format != selected_data_plane {
+            warn!(
+                session = %session_id,
+                requested_data_plane = %self.cfg.data_plane_format.as_str(),
+                negotiated_data_plane = %selected_data_plane.as_str(),
+                v2_session,
+                "requested data plane is not active for this session; using negotiated data plane"
+            );
+        }
         if self.cfg.codec_selection != effective_codec {
             warn!(
+                session = %session_id,
                 requested_codec = %self.cfg.codec_selection.as_str(),
                 effective_codec = %effective_codec.as_str(),
                 selected_data_plane = %selected_data_plane.as_str(),
-                "requested codec is not active on this data plane; using effective codec"
+                client_supports_opus_experimental = client_capabilities.supports_opus_experimental,
+                "requested codec is not active for this session; using negotiated codec"
             );
         }
 
@@ -206,7 +229,13 @@ impl SessionServer {
 
         let stream_task = match self
             .transport
-            .spawn_stream(session_id, target, shutdown.resubscribe())
+            .spawn_stream(
+                session_id,
+                target,
+                selected_data_plane,
+                effective_codec,
+                shutdown.resubscribe(),
+            )
             .await
         {
             Ok(handle) => handle,
@@ -388,6 +417,55 @@ fn resolve_ip(ip: IpAddr) -> IpAddr {
     ip
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NegotiatedSessionPath {
+    data_plane: DataPlaneFormat,
+    codec: CodecSelection,
+}
+
+fn negotiate_session_path(
+    cfg: &ServerConfig,
+    v2_session: bool,
+    client_capabilities: &ProtocolCapabilities,
+) -> NegotiatedSessionPath {
+    if !v2_session {
+        return NegotiatedSessionPath {
+            data_plane: DataPlaneFormat::LegacyLas1,
+            codec: CodecSelection::Pcm16,
+        };
+    }
+
+    let data_plane = cfg.selected_data_plane_format();
+    let codec = match (cfg.codec_selection, data_plane) {
+        (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header)
+            if client_capabilities.supports_opus_experimental =>
+        {
+            CodecSelection::OpusExperimental
+        }
+        _ => CodecSelection::Pcm16,
+    };
+
+    NegotiatedSessionPath { data_plane, codec }
+}
+
+fn legacy_client_capabilities() -> ProtocolCapabilities {
+    ProtocolCapabilities {
+        supports_pcm16: true,
+        supports_f32: false,
+        supports_modes: false,
+        supports_metrics: false,
+        supports_opus_future: false,
+        supports_opus_experimental: false,
+        supports_low_latency: false,
+        supports_high_quality: false,
+        supports_native_audio_track: false,
+        supports_fast_path: false,
+        supports_stable_audio_track: false,
+        supports_usb_tethering: false,
+        supports_usb_direct_future: false,
+    }
+}
+
 #[derive(Debug)]
 enum SessionHello {
     Legacy {
@@ -449,6 +527,7 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AudioSourceKind;
     use lan_audio_protocol::{AudioMode, ControlMessageV2, Hello, PROTOCOL_VERSION_V2};
 
     #[test]
@@ -519,5 +598,68 @@ mod tests {
         let json = serde_json::to_string(&msg).expect("serialize");
         let err = parse_session_hello(&json).expect_err("must reject unsupported version");
         assert!(err.to_string().contains("unsupported protocol version"));
+    }
+
+    #[test]
+    fn negotiate_session_path_forces_legacy_clients_to_safe_pcm_v1() {
+        let cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            codec_selection: CodecSelection::OpusExperimental,
+            audio_source: AudioSourceKind::Synthetic,
+            ..ServerConfig::default()
+        };
+
+        let negotiated = negotiate_session_path(&cfg, false, &default_server_capabilities());
+
+        assert_eq!(negotiated.data_plane, DataPlaneFormat::LegacyLas1);
+        assert_eq!(negotiated.codec, CodecSelection::Pcm16);
+    }
+
+    #[test]
+    fn negotiate_session_path_falls_back_without_client_opus_capability() {
+        let cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            codec_selection: CodecSelection::OpusExperimental,
+            audio_source: AudioSourceKind::Synthetic,
+            ..ServerConfig::default()
+        };
+        let mut caps = default_server_capabilities();
+        caps.supports_opus_experimental = false;
+
+        let negotiated = negotiate_session_path(&cfg, true, &caps);
+
+        assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
+        assert_eq!(negotiated.codec, CodecSelection::Pcm16);
+    }
+
+    #[test]
+    fn negotiate_session_path_allows_opus_only_when_v2_and_client_supports_it() {
+        let cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            codec_selection: CodecSelection::OpusExperimental,
+            audio_source: AudioSourceKind::Synthetic,
+            ..ServerConfig::default()
+        };
+
+        let negotiated = negotiate_session_path(&cfg, true, &default_server_capabilities());
+
+        assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
+        assert_eq!(negotiated.codec, CodecSelection::OpusExperimental);
+    }
+
+    #[test]
+    fn negotiate_session_path_keeps_loopback_v2_behind_explicit_gray_flag() {
+        let cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            codec_selection: CodecSelection::OpusExperimental,
+            audio_source: AudioSourceKind::WindowsLoopback,
+            allow_loopback_v2_header_gray: false,
+            ..ServerConfig::default()
+        };
+
+        let negotiated = negotiate_session_path(&cfg, true, &default_server_capabilities());
+
+        assert_eq!(negotiated.data_plane, DataPlaneFormat::LegacyLas1);
+        assert_eq!(negotiated.codec, CodecSelection::Pcm16);
     }
 }

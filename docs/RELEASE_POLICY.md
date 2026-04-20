@@ -1,14 +1,15 @@
-﻿# Release Policy
+# Release Policy
 
 ## 当前版本
 
-- 当前版本（短版本）：`1.0`
+- 当前版本（短版本）：`1.1`
 - 版本唯一来源：仓库根目录 `VERSION`
 
 说明：
 
 - `VERSION` 使用 `major.minor`（如 `1.0`、`1.1`）。
 - 需要写入需要语义化版本号的工程文件时，映射为 `major.minor.0`（如 `1.1.0`）。
+- Android `versionCode` 使用 `2000 + major * 100 + minor`，例如 `1.1 -> 2101`。该规则用于兼容早期真机测试包 `2100`，避免正式 APK 被系统判定为 downgrade。
 
 ## 发布前提
 
@@ -64,15 +65,26 @@
 1. 检查 Git 工作区状态（默认不允许脏工作区）
 2. 执行本地验证（默认执行）
 3. 执行版本递增并同步
-4. 生成 release commit（`chore(release): vX.Y`）
-5. 创建 tag（`vX.Y`）
-6. 推送分支与 tag
-7. 由 GitHub Actions 完成 CI 与 Release 工作流
+4. 执行 `scripts/package_release.ps1` 生成本地 release 产物
+5. 生成 release commit（`chore(release): vX.Y`）
+6. 创建 tag（`vX.Y`）
+7. 推送分支与 tag
+8. 由 GitHub Actions 完成 CI 与 Release 工作流
+
+本地打包入口：`scripts/package_release.ps1`
+
+默认产物：
+
+- Android：`dist/release/android/`，按 ABI 拆分的 release APK，用于降低单包体积
+- Windows：`dist/release/windows/lan-audio-desktop-<version>.exe`
+- 校验：`dist/release/SHA256SUMS.txt`
 
 ## GitHub Actions 策略
 
 - `ci.yml`：统一 CI（Rust + Flutter + Android）
-- `release.yml`：基于 tag（`v*`）创建 GitHub Release 草稿
+- `build-android.yml`：构建 debug APK 与 split-per-ABI release APK
+- `build-windows-client.yml`：只构建 Windows release exe，不再构建 MSI/NSIS
+- `release.yml`：基于 tag（`v*`）构建 release APK / Windows exe，并创建 GitHub Release 草稿
 
 发布原则：
 

@@ -1,81 +1,53 @@
 # Project Roadmap
 
-当前主路径说明：
+当前默认运行主路径仍是 `legacy_las1 + pcm16`。Protocol v2 的定位是低延迟音频传输产品升级，而不是为了替换协议而替换协议。
 
-- 默认运行主路径仍是 PCM + legacy `LAS1`，这是当前安全回滚路径。
-- Protocol v2 已从协议骨架推进为低延迟产品升级骨架：控制面联动已接通，数据面具备 `LAS1/LAV2` 双栈灰度，默认仍不全量切换。
-- V2 的产品目标是低延迟、可诊断、可回滚、可扩展，而不是为了升级而升级。
+V2 必须同时满足：
 
-## V2 产品能力模型
+- 低延迟：围绕更低端到端延迟设计模式、buffer、codec 与连接路径。
+- 可诊断：用户和开发者能看到协议路径、codec、模式、连接方式与关键健康指标。
+- 可回滚：`legacy_las1 + pcm16`、`synthetic + v2_header + pcm16`、显式灰度开关必须长期可用。
+- 可扩展：为 Opus、USB、智能模式、多设备与后续 microphone backhaul 保留清晰落点。
 
-### 连接能力
+## 1. 播放稳定性
 
-- 已完成：UDP 自动发现、手动地址、局域网扫描、最近连接/快速连接。
-- 已有骨架：Android/桌面端可展示连接路径与协议路径。
-- 尚未启用：USB direct。
-- 后续扩展：USB tethering 低延迟推荐路径、USB direct 探测、发现失败时更明确的连接帮助。
+- 已完成：Android/Windows 真机可连接并出声，主路径达到可用级别。
+- 已完成：Android 后台播放服务、AudioTrack 写入、jitter buffer、关键播放指标。
+- 已完成：`synthetic + v2_header` 真机播放与模式切换验收通过。
+- 已完成：`windows_loopback + v2_header` 小流量真机灰度可播，但暂不稳定。
+- 尚未完成：多机型长稳验证、锁屏/后台长稳、时钟漂移与自适应 jitter。
 
-### 发送能力
+## 2. 延迟优化
 
-- 已完成：`synthetic` 稳定基线、`windows_loopback` 系统音频采集。
-- 已有骨架：loopback + v2 header 显式灰度开关。
-- 尚未启用：microphone backhaul。
-- 后续扩展：手机麦克风回传、loopback + v2 长稳压测、采集侧动态缓冲。
+- 已完成：基础 jitter buffer 与播放调度修复。
+- 已有骨架：`low_latency / balanced / high_quality` 三档策略已映射到 start buffer、max buffer、batch、drop threshold、播放后端偏好与 codec 偏好。
+- 尚未完成：自动低延迟自适应、USB tethering 延迟样本、loopback + v2 长尾抖动收敛。
 
-### 播放能力
+## 3. 多策略模式
 
-- 已完成：Android 后台播放服务、AudioTrack 写入、jitter buffer、基础追帧。
-- 已有骨架：三档模式对应 start buffer、max buffer、batch、drop threshold、后端偏好。
-- 尚未启用：设备级后端自动选择。
-- 后续扩展：fast path 探测、高质量后端回退策略、智能自适应缓冲。
+- 已完成：Protocol v2 控制面同步 `current_audio_mode`。
+- 已完成：Rust / Android / Windows 桌面端均有一致的 `AudioModeProfile` 语义。
+- 尚未完成：设备级播放后端自动选择、不同 Android 机型的 fast path / stable AudioTrack 回退策略。
 
-### 协议能力
+## 4. Protocol v2 演进
 
-- 已完成：Protocol v2 控制面联动、capabilities、mode 同步、`config_changed/discontinuity`。
-- 已有骨架：数据面 `LAV2` header、codec 枚举、Opus 实验入口。
-- 已有实验链路：服务端 `opus-rs` 编码、Android `MediaCodec audio/opus` 解码、桌面 V2 Opus 选择入口。
-- 尚未启用：Opus 默认路径、v2 数据面默认主路径。
-- 后续扩展：v1/v2 双栈灰度扩大、Opus synthetic/loopback 真机验收。
+- 已完成：Protocol v2 草案、Rust v2 结构体、UDP v2 header、控制面 `hello/hello_ack`、mode 同步、capabilities。
+- 已完成：数据面 `LAS1/LAV2` 双栈识别，默认仍为 `legacy_las1`。
+- 已完成：`config_changed/discontinuity` 最小真实处理。
+- 已完成：按会话 capability 协商 `data_plane + codec`，不支持 Opus 的客户端自动回退 PCM16。
+- 已完成：Opus 实验链路已使用标准 libopus 服务端编码 + Android libopus/JNI 解码，`synthetic + v2_header + opus_experimental` 真机非零 PCM 验收通过。
+- 尚未完成：Opus 听感确认、Opus loopback 灰度、Opus 长稳/CPU/丢包恢复对比。
+- 尚未启用：v2 数据面默认主路径、Opus 默认 codec。
 
-### 诊断能力
+## 5. 产品化 UI 与桌面端交付
 
-- 已完成：Android 播放指标、桌面折叠 metrics/log、连接地址复制。
-- 已有骨架：连接帮助入口、网络/后台问题文档化。
-- 尚未启用：自动诊断报告。
-- 后续扩展：同网段检查、AP isolation 提示、USB 推荐、后台电池优化检查。
+- 已完成：Windows Tauri 桌面客户端可启动/停止服务，展示状态、连接、模式、协议路径、codec 与折叠调试信息。
+- 已完成：Android 首页和设置中已有连接、播放、发现、最近连接、多语言与诊断入口。
+- 已有路线：USB tethering 作为低延迟推荐连接方式，USB direct 作为未来能力。
+- 尚未完成：发布包签名、自动诊断报告、USB 连接体验闭环、多设备会话 UI。
 
-## 1) 播放稳定性
+## 当前发布判断
 
-- 已完成：Android/Windows 真机可连接并出声（可用）。
-- 已有骨架：后台播放服务（Media3）与关键诊断指标。
-- 尚未启用：多机型长稳结论。
-- 后续扩展：后台锁屏长时稳定性、抗抖策略强化、不同 Android 厂商策略验证。
-
-## 2) 延迟优化
-
-- 已完成：基础 jitter buffer 与若干播放调度修复。
-- 已有骨架：三档模式参数矩阵与 Android 播放策略入口。
-- 尚未启用：自动低延迟自适应。
-- 后续扩展：低延迟路径探测、USB tethering 低延迟验收、loopback + v2 长尾抖动收敛。
-
-## 3) 多策略模式
-
-- 已完成：`low_latency / balanced / high_quality` 控制面同步。
-- 已有骨架：`AudioModeProfile` 将模式映射到 start/max buffer、batch、drop threshold、codec/sample format/frame duration 偏好。
-- 尚未启用：完整设备后端选择与自动回退。
-- 后续扩展：智能自适应、设备能力记忆、模式切换体验提示。
-
-## 4) 协议演进（Protocol v2）
-
-- 已完成：v2 协议草案、Rust v2 结构体、UDP v2 header 编解码、session 协商入口。
-- 已有骨架：Opus experimental、USB capabilities、数据面双栈。
-- 已有实验链路：Opus 在 `v2_header` 下可显式启用，但尚未稳定验收。
-- 尚未启用：默认 UDP 运行流量切到 v2 header；Opus 作为默认或稳定 codec。
-- 后续扩展：先扩大 synthetic/loopback 灰度，再做默认路径切换。
-
-## 5) 产品化 UI / 桌面端交付
-
-- 已完成：Windows Tauri 可执行客户端、单主按钮控制台 UI。
-- 已有骨架：桌面与 Android 端显示模式、协议路径、播放后端、灰度状态、推荐连接方式。
-- 尚未启用：完整安装器发布与自动诊断报告。
-- 后续扩展：连接二维码、防火墙引导、USB 帮助、会话详情、发布包签名。
+- 默认主路径：`legacy_las1 + pcm16`。
+- 可灰度路径：`synthetic + v2_header + pcm16`、`synthetic + v2_header + opus_experimental`、显式开关下的 `windows_loopback + v2_header`。
+- 当前不建议切默认：`v2_header` 和 `opus_experimental` 都还需要更多真机长稳与 loopback 验收。

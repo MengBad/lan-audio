@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
+    let supports_opus = parse_supports_opus_from_args(&args);
     let target = parse_target_from_args(&args);
     let (server_host, ws_port) = if let Some(target) = target {
         println!("using direct target {}:{}", target.host, target.ws_port);
@@ -54,8 +55,8 @@ async fn main() -> anyhow::Result<()> {
             supports_f32: false,
             supports_modes: true,
             supports_metrics: true,
-            supports_opus_future: false,
-            supports_opus_experimental: false,
+            supports_opus_future: supports_opus,
+            supports_opus_experimental: supports_opus,
             supports_low_latency: true,
             supports_high_quality: true,
             supports_native_audio_track: true,
@@ -246,6 +247,10 @@ fn parse_target_from_args(args: &[String]) -> Option<DirectTarget> {
         idx += 1;
     }
     host.map(|h| DirectTarget { host: h, ws_port })
+}
+
+fn parse_supports_opus_from_args(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--supports-opus")
 }
 
 async fn wait_for_beacon() -> anyhow::Result<(DiscoveryBeacon, SocketAddr)> {

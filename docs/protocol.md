@@ -281,8 +281,8 @@ V2 的产品原则：
 - 连接建立时双向声明 capabilities。
 - 运行时策略应取双方能力交集。
 - 不支持的能力不应强制启用。
-- `supports_opus_experimental=true` 表示该端具备 Opus 实验链路能力；仍不代表当前已可稳定使用 Opus。
-- Android 端会根据系统 `MediaCodec audio/opus` 是否可用动态声明 Opus capability。
+- `supports_opus_experimental=true` 表示该端具备 Opus 实验链路能力；仍不代表当前已可稳定替代 PCM16。
+- Android 端会根据 `libopus` JNI 是否可用动态声明 Opus capability。
 - `supports_usb_tethering=true` 表示产品层推荐 USB tethering 作为低延迟连接路径；`supports_usb_direct_future` 仅为后续 USB direct 预留。
 
 ## 8. 模式策略承载结构
@@ -335,7 +335,7 @@ V2 的产品原则：
 
 ### 9.2 Protocol v2 当前状态
 
-- 状态：**部分启用（控制面联动已接通，数据面双栈灰度可用，低延迟策略系统已落骨架，Opus 实验链路已接线）**。
+- 状态：**部分启用（控制面联动已接通，数据面双栈灰度可用，低延迟策略系统已落骨架，Opus 实验链路已完成 synthetic 真机听感验收）**。
 - 已接入：
   - v2 结构体与消息定义
   - `hello/hello_ack` 运行时协商（协议版本 + capabilities）
@@ -366,10 +366,11 @@ V2 的产品原则：
 - 配置入口：服务端提供 `--codec opus_experimental`，桌面端提供实验 codec 选择。
 - 当前行为：
   - 默认仍发送 PCM16。
-  - 当有效数据面为 `v2_header` 且 codec 选择为 `opus_experimental` 时，服务端使用 `opus-rs` 编码，数据面 header 写入 `codec=3`。
-  - Android 后台播放链路识别 `codec=3` 后，使用系统 `MediaCodec audio/opus` 解码为 PCM16，再进入现有 jitter buffer / AudioTrack。
+  - 当有效数据面为 `v2_header` 且 codec 选择为 `opus_experimental` 时，服务端使用标准 libopus 编码，数据面 header 写入 `codec=3`。
+  - Android 后台播放链路识别 `codec=3` 后，使用 `libopus` JNI 解码为 PCM16，再进入现有 jitter buffer / AudioTrack。
   - 当数据面回退到 `legacy_las1` 时，effective codec 必须回退 `pcm16`。
-- 下一步：先限制在 `synthetic + v2_header + opus_experimental` 做本地与真机验收，再评估 loopback。
+- 当前验收：`synthetic + v2_header + opus_experimental` 已完成真机非零 PCM 与听感验收，用户确认测试音可听且没有卡顿破音。
+- 下一步：继续限制为显式实验路径，再评估 loopback + Opus。
 
 ## 9.5 USB 连接策略
 
@@ -385,7 +386,7 @@ V2 的产品原则：
 - 约束保持不变：
   - `loopback + v2_header` 仍非默认，且仅允许在显式灰度开关下启用
   - 未切 `v2_header` 为默认主路径
-  - Opus 已有实验编码/解码接线，但未完成本轮 synthetic 真机验收
+  - Opus 已有实验编码/解码接线，且已完成 synthetic 真机非零 PCM 与听感验收
 - 验收配置：
   - 服务端：`synthetic + --data-plane v2_header`
   - 真机：Android `5391d451 / Xiaomi 24129PN74C`
@@ -453,12 +454,22 @@ V2 的产品原则：
 - 发送/接收预留：
   - 服务端可按配置发送 `legacy_las1` / `v2_header`（默认 `legacy_las1`）。
   - Android/Flutter 接收侧均可识别 `LAS1/LAV2` 双栈头。
-  - 服务端 `opus_experimental` 编码与 Android `MediaCodec audio/opus` 解码已接入受控实验路径。
+  - 服务端标准 libopus `opus_experimental` 编码与 Android `libopus` JNI 解码已接入受控实验路径。
   - `config_changed/discontinuity` 已有最小处理：接收侧执行 jitter/audio track 重同步。
 - 模式策略：
   - `AudioModeProfile` 已在 Rust/Android/桌面端形成一致语义。
   - Android jitter buffer 已按 mode profile 调整 start/max buffer、batch 和 drop threshold。
-- 尚未启用：默认数据面仍发送 legacy `LAS1`；Opus 尚未完成真机稳定性验收且不作为默认；USB direct 未实现；loopback + v2_header 仍需显式灰度开关，暂不放大流量。
+- 尚未启用：默认数据面仍发送 legacy `LAS1`；Opus 已完成 synthetic 真机听感验收但尚未完成 long-run/loopback 稳定性验收且不作为默认；USB direct 未实现；loopback + v2_header 仍需显式灰度开关，暂不放大流量。
+
+## 13. Opus synthetic 真机听感验收结论
+
+- 结论：**synthetic + v2_header + opus_experimental 真机听感验收通过，仍需长稳确认。**
+- 日期：2026-04-20（Asia/Shanghai）
+- 配置：`synthetic + --data-plane v2_header --codec opus_experimental`
+- 真机：`5391d451 / Xiaomi 24129PN74C`
+- 客观指标：`Playback=playing`，`pcmPeak≈6539~8731`，`pcmRms≈0.138~0.155`，`rx_frames_per_sec≈99~101`，`audio_track_write_frames_per_sec≈96~101`。
+- 主观听感：用户已确认听到测试音，且没有卡顿、破音。
+- 默认策略：不切默认，仍保持 `legacy_las1 + pcm16`；Opus 继续作为显式实验路径。
 
 ### 12.1 灰度验收记录（2026-04-14）
 

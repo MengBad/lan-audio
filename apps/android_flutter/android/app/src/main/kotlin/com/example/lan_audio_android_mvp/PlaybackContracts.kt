@@ -4,6 +4,7 @@ object PlaybackActions {
     const val ACTION_START = "lan_audio.action.START"
     const val ACTION_STOP = "lan_audio.action.STOP"
     const val ACTION_RECONNECT = "lan_audio.action.RECONNECT"
+    const val ACTION_RESTORE_LAST = "lan_audio.action.RESTORE_LAST"
     const val ACTION_SET_OPTIONS = "lan_audio.action.SET_OPTIONS"
     const val ACTION_SET_AUDIO_MODE = "lan_audio.action.SET_AUDIO_MODE"
     const val ACTION_DUMP_METRICS = "lan_audio.action.DUMP_METRICS"

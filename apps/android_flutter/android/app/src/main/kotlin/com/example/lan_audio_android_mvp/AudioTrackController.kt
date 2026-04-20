@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
@@ -14,6 +15,9 @@ data class AudioTrackStats(
     val nativeQueuedFrames: Int,
     val audioTrackWriteFrames: Long,
     val audioTrackShortWriteCount: Long,
+    val lastPcmPeak: Int = 0,
+    val lastPcmRms: Double = 0.0,
+    val lastPlayState: Int = AudioTrack.PLAYSTATE_STOPPED,
 )
 
 class AudioTrackController {
@@ -30,6 +34,15 @@ class AudioTrackController {
 
     @Volatile
     private var shortWriteCount: Long = 0
+
+    @Volatile
+    private var lastPcmPeak: Int = 0
+
+    @Volatile
+    private var lastPcmRms: Double = 0.0
+
+    @Volatile
+    private var lastWriterSummaryAtMs: Long = 0
 
     private var writerThread: Thread? = null
     @Volatile
@@ -82,6 +95,7 @@ class AudioTrackController {
         }
 
         audioTrack = track
+        track.setVolume(AudioTrack.getMaxVolume())
         startWriter()
     }
 
@@ -122,6 +136,9 @@ class AudioTrackController {
             nativeQueuedFrames = writeQueue?.size ?: 0,
             audioTrackWriteFrames = writeFrames,
             audioTrackShortWriteCount = shortWriteCount,
+            lastPcmPeak = lastPcmPeak,
+            lastPcmRms = lastPcmRms,
+            lastPlayState = audioTrack?.playState ?: AudioTrack.PLAYSTATE_STOPPED,
         )
     }
 
@@ -177,12 +194,37 @@ class AudioTrackController {
     }
 
     private fun writeFully(track: AudioTrack, data: ByteArray) {
+        updatePcmLevel(data)
         var offset = 0
         var shortWrite = false
+        var zeroWriteRetries = 0
         while (offset < data.size) {
             val wrote = track.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
-            if (wrote <= 0) {
-                throw IllegalStateException("AudioTrack.write failed: $wrote")
+            if (wrote < 0) {
+                shortWriteCount += 1
+                Log.w(logTag, "AudioTrack.write returned error=$wrote; drop current frame")
+                return
+            }
+            if (wrote == 0) {
+                shortWrite = true
+                zeroWriteRetries += 1
+                if (!writerRunning || track.playState == AudioTrack.PLAYSTATE_STOPPED) {
+                    Log.w(logTag, "AudioTrack.write returned 0 while stopping; drop current frame")
+                    return
+                }
+                if (zeroWriteRetries >= 3) {
+                    shortWriteCount += 1
+                    Log.w(logTag, "AudioTrack.write returned 0 repeatedly; drop current frame")
+                    return
+                }
+                try {
+                    Thread.sleep(2)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    Log.i(logTag, "AudioTrack.write retry interrupted; drop current frame")
+                    return
+                }
+                continue
             }
             if (wrote < data.size - offset) {
                 shortWrite = true
@@ -196,5 +238,47 @@ class AudioTrackController {
         val perFrame = frameBytesPerPacket.coerceAtLeast(1)
         val framesInWrite = (data.size / perFrame).coerceAtLeast(1)
         writeFrames += framesInWrite.toLong()
+        maybeLogWriterSummary(track)
+    }
+
+    private fun updatePcmLevel(data: ByteArray) {
+        if (data.size < 2) {
+            lastPcmPeak = 0
+            lastPcmRms = 0.0
+            return
+        }
+
+        var peak = 0
+        var sumSquares = 0.0
+        var samples = 0
+        var index = 0
+        while (index + 1 < data.size) {
+            val lo = data[index].toInt() and 0xFF
+            val hi = data[index + 1].toInt()
+            val sample = (hi shl 8) or lo
+            val abs = kotlin.math.abs(sample)
+            if (abs > peak) {
+                peak = abs
+            }
+            val normalized = sample / 32768.0
+            sumSquares += normalized * normalized
+            samples += 1
+            index += 2
+        }
+        lastPcmPeak = peak
+        lastPcmRms = if (samples == 0) 0.0 else kotlin.math.sqrt(sumSquares / samples)
+    }
+
+    private fun maybeLogWriterSummary(track: AudioTrack) {
+        val now = SystemClock.elapsedRealtime()
+        val elapsed = now - lastWriterSummaryAtMs
+        if (lastWriterSummaryAtMs != 0L && elapsed < 1000L) {
+            return
+        }
+        lastWriterSummaryAtMs = now
+        Log.i(
+            logTag,
+            "audio_writer_summary playState=${track.playState} queue=${writeQueue?.size ?: 0} writeFrames=$writeFrames shortWrites=$shortWriteCount pcmPeak=$lastPcmPeak pcmRms=$lastPcmRms",
+        )
     }
 }

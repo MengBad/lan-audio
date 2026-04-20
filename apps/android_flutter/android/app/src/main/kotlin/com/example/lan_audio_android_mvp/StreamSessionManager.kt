@@ -146,7 +146,10 @@ class StreamSessionManager(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(logTag, "ws open")
                     val localUdpPort = udpSocket?.localPort ?: 0
-                    val opusAvailable = OpusFrameDecoder.isAvailable()
+                    val platformOpusDecoderAvailable = OpusFrameDecoder.isAvailable()
+                    // Opus remains opt-in and experimental, but can be negotiated whenever
+                    // the bundled libopus/JNI decoder is available. PCM16 remains default.
+                    val supportsVerifiedOpusPlayback = platformOpusDecoderAvailable
                     val hello = JSONObject(
                         mapOf(
                             "type" to "hello",
@@ -162,8 +165,8 @@ class StreamSessionManager(
                                 "supports_f32" to false,
                                 "supports_modes" to true,
                                 "supports_metrics" to true,
-                                "supports_opus_future" to opusAvailable,
-                                "supports_opus_experimental" to opusAvailable,
+                                "supports_opus_future" to platformOpusDecoderAvailable,
+                                "supports_opus_experimental" to supportsVerifiedOpusPlayback,
                                 "supports_low_latency" to true,
                                 "supports_high_quality" to true,
                                 "supports_native_audio_track" to true,
@@ -262,7 +265,9 @@ class StreamSessionManager(
                         return
                     }
                     Log.e(logTag, "ws failure: ${t.message}")
-                    callback.onError("ws_failure", t.message ?: "ws failure")
+                    wsReady = false
+                    callback.onLog("ws_failure:${t.message ?: "unknown"}")
+                    callback.onWsDisconnected("ws_failure")
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -297,7 +302,8 @@ class StreamSessionManager(
                 webSocket?.send(ping.toString())
             } catch (t: Throwable) {
                 Log.e(logTag, "ws ping failed: ${t.message}")
-                callback.onError("ws_ping_failed", t.message ?: "ping failed")
+                wsReady = false
+                callback.onWsDisconnected("ws_ping_failed")
             }
         }, 1000L, pingIntervalMs.toLong().coerceAtLeast(250L), TimeUnit.MILLISECONDS)
     }

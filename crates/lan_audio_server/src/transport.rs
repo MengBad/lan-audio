@@ -9,7 +9,10 @@ use lan_audio_protocol::{
     UDP_AUDIO_HEADER_V2_LEN, UDP_AUDIO_MAGIC_V2, UDP_FLAG_V2_CONFIG_CHANGED,
     UDP_FLAG_V2_DISCONTINUITY, UDP_FLAG_V2_SILENCE,
 };
-use opus_rs::{Application, OpusEncoder};
+use opus::{
+    Application as LibOpusApplication, Bitrate as LibOpusBitrate, Channels as LibOpusChannels,
+    Encoder as LibOpusEncoder,
+};
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, trace, warn};
@@ -223,6 +226,8 @@ impl UdpTransport {
         &self,
         session_id: Uuid,
         target: SocketAddr,
+        selected_data_plane: DataPlaneFormat,
+        effective_codec: CodecSelection,
         mut shutdown: broadcast::Receiver<()>,
     ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
         let (mut source, source_name) = self.build_capture_source()?;
@@ -254,25 +259,14 @@ impl UdpTransport {
         let configured_source = self.cfg.audio_source.as_str();
         let configured_source_name = configured_source.to_string();
         let desired_data_plane = self.cfg.data_plane_format;
-        let selected_data_plane = select_data_plane_format(
-            desired_data_plane,
-            self.cfg.audio_source,
-            self.cfg.allow_loopback_v2_header_gray,
-        );
         let requested_codec = self.cfg.codec_selection;
-        let effective_codec = match (requested_codec, selected_data_plane) {
-            (CodecSelection::OpusExperimental, DataPlaneFormat::V2Header) => {
-                CodecSelection::OpusExperimental
-            }
-            _ => CodecSelection::Pcm16,
-        };
         if requested_codec == CodecSelection::OpusExperimental
             && effective_codec == CodecSelection::Pcm16
         {
             warn!(
                 requested_codec = %requested_codec.as_str(),
                 selected_data_plane = %selected_data_plane.as_str(),
-                "opus experimental requires v2_header; falling back to pcm16"
+                "opus experimental was not negotiated for this session; falling back to pcm16"
             );
         }
         let current_audio_mode = Arc::clone(&self.current_audio_mode);
@@ -757,14 +751,15 @@ impl AudioFrameEncoder {
 }
 
 struct ExperimentalOpusEncoder {
-    inner: OpusEncoder,
+    inner: LibOpusEncoder,
     mode: AudioMode,
 }
 
 impl ExperimentalOpusEncoder {
     fn new(mode: AudioMode) -> anyhow::Result<Self> {
-        let mut inner = OpusEncoder::new(48_000, 2, Application::Audio)
-            .map_err(|err| anyhow!("opus init: {err}"))?;
+        let mut inner =
+            LibOpusEncoder::new(48_000, LibOpusChannels::Stereo, opus_application(mode))
+                .map_err(|err| anyhow!("opus init: {err}"))?;
         apply_opus_mode_settings(&mut inner, mode);
         Ok(Self { inner, mode })
     }
@@ -783,10 +778,11 @@ impl ExperimentalOpusEncoder {
             self.mode = mode;
         }
 
+        let pcm16 = samples_to_i16(samples);
         let mut payload = vec![0_u8; 4000];
         let encoded_len = self
             .inner
-            .encode(samples, 480, &mut payload)
+            .encode(&pcm16, &mut payload)
             .map_err(|err| anyhow!("opus encode: {err}"))?;
         payload.truncate(encoded_len);
 
@@ -804,17 +800,47 @@ impl ExperimentalOpusEncoder {
     }
 }
 
-fn apply_opus_mode_settings(encoder: &mut OpusEncoder, mode: AudioMode) {
-    let (bitrate_bps, complexity, use_cbr) = match mode {
-        AudioMode::LowLatency => (64_000, 1, true),
-        AudioMode::Balanced => (96_000, 2, false),
-        AudioMode::HighQuality => (128_000, 4, false),
+fn apply_opus_mode_settings(encoder: &mut LibOpusEncoder, mode: AudioMode) {
+    let (bitrate_bps, complexity, use_vbr) = match mode {
+        AudioMode::LowLatency => (64_000, 1, false),
+        AudioMode::Balanced => (96_000, 2, true),
+        AudioMode::HighQuality => (128_000, 4, true),
     };
-    encoder.bitrate_bps = bitrate_bps;
-    encoder.complexity = complexity;
-    encoder.use_cbr = use_cbr;
-    encoder.use_inband_fec = false;
-    encoder.packet_loss_perc = 0;
+    if let Err(err) = encoder.set_application(opus_application(mode)) {
+        warn!(error = %err, mode = ?mode, "opus set application failed");
+    }
+    if let Err(err) = encoder.set_bitrate(LibOpusBitrate::Bits(bitrate_bps)) {
+        warn!(error = %err, mode = ?mode, "opus set bitrate failed");
+    }
+    if let Err(err) = encoder.set_complexity(complexity) {
+        warn!(error = %err, mode = ?mode, "opus set complexity failed");
+    }
+    if let Err(err) = encoder.set_vbr(use_vbr) {
+        warn!(error = %err, mode = ?mode, "opus set vbr failed");
+    }
+    if let Err(err) = encoder.set_inband_fec(false) {
+        warn!(error = %err, mode = ?mode, "opus disable inband fec failed");
+    }
+    if let Err(err) = encoder.set_packet_loss_perc(0) {
+        warn!(error = %err, mode = ?mode, "opus set packet loss failed");
+    }
+    if let Err(err) = encoder.set_dtx(false) {
+        warn!(error = %err, mode = ?mode, "opus disable dtx failed");
+    }
+}
+
+fn opus_application(mode: AudioMode) -> LibOpusApplication {
+    match mode {
+        AudioMode::LowLatency => LibOpusApplication::LowDelay,
+        AudioMode::Balanced | AudioMode::HighQuality => LibOpusApplication::Audio,
+    }
+}
+
+fn samples_to_i16(samples: &[f32]) -> Vec<i16> {
+    samples
+        .iter()
+        .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect()
 }
 
 #[cfg(test)]
@@ -914,6 +940,7 @@ fn encode_packet_by_data_plane(
     }
 }
 
+#[cfg(test)]
 fn select_data_plane_format(
     desired: DataPlaneFormat,
     audio_source: AudioSourceKind,
@@ -1036,6 +1063,50 @@ mod tests {
         assert_eq!(encoded.frames_per_packet, 480);
         assert!(!encoded.payload.is_empty());
         assert!(encoded.payload.len() < 1920);
+    }
+
+    #[test]
+    fn opus_experimental_roundtrip_decodes_non_silent_pcm() {
+        let frame = AudioFrame {
+            pts_ms: 123,
+            format: AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                frame_duration_ms: 10,
+            },
+            samples_f32: (0..960)
+                .map(|i| {
+                    let phase = (i as f32 / 2.0) * 440.0 * std::f32::consts::TAU / 48_000.0;
+                    phase.sin() * 0.2
+                })
+                .collect(),
+            is_silence: false,
+            packet_kind: PacketKind::Synthetic,
+            peak: 0.2,
+            rms: 0.14,
+            source_buffer_frames: None,
+        };
+        let mut encoder =
+            AudioFrameEncoder::new(CodecSelection::OpusExperimental, AudioMode::Balanced);
+        let encoded = encoder.encode(frame, AudioMode::Balanced);
+        let mut decoder =
+            opus::Decoder::new(48_000, LibOpusChannels::Stereo).expect("standard opus decoder");
+        let mut out = vec![0_i16; 960];
+
+        let decoded = decoder
+            .decode(&encoded.payload, &mut out, false)
+            .expect("standard opus decode");
+        let peak = out
+            .iter()
+            .take(decoded * 2)
+            .fold(0_i16, |acc, sample| acc.max(sample.abs()));
+
+        assert_eq!(decoded, 480);
+        assert!(
+            peak > 300,
+            "opus roundtrip decoded near-silence peak={peak}"
+        );
     }
 
     #[test]

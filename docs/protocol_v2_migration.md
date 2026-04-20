@@ -25,7 +25,7 @@
 4. 播放策略落地
    - 让 `AudioModeProfile` 驱动 start buffer、max buffer、batch、drop threshold 和后端偏好。
 5. Codec 实验
-   - `opus_experimental` 已接入真实编码/解码实验路径；先做 synthetic + v2_header 验收，再评估 loopback。
+   - `opus_experimental` 已接入真实编码/解码实验路径；synthetic + v2_header 真机听感已通过，下一步评估 loopback。
 6. 连接路径优化
    - USB tethering 作为低延迟推荐路径进入验收矩阵，USB direct 仅保留 future capability。
 7. 默认路径切换
@@ -51,8 +51,9 @@
   - `high_quality`: 120/500ms buffer、batch=3、drop_threshold=420ms、优先平滑与稳定后端。
 - Opus 已进入工程可接入状态：
   - 协议枚举、capabilities、服务端 `--codec opus_experimental`、桌面实验入口已具备。
-  - 服务端已在有效 `v2_header` 下使用 `opus-rs` 编码并写入 `LAV2 codec=3`。
-  - Android 后台播放链路已通过系统 `MediaCodec audio/opus` 解码后复用现有 PCM jitter buffer / AudioTrack。
+  - 服务端已在有效 `v2_header` 下使用标准 libopus 编码并写入 `LAV2 codec=3`。
+  - Android 后台播放链路已通过 `libopus` JNI 解码后复用现有 PCM jitter buffer / AudioTrack。
+  - `synthetic + v2_header + opus_experimental` 已完成真机非零 PCM 与听感验收；用户确认测试音可听且没有卡顿破音。
   - 当数据面回退到 `legacy_las1` 时，effective codec 仍会回退 PCM16。
 - USB 已进入 V2 路线：
   - 当前推荐 USB tethering 作为低延迟连接方式。
@@ -67,6 +68,17 @@
   - 灰度保护：`windows_loopback + v2_header` 仅在显式开关 `--allow-loopback-v2-header-gray` 下启用；默认自动回落 `legacy_las1`。
 - 数据面默认仍为 legacy `LAS1`（未切 UDP v2 默认发送格式）。
 - 默认 codec 仍为 PCM16；Opus 仅作为 `v2_header` 下的显式实验链路。
+
+## Opus synthetic 真机听感验收结论
+
+- 结论：**synthetic + v2_header + opus_experimental 真机听感验收通过，仍需长稳确认。**
+- 日期：2026-04-20（Asia/Shanghai）
+- 配置：`synthetic + --data-plane v2_header --codec opus_experimental`
+- 真机：`5391d451 / Xiaomi 24129PN74C`
+- 客观指标：`Playback=playing`，`pcmPeak≈6539~8731`，`pcmRms≈0.138~0.155`，`rx_frames_per_sec≈99~101`，`audio_track_write_frames_per_sec≈96~101`。
+- 主观听感：用户已确认听到测试音，且没有卡顿、破音。
+- 回滚路径：`legacy_las1 + pcm16` 与 `synthetic + v2_header + pcm16` 仍保留。
+- 下一阶段：只进入受控 `loopback + v2_header + opus_experimental` 灰度，不切默认。
 
 ## 本轮验收结论（2026-04-14）
 
@@ -124,6 +136,6 @@
 - 当前 V2 可继续进入下一阶段，但不满足正式 Release 条件。
 - 原因：
   - `loopback + v2_header` 仍暂不稳定。
-  - Opus 只有本地编译与结构测试，尚未完成 synthetic + v2_header + opus_experimental 真机验收。
+  - Opus 已完成 synthetic 真机听感验收，但尚未完成 loopback + Opus 与长稳验收。
   - USB tethering 尚未做本项目真机验收。
   - 本轮未要求手机真机验证，新增低延迟策略只基于本地验证与代码审查。

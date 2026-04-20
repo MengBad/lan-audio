@@ -1,0 +1,6 @@
+[env]
+# libopus crates may build the bundled C library with newer CMake releases.
+# CMake 4 removed implicit compatibility with very old cmake_minimum_required()
+# values used by upstream libopus source packages, so keep the minimum policy
+# explicit for reproducible local and CI builds.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

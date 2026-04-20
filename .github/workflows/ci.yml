@@ -13,6 +13,7 @@ on:
       - 'scripts/**'
       - 'README.md'
       - 'docs/**'
+      - '.cargo/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - 'scripts/**'
       - 'README.md'
       - 'docs/**'
+      - '.cargo/**'
       - '.github/workflows/ci.yml'
 
 jobs:
@@ -91,6 +93,15 @@ jobs:
       - name: flutter pub get
         working-directory: apps/android_flutter
         run: flutter pub get
+      - name: Prepare Android local.properties
+        working-directory: apps/android_flutter
+        run: |
+          SHORT_VERSION="$(cat ../../VERSION)"
+          MAJOR="${SHORT_VERSION%%.*}"
+          MINOR="${SHORT_VERSION##*.}"
+          VERSION_CODE=$((2000 + MAJOR * 100 + MINOR))
+          printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=debug\nflutter.versionName=%s\nflutter.versionCode=%s\n' \
+            "$ANDROID_HOME" "$FLUTTER_ROOT" "$SHORT_VERSION" "$VERSION_CODE" > android/local.properties
       - name: Make Gradle wrapper executable
         working-directory: apps/android_flutter/android
         run: chmod +x ./gradlew

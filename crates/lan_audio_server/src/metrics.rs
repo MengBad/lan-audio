@@ -23,6 +23,8 @@ pub struct Metrics {
     current_audio_source: RwLock<String>,
     capture_source_state: RwLock<String>,
     capture_device_name: RwLock<String>,
+    negotiated_data_plane: RwLock<String>,
+    negotiated_codec: RwLock<String>,
     recent_clients: RwLock<Vec<String>>,
 }
 
@@ -42,6 +44,8 @@ pub struct MetricsSnapshot {
     pub current_audio_source: String,
     pub capture_source_state: String,
     pub capture_device_name: String,
+    pub negotiated_data_plane: String,
+    pub negotiated_codec: String,
     pub capture_sample_rate: u64,
     pub capture_channels: u64,
     pub capture_buffer_frames: u64,
@@ -121,6 +125,19 @@ impl Metrics {
         }
     }
 
+    pub fn set_negotiated_session_path(
+        &self,
+        data_plane: impl Into<String>,
+        codec: impl Into<String>,
+    ) {
+        if let Ok(mut lock) = self.negotiated_data_plane.write() {
+            *lock = data_plane.into();
+        }
+        if let Ok(mut lock) = self.negotiated_codec.write() {
+            *lock = codec.into();
+        }
+    }
+
     pub fn set_capture_format(&self, sample_rate: u32, channels: u16) {
         self.capture_sample_rate
             .store(sample_rate as u64, Ordering::Relaxed);
@@ -181,6 +198,16 @@ impl Metrics {
             .read()
             .map(|s| s.clone())
             .unwrap_or_else(|_| "unknown".to_string());
+        let negotiated_data_plane = self
+            .negotiated_data_plane
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+        let negotiated_codec = self
+            .negotiated_codec
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_default();
         let capture_last_peak = self.capture_last_peak.read().map(|v| *v).unwrap_or(0.0);
         let capture_last_rms = self.capture_last_rms.read().map(|v| *v).unwrap_or(0.0);
         let recent_clients = self
@@ -204,6 +231,8 @@ impl Metrics {
             current_audio_source,
             capture_source_state,
             capture_device_name,
+            negotiated_data_plane,
+            negotiated_codec,
             capture_sample_rate: self.capture_sample_rate.load(Ordering::Relaxed),
             capture_channels: self.capture_channels.load(Ordering::Relaxed),
             capture_buffer_frames: self.capture_buffer_frames.load(Ordering::Relaxed),
@@ -225,6 +254,7 @@ mod tests {
         m.set_current_audio_source("synthetic");
         m.set_capture_source_state("started");
         m.set_capture_device_name("device-id");
+        m.set_negotiated_session_path("v2_header", "opus_experimental");
         m.set_capture_format(48_000, 2);
         m.set_capture_buffer_frames(960);
         m.set_capture_level(0.8, 0.2);
@@ -256,6 +286,8 @@ mod tests {
         assert_eq!(s.current_audio_source, "synthetic");
         assert_eq!(s.capture_source_state, "started");
         assert_eq!(s.capture_device_name, "device-id");
+        assert_eq!(s.negotiated_data_plane, "v2_header");
+        assert_eq!(s.negotiated_codec, "opus_experimental");
         assert_eq!(s.capture_sample_rate, 48_000);
         assert_eq!(s.capture_channels, 2);
         assert_eq!(s.capture_buffer_frames, 960);

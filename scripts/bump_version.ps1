@@ -100,6 +100,7 @@ function Update-DocVersionMarker {
     $bt = [char]96
     $replacement = "- 当前版本（短版本）：$bt$ShortVersion$bt"
     $newRaw = [regex]::Replace($raw, '(?m)^- 当前版本（短版本）：`[^`]+`$', $replacement)
+    $newRaw = [regex]::Replace($newRaw, '(?m)^Current version: `[^`]+`$', "Current version: $bt$ShortVersion$bt")
     if ($newRaw -ne $raw) {
         Write-Utf8NoBom -Path $Path -Content $newRaw
     }
@@ -119,7 +120,7 @@ if ([string]::IsNullOrWhiteSpace($currentShort)) {
 $targetShort = if ($Version) { $Version.Trim() } else { Get-NextShortVersion -Current $currentShort }
 $parsed = Parse-ShortVersion -InputVersion $targetShort
 $semver = "{0}.{1}.0" -f $parsed.Major, $parsed.Minor
-$androidCode = ($parsed.Major * 100) + $parsed.Minor
+$androidCode = 2000 + ($parsed.Major * 100) + $parsed.Minor
 
 Write-Host "Bumping version: $currentShort -> $targetShort" -ForegroundColor Cyan
 

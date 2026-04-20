@@ -1,15 +1,16 @@
-# TODO / Stub Tracking
+﻿# TODO / Stub Tracking
 
 ## Automation Baseline
 
-- 当前版本（短版本）：`1.0`
+- 当前版本（短版本）：`1.1`
 - [x] 仓库级规则文件：`AGENTS.md`
 - [x] 发布规则文档：`docs/RELEASE_POLICY.md`
 - [x] 本地验证脚本：`scripts/validate_local.ps1`
 - [x] 版本递增脚本：`scripts/bump_version.ps1`
 - [x] 发布入口脚本：`scripts/release.ps1`
+- [x] release 打包脚本：`scripts/package_release.ps1`（Android release split APK + Windows 单 exe）
 - [x] 统一 CI：`.github/workflows/ci.yml`
-- [x] 最小 Release 工作流：`.github/workflows/release.yml`
+- [x] Release 工作流：`.github/workflows/release.yml`（构建并附加 Windows exe、Android release APK、SHA256）
 - [ ] 下一步：验证首个 `v1.0` 之后的自动递增发布（`1.1`）完整闭环
 
 ## Audio Capture (Windows)
@@ -44,6 +45,11 @@
 - [x] v27 修复后台服务事件线程崩溃（EventChannel 回调统一主线程）
 - [x] v28 修复后台服务明文策略拦截（允许 LAN `ws://` cleartext）
 - [x] v29 修复后台重连竞态（去重重连 + 过期回调隔离）
+- [x] 后台恢复增强：保存最近成功播放目标，`START_STICKY + AlarmManager` 在任务移除/服务回收后尝试恢复连接
+- [x] 断线重连语义收敛：WebSocket transient failure 进入 reconnecting，不再先发布致命 error
+- [x] 自动重连边界收敛：连接异常中断后最多自动重连 3 次；重开 App 时尝试恢复上一次成功的推流服务器
+- [x] 自动重连真机验收：`synthetic + v2_header + opus_experimental` 下验证异常断开最多 3 次重连，重开 App 可恢复上次服务器
+- [x] release 体积收敛：release 构建启用 R8/resource shrink，发布 APK 按 ABI 拆分
 - [x] V2 模式策略接入：`low_latency/balanced/high_quality` 已映射到 start/max buffer、batch、drop threshold、后端偏好
 - [x] Android 产品诊断入口：新增连接帮助折叠区（同网段、AP isolation、扫描/手动地址、USB、后台电池优化）
 - [x] 首次使用提示改为持久化只提示一次（不再因 App 进程重启重复弹出）
@@ -56,8 +62,8 @@
 
 - [x] 工程可接入状态：协议枚举、capabilities、服务端 `--codec opus_experimental`、桌面实验入口已具备
 - [x] 回退策略：当有效数据面不是 `v2_header` 时，Opus 请求仍自动回退 PCM16，不破坏可出声主路径
-- [x] 实验链路：服务端 `opus-rs` 编码 + Android `MediaCodec audio/opus` 解码已接入（限制 `v2_header + opus_experimental`）
-- [ ] 验收：`synthetic + v2_header + opus_experimental` 本地/真机播放验证
+- [x] 实验链路：服务端标准 libopus 编码 + Android `libopus` JNI 解码已接入（限制 `v2_header + opus_experimental`）
+- [x] 验收：`synthetic + v2_header + opus_experimental` 真机非零 PCM 与听感验证通过（用户确认测试音可听，且没有卡顿破音）
 - [ ] 稳定性验证：Opus 与 PCM16 的延迟、CPU、丢包恢复对比
 
 ## Protocol Evolution (v2)
@@ -77,7 +83,7 @@
 - [x] `windows_loopback + v2_header` 真机小流量灰度已完成（可播，模式切换全序列已跑通，默认路径未切换）
 - [ ] 下一阶段：稳定性优化（模式切换后缓冲峰值与 late frame 累积）
 - [ ] 下一阶段：USB tethering 低延迟样本验收（Wi-Fi 与 USB 样本分开记录）
-- [ ] 下一阶段：Opus 实验链路本地与真机验证（不替代 PCM16 默认主路径）
+- [ ] 下一阶段：Opus loopback 灰度与长稳验证（不替代 PCM16 默认主路径）
 - [ ] 灰度启用：双端协商后按连接动态切换到 v2 数据面 header（当前仍以配置开关为主）
 - [ ] 全量启用：默认路径切换到 v2，并保留 v1 回退策略
 
@@ -104,6 +110,7 @@
 ## Productization
 
 - [x] Tauri 桌面客户端首版可用 UI + 服务状态控制（启动/停止/重启、音频源切换、连接信息、折叠调试区、中英双语）
+- [x] Windows release 交付路径收敛为单 exe（GitHub Actions 与本地 `package_release.ps1` 均只产出 exe）
 - [x] 桌面端 V2 产品状态展示：协议路径、模式策略、codec、灰度状态、推荐连接方式
 - [x] Android 端 V2 产品状态展示：连接来源、协议路径、播放后端、灰度路径、模式策略
 - [x] USB tethering 正式纳入低延迟推荐路径（当前为路线/文案/状态位，不是 USB direct 实现）

@@ -1,4 +1,4 @@
-﻿name: Release
+name: Release
 
 on:
   workflow_dispatch:
@@ -15,8 +15,10 @@ permissions:
   contents: write
 
 jobs:
-  create-release:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
     steps:
       - name: Resolve tag
         id: vars
@@ -35,26 +37,148 @@ jobs:
             exit 1
           fi
 
+  windows-exe:
+    needs: resolve
+    runs-on: windows-latest
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Build Windows release EXE only
+        run: cargo build --release -p lan_audio_desktop
+
+      - name: Collect Windows EXE
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/release/windows | Out-Null
+          Copy-Item target/release/lan_audio_desktop.exe "dist/release/windows/lan-audio-desktop-${{ needs.resolve.outputs.tag }}.exe" -Force
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/release/windows/*.exe
+          if-no-files-found: error
+
+  android-release:
+    needs: resolve
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android_flutter
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Prepare Android local.properties
+        run: |
+          SHORT_VERSION="$(cat ../../VERSION)"
+          MAJOR="${SHORT_VERSION%%.*}"
+          MINOR="${SHORT_VERSION##*.}"
+          VERSION_CODE=$((2000 + MAJOR * 100 + MINOR))
+          printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=release\nflutter.versionName=%s\nflutter.versionCode=%s\n' \
+            "$ANDROID_HOME" "$FLUTTER_ROOT" "$SHORT_VERSION" "$VERSION_CODE" > android/local.properties
+
+      - name: Flutter Analyze
+        run: flutter analyze
+
+      - name: Build Android release APKs
+        run: flutter build apk --release --split-per-abi
+
+      - name: Collect Android APKs
+        run: |
+          mkdir -p ../../dist/release/android
+          for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            base="$(basename "$apk")"
+            cp "$apk" "../../dist/release/android/lan-audio-android-${{ needs.resolve.outputs.tag }}-$base"
+          done
+
+      - name: Upload Android APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apks
+          path: dist/release/android/*.apk
+          if-no-files-found: error
+
+  create-release:
+    needs:
+      - resolve
+      - windows-exe
+      - android-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
 
       - name: Ensure tag exists for manual trigger
         if: github.event_name == 'workflow_dispatch'
         run: |
           git fetch --tags --force
-          git rev-parse "${{ steps.vars.outputs.tag }}" >/dev/null
+          git rev-parse "${{ needs.resolve.outputs.tag }}" >/dev/null
 
-      - name: Create draft release
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+
+      - name: Create checksums
+        run: |
+          cd dist/release
+          find . -type f -not -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Publish release with artifacts
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          draft: true
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          draft: false
           generate_release_notes: true
+          files: |
+            dist/release/**/*.exe
+            dist/release/**/*.apk
+            dist/release/SHA256SUMS.txt
           body: |
-            ## Release Checklist
-            - Protocol v2 status
-            - Default data plane path
-            - Verified / unverified scope
-            - Rollback instructions
+            ## LAN Audio v1.1
+
+            First productized release path for the Windows-to-Android LAN audio client.
+
+            - Default path: `legacy_las1 + pcm16`.
+            - Protocol v2: control plane connected; v2 data plane remains explicit gray path.
+            - Opus: `opus_experimental` is available only on explicit V2 header paths.
+            - Android: release APKs are split per ABI and use `versionCode=2101`.
+            - Android auto reconnect: abnormal disconnect retries up to 3 times; reopening the app restores the last successful server.
+            - Windows: artifact is EXE only, no MSI/NSIS installer bundle.
+            - Rollback: use `legacy_las1 + pcm16`, or `synthetic + v2_header + pcm16` for quick validation.

@@ -46,6 +46,7 @@ class MainActivity : FlutterActivity() {
         Log.i(logTag, "onCreate action=${intent?.action} extras=${intent?.extras?.keySet()?.joinToString(",") ?: ""}")
         logLifecycle("onCreate")
         handleDebugCommand(intent)
+        PlaybackForegroundService.restoreLastPlayback(applicationContext, "app_open_restore")
     }
 
     override fun onNewIntent(intent: Intent) {

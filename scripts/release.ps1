@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Version,
     [switch]$SkipValidate,
+    [switch]$SkipPackage,
     [switch]$NoPush,
     [switch]$AllowDirty
 )
@@ -54,8 +55,14 @@ try {
         throw "Unexpected VERSION value after bump: $newVersion"
     }
 
+    if (-not $SkipPackage) {
+        Invoke-Step -Name 'Build local release artifacts' -Action {
+            powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/package_release.ps1') -SkipValidate -Clean
+        }
+    }
+
     Invoke-Step -Name 'Git add' -Action {
-        git add VERSION AGENTS.md docs/RELEASE_POLICY.md README.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md Cargo.toml apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/tauri.conf.json apps/android_flutter/pubspec.yaml apps/android_flutter/android/local.properties scripts/validate_local.ps1 scripts/bump_version.ps1 scripts/release.ps1 .github/workflows/ci.yml .github/workflows/release.yml
+        git add VERSION AGENTS.md .cargo README.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows
     }
 
     $staged = git diff --cached --name-only
