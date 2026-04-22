@@ -18,7 +18,7 @@ pub struct LanAudioService {
     metrics: Arc<Metrics>,
     shutdown_tx: broadcast::Sender<()>,
     adb_reverse_manager: AdbReverseManager,
-    active_audio_mode: std::sync::Mutex<AudioMode>,
+    active_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
     data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
 }
 
@@ -47,6 +47,7 @@ impl LanAudioService {
         metrics.set_capture_format(cfg.sample_rate, cfg.channels as u16);
         let (shutdown_tx, _) = broadcast::channel(16);
         let adb_reverse_manager = AdbReverseManager::default();
+        let active_audio_mode = Arc::new(std::sync::Mutex::new(cfg.current_audio_mode));
         if let Some(serial) = cfg.transport_mode.adb_serial() {
             setup_adb_reverse(serial, cfg.ws_bind.port(), cfg.ws_bind.port())?;
             adb_reverse_manager.track_reverse(serial.to_string(), cfg.ws_bind.port());
@@ -58,7 +59,7 @@ impl LanAudioService {
             metrics,
             shutdown_tx,
             adb_reverse_manager,
-            active_audio_mode: std::sync::Mutex::new(cfg.current_audio_mode),
+            active_audio_mode,
             data_plane_router: Arc::new(std::sync::Mutex::new(router)),
         })
     }
@@ -77,6 +78,10 @@ impl LanAudioService {
             info!(from = ?*guard, to = ?mode, "audio mode changed");
             *guard = mode;
         }
+    }
+
+    pub fn current_audio_mode_handle(&self) -> Arc<std::sync::Mutex<AudioMode>> {
+        Arc::clone(&self.active_audio_mode)
     }
 
     pub fn data_plane_router(&self) -> Arc<std::sync::Mutex<DataPlaneRouter>> {
@@ -107,6 +112,7 @@ impl LanAudioService {
             Arc::clone(&self.metrics),
             registry,
             self.data_plane_router(),
+            self.current_audio_mode_handle(),
         );
 
         let discovery_cfg = DiscoveryConfig {

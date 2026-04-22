@@ -1,12 +1,12 @@
 ﻿# Protocol v2 Draft
 
-## Phase 0 / Phase 1 Freeze Update (`2026-04-22`)
+## Release Update (`2026-04-22`)
 
-- Release decision is currently `continue_fixing`, sourced from `artifacts/release/acceptance_gate.json`.
+- Release decision is currently `allow_release`, sourced from `artifacts/release/acceptance_gate.json`.
 - Shared mode contracts, connection state machine, rollback state, failure taxonomy, service snapshot, and release gate schema now live in `crates/lan_audio_domain`.
 - Protocol messages still preserve v1/v2 compatibility, but shared contract types are now imported from the domain layer instead of being duplicated ad hoc.
 - The maintained main-path target remains `windows_loopback + v2_header + opus`; the maintained rollback path remains `legacy_las1 + pcm16`.
-- Phase 3 server-side data plane abstraction is underway: `legacy_las1`, `v2_header`, and `usb_direct` now have an explicit shared routing layer while release remains frozen.
+- Phase 3 server-side data plane abstraction is in place: `legacy_las1`, `v2_header`, and `usb_direct` now have an explicit shared routing layer.
 
 ## 1. 协议目标
 

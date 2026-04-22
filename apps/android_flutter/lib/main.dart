@@ -255,36 +255,48 @@ class _DebugPageState extends State<DebugPage> {
       _channels = (metrics['channels'] as num?)?.toInt() ?? _channels;
       _serviceBufferedMs =
           (metrics['buffered_ms'] as num?)?.toInt() ?? _serviceBufferedMs;
-      _serviceJitterBufferedMs = _serviceBufferedMs;
-      _serviceTrackQueuedMs = 0;
+      _serviceJitterBufferedMs =
+          (metrics['jitter_buffered_ms'] as num?)?.toInt() ??
+              _serviceJitterBufferedMs;
+      _serviceTrackQueuedMs =
+          (metrics['audio_track_queued_ms'] as num?)?.toInt() ??
+              _serviceTrackQueuedMs;
       _serviceUnderrun = (metrics['underrun'] as num?)?.toInt() ?? _serviceUnderrun;
       _serviceDropped =
           (metrics['dropped_packets'] as num?)?.toInt() ?? _serviceDropped;
       _serviceLate = (metrics['late_packets'] as num?)?.toInt() ?? _serviceLate;
-      _serviceFloorHoldCount = 0;
-      _serviceUdpPackets = 0;
-      _serviceUdpBytes = 0;
-      _serviceLoss = 0;
-      _serviceLastSeq = null;
-      _serviceAudioTrackLatencyMs = null;
+      _serviceFloorHoldCount =
+          (metrics['floor_hold_count'] as num?)?.toInt() ??
+              _serviceFloorHoldCount;
+      _serviceUdpPackets =
+          (metrics['udp_packets'] as num?)?.toInt() ?? _serviceUdpPackets;
+      _serviceUdpBytes =
+          (metrics['udp_bytes'] as num?)?.toInt() ?? _serviceUdpBytes;
+      _serviceLoss =
+          (metrics['loss_estimate'] as num?)?.toInt() ?? _serviceLoss;
+      _serviceLastSeq =
+          (metrics['last_seq'] as num?)?.toInt() ?? _serviceLastSeq;
+      _serviceAudioTrackLatencyMs =
+          (metrics['audio_track_latency_ms'] as num?)?.toInt() ??
+              _serviceAudioTrackLatencyMs;
       _currentAudioMode = _audioModeFromWire(snapshot.mode);
-      _protocolVersion = snapshot.dataPlane == 'v2_header' ? 2 : 1;
-      _negotiatedCapabilities = const {};
-      _serverPlatform = null;
-      _serverAppVersion = null;
-      _modeProfile = const {};
+      _protocolVersion =
+          snapshot.protocolVersion ?? (snapshot.dataPlane == 'v2_header' ? 2 : 1);
+      _negotiatedCapabilities = snapshot.negotiatedCapabilities;
+      _serverPlatform = snapshot.serverPlatform;
+      _serverAppVersion = snapshot.serverAppVersion;
+      _modeProfile = snapshot.modeProfile;
       _connectionPath = snapshot.transport == 'usb' ? 'usb_localhost' : 'lan_ip_wifi_or_usb';
-      _transportMode = snapshot.transport;
-      _connectedClientCount =
-          runtimeState == 'streaming' || runtimeState == 'negotiated' ? 1 : 0;
+      _transportMode = snapshot.transportMode;
+      _connectedClientCount = snapshot.connectedClientCount;
       _protocolPath = snapshot.dataPlane;
-      _playbackBackend = snapshot.transport == 'usb' ? 'usb_runtime' : 'wifi_runtime';
+      _playbackBackend = snapshot.playbackBackend;
       _effectiveCodec = snapshot.effectiveCodec;
       _experimentalPath = snapshot.dataPlane == 'v2_header';
       _tcpRoundTripMs = (metrics['rtt_ms'] as num?)?.toInt();
       _tcpRoundTripMedianMs = _tcpRoundTripMs;
       _serviceJitterP95Ms =
-          (metrics['sink_write_gap_ms_p95'] as num?)?.toInt();
+          (metrics['jitter_p95_ms'] as num?)?.toInt() ?? _serviceJitterP95Ms;
 
       if (runtimeState == 'streaming') {
         _playbackState = PlaybackState.playing;

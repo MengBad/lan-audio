@@ -30,6 +30,7 @@ pub struct SessionServer {
     metrics: Arc<Metrics>,
     registry: ClientRegistry,
     data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
+    current_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
 }
 
 #[derive(Clone)]
@@ -110,13 +111,24 @@ impl SessionServer {
         metrics: Arc<Metrics>,
         registry: ClientRegistry,
         data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
+        current_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
     ) -> Self {
         Self {
             cfg,
             metrics,
             registry,
             data_plane_router,
+            current_audio_mode,
         }
+    }
+
+    fn current_audio_mode(&self) -> AudioMode {
+        *self.current_audio_mode.lock().unwrap()
+    }
+
+    fn set_current_audio_mode(&self, mode: AudioMode) {
+        let mut guard = self.current_audio_mode.lock().unwrap();
+        *guard = mode;
     }
 
     pub async fn run(&self, mut shutdown: broadcast::Receiver<()>) -> anyhow::Result<()> {
@@ -185,7 +197,7 @@ impl SessionServer {
             channels,
             v2_session,
             client_capabilities,
-            preferred_audio_mode,
+            _preferred_audio_mode,
         ) = match parse_session_hello(&hello_text)? {
             SessionHello::Legacy {
                 client_name,
@@ -225,6 +237,7 @@ impl SessionServer {
             }
         };
         let preferred_sample_rate = normalize_preferred_sample_rate(desired_sample_rate);
+        let server_audio_mode = self.current_audio_mode();
 
         let negotiated_path = {
             let router = self.data_plane_router.lock().unwrap();
@@ -256,9 +269,9 @@ impl SessionServer {
                     protocol_version: PROTOCOL_VERSION_V2,
                     accepted: false,
                     session_id,
-                    current_audio_mode: preferred_audio_mode,
+                    current_audio_mode: server_audio_mode,
                     transport_type,
-                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    mode_profile: audio_mode_profile(server_audio_mode),
                     capabilities: default_server_capabilities(),
                     message: "too_many_clients".to_string(),
                 });
@@ -298,7 +311,7 @@ impl SessionServer {
                 transport_kind,
                 data_plane: negotiated_path.data_plane,
                 codec: negotiated_path.codec,
-                audio_mode: preferred_audio_mode,
+                audio_mode: server_audio_mode,
                 preferred_sample_rate,
                 supports_v2_events: v2_session,
             })
@@ -317,9 +330,9 @@ impl SessionServer {
                     protocol_version: PROTOCOL_VERSION_V2,
                     accepted: false,
                     session_id,
-                    current_audio_mode: preferred_audio_mode,
+                    current_audio_mode: server_audio_mode,
                     transport_type,
-                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    mode_profile: audio_mode_profile(server_audio_mode),
                     capabilities: default_server_capabilities(),
                     message: err.to_string(),
                 });
@@ -342,9 +355,9 @@ impl SessionServer {
                     protocol_version: PROTOCOL_VERSION_V2,
                     accepted: true,
                     session_id,
-                    current_audio_mode: preferred_audio_mode,
+                    current_audio_mode: server_audio_mode,
                     transport_type,
-                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    mode_profile: audio_mode_profile(server_audio_mode),
                     capabilities: default_server_capabilities(),
                     message: "hello_ack".to_string(),
                 },
@@ -359,8 +372,8 @@ impl SessionServer {
                     ws_port: self.cfg.ws_bind.port(),
                     udp_port: self.cfg.udp_bind.port(),
                     protocol_version: PROTOCOL_VERSION_V2,
-                    current_audio_mode: preferred_audio_mode,
-                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    current_audio_mode: server_audio_mode,
+                    mode_profile: audio_mode_profile(server_audio_mode),
                     codec: negotiated_path.codec.as_protocol_preference(),
                     data_plane: negotiated_path.data_plane.as_str().to_string(),
                     gray_mode: negotiated_path.data_plane != DataPlaneFormat::LegacyLas1,
@@ -424,6 +437,7 @@ impl SessionServer {
                                     Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate })) => {
                                         let normalized_preferred_sample_rate =
                                             preferred_sample_rate.map(normalize_preferred_sample_rate);
+                                        self.set_current_audio_mode(mode);
                                         self.registry
                                             .set_client_mode(session_id, mode, normalized_preferred_sample_rate)
                                             .await;

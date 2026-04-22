@@ -362,11 +362,15 @@ class PlaybackSessionController(
             "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
         )
         options = next
+        jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
         playbackSink.setQueueSoftCapFrames(msToFrames(next.audioQueueSoftCapMs))
-        jitterBuffer = newJitterBuffer(options)
         stateStore.update {
             it.copy(
-                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode, currentTransportHint),
+                modeProfile = modeProfileForOptions(
+                    currentMode = it.currentAudioMode,
+                    transportHint = currentTransportHint,
+                    options = options,
+                ),
                 playbackBackend = playbackBackendLabel(),
                 recentLog = "options_updated",
             )
@@ -1209,6 +1213,31 @@ class PlaybackSessionController(
 
     private fun newJitterBuffer(opts: PlaybackOptions): PlaybackJitterBuffer {
         return PlaybackJitterBuffer(opts.startBufferMs, opts.maxBufferMs, opts.dropThresholdMs)
+    }
+
+    private fun modeProfileForOptions(
+        currentMode: String,
+        transportHint: TransportHint,
+        options: PlaybackOptions,
+    ): PlaybackModeProfile {
+        return PlaybackModeProfiles.forMode(currentMode, transportHint).copy(
+            startBufferMs = options.startBufferMs,
+            maxBufferMs = options.maxBufferMs,
+            batchFrames = options.batchFrames,
+            dropThresholdMs = options.dropThresholdMs,
+            targetTotalLatencyMs = options.targetTotalLatencyMs,
+            maxTotalLatencyMs = options.maxTotalLatencyMs,
+            audioQueueSoftCapMs = options.audioQueueSoftCapMs,
+            bufferingEnterDelayMs = options.bufferingEnterDelayMs,
+            preferLowLatencyPath = options.preferLowLatencyPath,
+            preferStableAudioTrack = options.preferStableAudioTrack,
+            preferredCodec = options.preferredCodec,
+            preferredSampleFormat = options.preferredSampleFormat,
+            lowLatencyBufferMultiplier = options.lowLatencyBufferMultiplier,
+            lowLatencyFallbackBufferMultiplier = options.lowLatencyFallbackBufferMultiplier,
+            frameDurationMs = options.frameDurationMs,
+            resetBufferOnSwitch = options.resetBufferOnSwitch,
+        )
     }
 
     private fun createPlaybackSink(): PlaybackAudioSink {

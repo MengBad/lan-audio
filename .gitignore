@@ -16,6 +16,7 @@ dist/
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store
@@ -25,6 +26,15 @@ Thumbs.db
 debug_captures/
 logs/
 tmp_*.log
+_tmp_usb_server*.log
+tmp/
+tmp_retest/
+
+# Generated validation artifacts
+artifacts/baseline/
+artifacts/contracts/
+artifacts/reports/
+artifacts/validate/
 
 # Android crash dumps
 *.hprof

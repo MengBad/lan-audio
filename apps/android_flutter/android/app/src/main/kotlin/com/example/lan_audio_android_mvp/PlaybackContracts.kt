@@ -357,6 +357,17 @@ data class StableServiceMetrics(
     val reconnectCount: Int = 0,
     val decodeErrors: Int = 0,
     val sinkWriteGapMsP95: Int = 0,
+    val sampleRate: Int = 48_000,
+    val channels: Int = 2,
+    val jitterBufferedMs: Int = 0,
+    val audioTrackQueuedMs: Int = 0,
+    val audioTrackLatencyMs: Int? = null,
+    val udpPackets: Int = 0,
+    val udpBytes: Int = 0,
+    val lossEstimate: Int = 0,
+    val lastSeq: Long? = null,
+    val jitterP95Ms: Int? = null,
+    val floorHoldCount: Int = 0,
 )
 
 data class StableServiceSnapshot(
@@ -369,6 +380,14 @@ data class StableServiceSnapshot(
     val effectiveCodec: String = "pcm16",
     val state: String = "disconnected",
     val rollbackState: String = "main_path_active",
+    val protocolVersion: Int? = null,
+    val modeProfile: Map<String, Any?> = emptyMap(),
+    val negotiatedCapabilities: Map<String, Boolean> = emptyMap(),
+    val serverPlatform: String? = null,
+    val serverAppVersion: String? = null,
+    val transportMode: String = "wifi",
+    val playbackBackend: String = "audiotrack_stable",
+    val connectedClientCount: Int = 0,
     val metrics: StableServiceMetrics = StableServiceMetrics(),
 ) {
     fun toMap(): Map<String, Any?> {
@@ -382,6 +401,14 @@ data class StableServiceSnapshot(
             "effective_codec" to effectiveCodec,
             "state" to state,
             "rollback_state" to rollbackState,
+            "protocol_version" to protocolVersion,
+            "mode_profile" to modeProfile,
+            "negotiated_capabilities" to negotiatedCapabilities,
+            "server_platform" to serverPlatform,
+            "server_app_version" to serverAppVersion,
+            "transport_mode" to transportMode,
+            "playback_backend" to playbackBackend,
+            "connected_client_count" to connectedClientCount,
             "metrics" to mapOf(
                 "buffered_ms" to metrics.bufferedMs,
                 "underrun" to metrics.underrun,
@@ -391,6 +418,17 @@ data class StableServiceSnapshot(
                 "reconnect_count" to metrics.reconnectCount,
                 "decode_errors" to metrics.decodeErrors,
                 "sink_write_gap_ms_p95" to metrics.sinkWriteGapMsP95,
+                "sample_rate" to metrics.sampleRate,
+                "channels" to metrics.channels,
+                "jitter_buffered_ms" to metrics.jitterBufferedMs,
+                "audio_track_queued_ms" to metrics.audioTrackQueuedMs,
+                "audio_track_latency_ms" to metrics.audioTrackLatencyMs,
+                "udp_packets" to metrics.udpPackets,
+                "udp_bytes" to metrics.udpBytes,
+                "loss_estimate" to metrics.lossEstimate,
+                "last_seq" to metrics.lastSeq,
+                "jitter_p95_ms" to metrics.jitterP95Ms,
+                "floor_hold_count" to metrics.floorHoldCount,
             ),
         )
     }
@@ -401,10 +439,7 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
         "v2_header" -> "v2_header"
         else -> "legacy_las1"
     }
-    val activeDataPlane = when {
-        transportMode == "usb" && dataPlane == "v2_header" -> "usb_direct"
-        else -> dataPlane
-    }
+    val activeDataPlane = dataPlane
     val requestedCodec = modeProfile.preferredCodec.ifBlank { effectiveCodec.ifBlank { "pcm16" } }
     val normalizedEffectiveCodec = effectiveCodec.ifBlank { "pcm16" }
     val state = when {
@@ -424,17 +459,45 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
     } else {
         "main_path_active"
     }
+    val rollbackAvailable = rollbackState != "forced_legacy_las1_pcm16"
 
     return StableServiceSnapshot(
         transport = if (transportMode == "usb") "usb" else "wifi",
         mode = PlaybackModeProfiles.normalize(currentAudioMode),
         dataPlane = dataPlane,
         activeDataPlane = activeDataPlane,
-        rollbackAvailable = true,
+        rollbackAvailable = rollbackAvailable,
         codec = requestedCodec,
         effectiveCodec = normalizedEffectiveCodec,
         state = state,
         rollbackState = rollbackState,
+        protocolVersion = protocolVersion,
+        modeProfile = mapOf(
+            "mode" to modeProfile.mode,
+            "transport_hint" to modeProfile.transportHint.name.lowercase(),
+            "start_buffer_ms" to modeProfile.startBufferMs,
+            "max_buffer_ms" to modeProfile.maxBufferMs,
+            "batch_frames" to modeProfile.batchFrames,
+            "drop_threshold_ms" to modeProfile.dropThresholdMs,
+            "target_total_latency_ms" to modeProfile.targetTotalLatencyMs,
+            "max_total_latency_ms" to modeProfile.maxTotalLatencyMs,
+            "audio_queue_soft_cap_ms" to modeProfile.audioQueueSoftCapMs,
+            "buffering_enter_delay_ms" to modeProfile.bufferingEnterDelayMs,
+            "prefer_low_latency_path" to modeProfile.preferLowLatencyPath,
+            "prefer_stable_audio_track" to modeProfile.preferStableAudioTrack,
+            "preferred_codec" to modeProfile.preferredCodec,
+            "preferred_sample_format" to modeProfile.preferredSampleFormat,
+            "low_latency_buffer_multiplier" to modeProfile.lowLatencyBufferMultiplier,
+            "low_latency_fallback_buffer_multiplier" to modeProfile.lowLatencyFallbackBufferMultiplier,
+            "frame_duration_ms" to modeProfile.frameDurationMs,
+            "reset_buffer_on_switch" to modeProfile.resetBufferOnSwitch,
+        ),
+        negotiatedCapabilities = negotiatedCapabilities,
+        serverPlatform = serverPlatform,
+        serverAppVersion = serverAppVersion,
+        transportMode = transportMode,
+        playbackBackend = playbackBackend,
+        connectedClientCount = connectedClientCount,
         metrics = StableServiceMetrics(
             bufferedMs = metrics.totalBufferedMs,
             underrun = metrics.jitterUnderrun,
@@ -444,6 +507,17 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             reconnectCount = metrics.reconnectCount,
             decodeErrors = metrics.decodeErrors,
             sinkWriteGapMsP95 = metrics.sinkWriteGapMsP95,
+            sampleRate = metrics.sampleRate,
+            channels = metrics.channels,
+            jitterBufferedMs = metrics.jitterBufferedMs,
+            audioTrackQueuedMs = metrics.audioTrackQueuedMs,
+            audioTrackLatencyMs = metrics.audioTrackLatencyMs,
+            udpPackets = metrics.udpPackets,
+            udpBytes = metrics.udpBytes,
+            lossEstimate = metrics.lossEstimate,
+            lastSeq = metrics.lastSeq,
+            jitterP95Ms = metrics.jitterP95Ms,
+            floorHoldCount = metrics.floorHoldCount,
         ),
     )
 }

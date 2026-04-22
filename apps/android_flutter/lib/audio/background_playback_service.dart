@@ -13,6 +13,14 @@ class PlaybackServiceSnapshot {
     required this.effectiveCodec,
     required this.state,
     required this.rollbackState,
+    required this.protocolVersion,
+    required this.modeProfile,
+    required this.negotiatedCapabilities,
+    required this.serverPlatform,
+    required this.serverAppVersion,
+    required this.transportMode,
+    required this.playbackBackend,
+    required this.connectedClientCount,
     required this.metrics,
   });
 
@@ -25,6 +33,14 @@ class PlaybackServiceSnapshot {
   final String effectiveCodec;
   final String state;
   final String rollbackState;
+  final int? protocolVersion;
+  final Map<String, dynamic> modeProfile;
+  final Map<String, bool> negotiatedCapabilities;
+  final String? serverPlatform;
+  final String? serverAppVersion;
+  final String transportMode;
+  final String playbackBackend;
+  final int connectedClientCount;
   final Map<String, dynamic> metrics;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -41,6 +57,22 @@ class PlaybackServiceSnapshot {
       effectiveCodec: '${normalized['effective_codec'] ?? 'pcm16'}',
       state: '${normalized['state'] ?? 'disconnected'}',
       rollbackState: '${normalized['rollback_state'] ?? 'main_path_active'}',
+      protocolVersion: (normalized['protocol_version'] as num?)?.toInt(),
+      modeProfile: (normalized['mode_profile'] as Map?)?.map(
+            (key, value) => MapEntry('$key', value),
+          ) ??
+          const <String, dynamic>{},
+      negotiatedCapabilities:
+          (normalized['negotiated_capabilities'] as Map?)?.map(
+                (key, value) => MapEntry('$key', value == true),
+              ) ??
+              const <String, bool>{},
+      serverPlatform: normalized['server_platform']?.toString(),
+      serverAppVersion: normalized['server_app_version']?.toString(),
+      transportMode: '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
+      playbackBackend: '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
+      connectedClientCount:
+          (normalized['connected_client_count'] as num?)?.toInt() ?? 0,
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
@@ -59,6 +91,14 @@ class PlaybackServiceSnapshot {
       'effective_codec': effectiveCodec,
       'state': state,
       'rollback_state': rollbackState,
+      'protocol_version': protocolVersion,
+      'mode_profile': modeProfile,
+      'negotiated_capabilities': negotiatedCapabilities,
+      'server_platform': serverPlatform,
+      'server_app_version': serverAppVersion,
+      'transport_mode': transportMode,
+      'playback_backend': playbackBackend,
+      'connected_client_count': connectedClientCount,
       'metrics': metrics,
     };
   }
