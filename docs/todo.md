@@ -2,7 +2,7 @@
 
 ## Release State
 
-- Latest release: `v1.3`
+- Latest release: `v1.3.1`
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`

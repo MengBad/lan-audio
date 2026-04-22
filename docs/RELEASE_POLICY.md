@@ -2,7 +2,7 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.3`
+- Latest shipped release: `v1.3.1`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -18,10 +18,10 @@ The single version source is the repository root `VERSION` file.
 
 Rules:
 
-- short version: `major.minor`
-- git tag: `v<major.minor>`
-- Rust/Tauri semver: `<major.minor>.0`
-- Android `versionCode`: `2000 + major * 100 + minor`
+- short version: `major.minor` or `major.minor.patch`
+- git tag: `v<short version>`
+- Rust/Tauri semver: for `major.minor` use `<major.minor>.0`; for `major.minor.patch` use the same three-part semver
+- Android `versionCode`: `2000000 + major * 10000 + minor * 100 + patch`, where `patch` defaults to `0`
 
 ## Required Local Validation
 
@@ -62,7 +62,7 @@ Outputs:
 Use:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version <major.minor>
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version <major.minor or major.minor.patch>
 ```
 
 The release flow:

@@ -47,13 +47,13 @@ try {
         }
     }
     else {
-        Invoke-Step -Name 'Bump version (minor +1)' -Action {
+        Invoke-Step -Name 'Bump version (next release number)' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/bump_version.ps1')
         }
     }
 
     $newVersion = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
-    if ($newVersion -notmatch '^\d+\.\d+$') {
+    if ($newVersion -notmatch '^\d+\.\d+(?:\.\d+)?$') {
         throw "Unexpected VERSION value after bump: $newVersion"
     }
 
