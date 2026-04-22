@@ -4,8 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.0)'
+        description: 'Existing tag to publish or rebuild (e.g. v1.4)'
         required: true
+        type: string
+      fixes:
+        description: 'Optional bullet list of fixes for this release (one per line)'
+        required: false
+        type: string
+      verified_scope:
+        description: 'Optional verified scope summary for the release notes'
+        required: false
+        type: string
+      known_limitations:
+        description: 'Optional known limitations summary for the release notes'
+        required: false
+        type: string
+      previous_tag:
+        description: 'Optional previous tag for GitHub generated compare range (e.g. v1.3)'
+        required: false
         type: string
   push:
     tags:
@@ -19,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Resolve tag
         id: vars
@@ -42,6 +59,18 @@ jobs:
         with:
           ref: ${{ steps.vars.outputs.tag }}
           fetch-depth: 0
+
+      - name: Validate VERSION matches tag
+        id: meta
+        shell: bash
+        run: |
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          EXPECTED_TAG="v${VERSION}"
+          if [ "$EXPECTED_TAG" != "${{ steps.vars.outputs.tag }}" ]; then
+            echo "VERSION/tag mismatch: VERSION=$VERSION tag=${{ steps.vars.outputs.tag }}"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Gate release by acceptance contract
         shell: pwsh
@@ -171,26 +200,75 @@ jobs:
           cd dist/release
           find . -type f -not -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
+      - name: Build release notes body
+        shell: bash
+        run: |
+          mkdir -p dist/release
+
+          fixes_input='${{ github.event_name == 'workflow_dispatch' && inputs.fixes || '' }}'
+          verified_scope_input='${{ github.event_name == 'workflow_dispatch' && inputs.verified_scope || '' }}'
+          known_limitations_input='${{ github.event_name == 'workflow_dispatch' && inputs.known_limitations || '' }}'
+
+          {
+            echo "## LAN Audio ${{ needs.resolve.outputs.tag }}"
+            echo
+            echo "- Protocol v2 status: recommended default path remains \`windows_loopback + v2_header + opus\`"
+            echo "- Default path: \`windows_loopback + v2_header + opus\`"
+            echo "- Rollback path: \`legacy_las1 + pcm16\` (\`--force-rollback\` or UI safe mode)"
+            echo "- Codec status: \`opus stable\` on the recommended V2 path"
+            echo
+
+            echo "## What Changed"
+            if [ -n "$fixes_input" ]; then
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                echo "- $line"
+              done <<< "$fixes_input"
+            else
+              echo "- No manual fix summary was provided for this run."
+              echo "- See the generated release notes below for commit and PR details."
+            fi
+            echo
+
+            echo "## Verified Scope"
+            if [ -n "$verified_scope_input" ]; then
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                echo "- $line"
+              done <<< "$verified_scope_input"
+            else
+              echo "- Verified device: \`5391d451\` (\`Xiaomi 24129PN74C\`)"
+              echo "- Verified scenarios: \`USB + synthetic\`, \`WiFi + windows_loopback\`"
+            fi
+            echo
+
+            echo "## Known Limitations"
+            if [ -n "$known_limitations_input" ]; then
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                echo "- $line"
+              done <<< "$known_limitations_input"
+            else
+              echo "- Android runtime and desktop refactor follow-up remains ongoing after \`${{ needs.resolve.outputs.tag }}\`."
+              echo "- Rollback path must stay available for diagnostics and controlled fallback."
+            fi
+            echo
+
+            echo "## Rollback"
+            echo "- Desktop CLI: \`--force-rollback\`"
+            echo "- Desktop UI: safe mode button"
+          } > dist/release/RELEASE_BODY.md
+
       - name: Publish release with artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
+          name: LAN Audio ${{ needs.resolve.outputs.tag }}
           draft: false
+          body_path: dist/release/RELEASE_BODY.md
           generate_release_notes: true
+          previous_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.previous_tag || '' }}
           files: |
             dist/release/**/*.exe
             dist/release/**/*.apk
             dist/release/SHA256SUMS.txt
-          body: |
-            ## LAN Audio v1.3
-
-            - Default path: `windows_loopback + v2_header + opus`
-            - Rollback path: `legacy_las1 + pcm16` (`--force-rollback`)
-            - USB mode: `adb reverse`, supports `low_latency` / `balanced`
-            - Codec status: `opus stable`
-            - Verified device: `5391d451` (`24129PN74C`)
-            - Verified scenarios: `USB synthetic` / `WiFi windows_loopback`
-            - Known limitations:
-              - Device forced `POWER_SAVING`, adapted with Oboe callback
-              - Phase 4/5 Android Runtime / Desktop refactor deferred to later versions
-            - Rollback: `--force-rollback` or UI safe mode button
