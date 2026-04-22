@@ -11,10 +11,12 @@ class LasPacket {
     required this.channels,
     required this.framesPerPacket,
     required this.payload,
-  });
+    int? flagsV2,
+  }) : flagsV2 = flagsV2 ?? flags;
 
   final int version;
   final int flags;
+  final int flagsV2;
   final int sequence;
   final int timestampMs;
   final int codec;
@@ -106,6 +108,7 @@ class LasPacket {
     return LasPacket(
       version: version,
       flags: flags16 & 0xFF,
+      flagsV2: flags16,
       sequence: sequence,
       timestampMs: timestampMs,
       codec: codec,
@@ -125,7 +128,6 @@ class LasPacket {
 
   bool get isSilence => (flags & 0x01) != 0;
 
-  // TODO(protocol-v2): wire these two bits to runtime behavior after v2 header is enabled.
-  bool get hasConfigChanged => (flags & 0x02) != 0;
-  bool get hasDiscontinuity => (flags & 0x04) != 0;
+  bool get hasConfigChanged => (flagsV2 & 0x02) != 0;
+  bool get hasDiscontinuity => (flagsV2 & 0x04) != 0;
 }

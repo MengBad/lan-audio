@@ -405,6 +405,13 @@ fn restart_service(state: State<'_, AppState>) -> Result<DesktopSnapshot, String
     Ok(get_desktop_snapshot(state))
 }
 
+fn can_start_service(status: &ServiceStatus) -> Result<(), String> {
+    if matches!(status, ServiceStatus::Stopping) {
+        return Err("service is stopping; try again shortly".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn update_service_settings(
     state: State<'_, AppState>,
@@ -453,6 +460,7 @@ fn update_service_settings(
 fn start_service_impl(state: &State<'_, AppState>) -> Result<(), String> {
     let (cfg, run_id) = {
         let mut guard = state.inner.lock().expect("state lock");
+        can_start_service(&guard.status)?;
         if matches!(
             guard.status,
             ServiceStatus::Running | ServiceStatus::Starting
@@ -792,6 +800,12 @@ mod tests {
         );
         assert_eq!(snapshot.data_plane, DataPlanePath::LegacyLas1);
         assert_eq!(snapshot.effective_codec, AudioCodecPreference::Pcm16);
+    }
+
+    #[test]
+    fn cannot_start_service_while_stopping() {
+        let result = can_start_service(&ServiceStatus::Stopping);
+        assert!(result.is_err());
     }
 
     #[test]
