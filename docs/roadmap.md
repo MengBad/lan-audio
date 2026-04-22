@@ -1,53 +1,94 @@
 # Project Roadmap
 
-当前默认运行主路径仍是 `legacy_las1 + pcm16`。Protocol v2 的定位是低延迟音频传输产品升级，而不是为了替换协议而替换协议。
+## Current Position
 
-V2 必须同时满足：
+- Latest shipped release: `v1.3`
+- Default runtime path: `windows_loopback + v2_header + opus`
+- Maintained rollback path: `legacy_las1 + pcm16`
+- Supported transports: `wifi`, `usb`
+- Shared contract source: `crates/lan_audio_domain`
 
-- 低延迟：围绕更低端到端延迟设计模式、buffer、codec 与连接路径。
-- 可诊断：用户和开发者能看到协议路径、codec、模式、连接方式与关键健康指标。
-- 可回滚：`legacy_las1 + pcm16`、`synthetic + v2_header + pcm16`、显式灰度开关必须长期可用。
-- 可扩展：为 Opus、USB、智能模式、多设备与后续 microphone backhaul 保留清晰落点。
+`v1.3` closed the release gate and shipped the current core Windows-to-Android streaming path. The next cycle is not about changing the default path again. It is about making the existing path easier to maintain, easier to diagnose, and safer to evolve.
 
-## 1. 播放稳定性
+## Long-Term Product Goals
 
-- 已完成：Android/Windows 真机可连接并出声，主路径达到可用级别。
-- 已完成：Android 后台播放服务、AudioTrack 写入、jitter buffer、关键播放指标。
-- 已完成：`synthetic + v2_header` 真机播放与模式切换验收通过。
-- 已完成：`windows_loopback + v2_header` 小流量真机灰度可播，但暂不稳定。
-- 尚未完成：多机型长稳验证、锁屏/后台长稳、时钟漂移与自适应 jitter。
+1. Stable Windows-to-Android playback
+2. Lower and more predictable end-to-end latency
+3. Mode-aware transport and playback strategy
+4. Protocol v2 as the maintained mainline
+5. Productized desktop and Android experience
 
-## 2. 延迟优化
+## What Shipped In v1.3
 
-- 已完成：基础 jitter buffer 与播放调度修复。
-- 已有骨架：`low_latency / balanced / high_quality` 三档策略已映射到 start buffer、max buffer、batch、drop threshold、播放后端偏好与 codec 偏好。
-- 尚未完成：自动低延迟自适应、USB tethering 延迟样本、loopback + v2 长尾抖动收敛。
+- Release gate is now contract-driven through `artifacts/release/acceptance_gate.json`
+- Mainline path is `windows_loopback + v2_header + opus`
+- Rollback verification exists through `desktop_headless --force-rollback`
+- Data plane routing exists on the server side:
+  - `legacy_las1`
+  - `v2_header`
+  - `usb_direct`
+- Android and desktop consume the shared service snapshot contract
+- USB synthetic and Wi-Fi loopback device acceptance evidence is tracked in `artifacts/release/device_acceptance.json`
+- GitHub release workflow produces:
+  - split Android release APKs
+  - Windows desktop `.exe`
+  - `SHA256SUMS.txt`
 
-## 3. 多策略模式
+## Post-v1.3 Priorities
 
-- 已完成：Protocol v2 控制面同步 `current_audio_mode`。
-- 已完成：Rust / Android / Windows 桌面端均有一致的 `AudioModeProfile` 语义。
-- 尚未完成：设备级播放后端自动选择、不同 Android 机型的 fast path / stable AudioTrack 回退策略。
+### 1. Android Runtime Follow-Up
 
-## 4. Protocol v2 演进
+- Refactor the Android playback runtime around clearer data-plane boundaries
+- Continue reducing underrun risk under real device background and power-saving conditions
+- Improve diagnostics around buffering, reconnect, and sink behavior
+- Keep Oboe callback playback as the maintained direction
 
-- 已完成：Protocol v2 草案、Rust v2 结构体、UDP v2 header、控制面 `hello/hello_ack`、mode 同步、capabilities。
-- 已完成：数据面 `LAS1/LAV2` 双栈识别，默认仍为 `legacy_las1`。
-- 已完成：`config_changed/discontinuity` 最小真实处理。
-- 已完成：按会话 capability 协商 `data_plane + codec`，不支持 Opus 的客户端自动回退 PCM16。
-- 已完成：Opus 实验链路已使用标准 libopus 服务端编码 + Android libopus/JNI 解码，`synthetic + v2_header + opus_experimental` 真机非零 PCM 验收通过。
-- 尚未完成：Opus 听感确认、Opus loopback 灰度、Opus 长稳/CPU/丢包恢复对比。
-- 尚未启用：v2 数据面默认主路径、Opus 默认 codec。
+### 2. Desktop Refactor
 
-## 5. 产品化 UI 与桌面端交付
+- Reduce coupling between desktop controls and service internals
+- Keep the desktop UI driven by the stable service snapshot contract
+- Improve diagnostics export and operator-facing troubleshooting flows
+- Keep rollback visible and easy to trigger
 
-- 已完成：Windows Tauri 桌面客户端可启动/停止服务，展示状态、连接、模式、协议路径、codec 与折叠调试信息。
-- 已完成：Android 首页和设置中已有连接、播放、发现、最近连接、多语言与诊断入口。
-- 已有路线：USB tethering 作为低延迟推荐连接方式，USB direct 作为未来能力。
-- 尚未完成：发布包签名、自动诊断报告、USB 连接体验闭环、多设备会话 UI。
+### 3. Protocol And Data Plane Evolution
 
-## 当前发布判断
+- Extend negotiation so runtime path selection is less config-driven and more capability-driven
+- Keep `legacy_las1 + pcm16` available as a durable rollback path
+- Evolve `usb_direct` without weakening the current Wi-Fi main path
+- Avoid bypassing the domain-owned contracts
 
-- 默认主路径：`legacy_las1 + pcm16`。
-- 可灰度路径：`synthetic + v2_header + pcm16`、`synthetic + v2_header + opus_experimental`、显式开关下的 `windows_loopback + v2_header`。
-- 当前不建议切默认：`v2_header` 和 `opus_experimental` 都还需要更多真机长稳与 loopback 验收。
+### 4. Productization
+
+- Better onboarding for Wi-Fi and USB setup
+- Clearer desktop status presentation
+- Better firewall, network, and power-management guidance
+- More structured release notes and diagnostics exports
+
+## Next Release Gate Expectations
+
+Before the next release train is considered:
+
+- local validation must stay green
+- rewrite validation must stay green
+- rollback verification must stay green
+- device acceptance evidence must be updated when behavior changes
+- main-path and rollback-path documentation must stay aligned
+
+## Not In Immediate Scope
+
+These are explicitly not the next-step priority:
+
+- phone-as-mic
+- cloud relay
+- broad multi-room playback productization
+- replacing rollback with silent fallback behavior
+
+## Working Rule
+
+Roadmap changes should preserve these repo-wide truths:
+
+- main path stays explicit
+- rollback stays explicit
+- failure paths keep explicit codes
+- UI/runtime coupling should go through shared contracts
+- release decisions come from gate artifacts, not prose

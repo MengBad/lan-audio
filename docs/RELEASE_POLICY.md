@@ -1,31 +1,37 @@
 # Release Policy
 
-## 当前版本
+## Current Release State
 
-- 当前版本（短版本）：`1.1`
-- 版本唯一来源：仓库根目录 `VERSION`
+- Latest shipped release: `v1.3`
+- Current tracked gate decision: `allow_release`
+- Main path: `windows_loopback + v2_header + opus`
+- Rollback path: `legacy_las1 + pcm16`
 
-说明：
+Release decisions are artifact-driven. The source of truth is:
 
-- `VERSION` 使用 `major.minor`（如 `1.0`、`1.1`）。
-- 需要写入需要语义化版本号的工程文件时，映射为 `major.minor.0`（如 `1.1.0`）。
-- Android `versionCode` 使用 `2000 + major * 100 + minor`，例如 `1.1 -> 2101`。该规则用于兼容早期真机测试包 `2100`，避免正式 APK 被系统判定为 downgrade。
+- `artifacts/release/acceptance_gate.json`
+- `artifacts/release/device_acceptance.json`
 
-## 发布前提
+## Version Source
 
-以下条件必须全部满足：
+The single version source is the repository root `VERSION` file.
 
-1. 本轮目标已完成到可交付状态
-2. 本地验证通过，或失败项已明确且不影响发布
-3. 当前分支无明显阻塞问题
-4. 关键文档已同步（README、todo、protocol、migration）
-5. 保留可回滚路径
+Rules:
 
-## 本地验证标准
+- short version: `major.minor`
+- git tag: `v<major.minor>`
+- Rust/Tauri semver: `<major.minor>.0`
+- Android `versionCode`: `2000 + major * 100 + minor`
 
-统一执行：`scripts/validate_local.ps1`
+## Required Local Validation
 
-该脚本会按顺序执行：
+Use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+```
+
+This runs:
 
 1. `cargo fmt --all -- --check`
 2. `cargo check`
@@ -35,76 +41,82 @@
 6. `flutter test`
 7. `android/gradlew.bat assembleDebug`
 
-## 版本递增规则
+## Packaging
 
-统一通过 `scripts/bump_version.ps1` 执行，禁止手工多处改版本。
+Use:
 
-默认行为：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
+```
 
-- 不带参数时：minor +1（`1.0 -> 1.1`）
-- 可显式指定：`-Version 1.2`
+Outputs:
 
-同步目标：
+- `dist/release/android/`
+- `dist/release/windows/`
+- `dist/release/SHA256SUMS.txt`
 
-- `VERSION`
-- `Cargo.toml`（workspace.version）
-- `apps/desktop/src-tauri/Cargo.toml`
-- `apps/desktop/src-tauri/tauri.conf.json`
-- `apps/android_flutter/pubspec.yaml`
-- `apps/android_flutter/android/local.properties`
-- `README.md`（自动化版本段）
-- `docs/todo.md`（自动化版本段）
-- `docs/RELEASE_POLICY.md`（当前版本段）
+`package_release.ps1` is allowed to build artifacts only when the non-artifact gate fields already pass. After a successful package run it updates local artifact-presence fields in the tracked gate file.
 
-## 发布流程（统一入口）
+## Release Entry
 
-推荐入口：`scripts/release.ps1`
+Use:
 
-流程：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version <major.minor>
+```
 
-1. 检查 Git 工作区状态（默认不允许脏工作区）
-2. 执行本地验证（默认执行）
-3. 执行版本递增并同步
-4. 执行 `scripts/package_release.ps1` 生成本地 release 产物
-5. 生成 release commit（`chore(release): vX.Y`）
-6. 创建 tag（`vX.Y`）
-7. 推送分支与 tag
-8. 由 GitHub Actions 完成 CI 与 Release 工作流
+The release flow:
 
-本地打包入口：`scripts/package_release.ps1`
+1. asserts the release gate
+2. validates the local workspace
+3. bumps version metadata
+4. packages local release artifacts
+5. commits release-tracked files
+6. creates the git tag
+7. pushes branch and tag
+8. lets GitHub Actions publish the GitHub Release
 
-默认产物：
+## Conditions To Release
 
-- Android：`dist/release/android/`，按 ABI 拆分的 release APK，用于降低单包体积
-- Windows：`dist/release/windows/lan-audio-desktop-<version>.exe`
-- 校验：`dist/release/SHA256SUMS.txt`
+A release is allowed only when all of the following are true:
 
-## GitHub Actions 策略
+- `release_decision = allow_release`
+- local validation has passed
+- rewrite validation has passed
+- device acceptance has passed
+- rollback verification has passed
+- Android release APKs are present
+- Windows release EXE is present
+- there are no critical bugs
+- there are no blocking failure codes
 
-- `ci.yml`：统一 CI（Rust + Flutter + Android）
-- `build-android.yml`：构建 debug APK 与 split-per-ABI release APK
-- `build-windows-client.yml`：只构建 Windows release exe，不再构建 MSI/NSIS
-- `release.yml`：基于 tag（`v*`）构建 release APK / Windows exe，并创建 GitHub Release 草稿
+## Rollback Rule
 
-发布原则：
+The release process must not weaken or hide the rollback path.
 
-- 不允许跳过 CI 直接发布。
-- 若 CI 失败，Release 维持草稿或不发布，需先修复。
+Maintained rollback path:
 
-## 回滚策略
+- `legacy_las1 + pcm16`
 
-发布后发现异常时，优先按以下路径回滚：
+Rollback verification depends on:
 
-1. 数据面回滚到 `legacy_las1`
-2. 保留 `synthetic + v2_header` 作为快速验证路径
-3. 必要时回退到上一个 tag 版本
+```powershell
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --force-rollback
+```
 
-## 发布记录要求
+This must produce evidence showing:
 
-Release notes 至少包含：
+- `active_data_plane = legacy_las1`
+- `codec = pcm16`
+- `rollback_state = active`
 
-- Protocol v2 当前阶段
-- 默认主路径
-- 已验证范围 / 未验证范围
-- 主要风险与已知限制
-- 回滚方式
+## Release Notes Minimum Content
+
+Release notes should include:
+
+- current Protocol v2 status
+- default main path
+- rollback path
+- verified scope
+- known limitations
+- rollback method

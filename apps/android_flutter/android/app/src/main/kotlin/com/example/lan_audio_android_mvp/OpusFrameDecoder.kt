@@ -12,7 +12,7 @@ class OpusFrameDecoder {
     @Synchronized
     fun decode(packet: LasPacket): ByteArray? {
         require(packet.codec == LasPacket.CODEC_OPUS_EXPERIMENTAL) {
-            "packet codec is not opus_experimental"
+            "packet codec is not opus"
         }
         val nativeDecoder = ensureDecoder(packet.sampleRate, packet.channels)
         val expectedPcmBytes = packet.framesPerPacket.coerceAtLeast(1) *
@@ -20,23 +20,31 @@ class OpusFrameDecoder {
             2
 
         val decoded = nativeDecoder.decodeToPcmBytes(packet.payload, packet.framesPerPacket)
-        if (decoded == null) {
+        val recovered = decoded ?: nativeDecoder.decodeToPcmBytes(
+            packet = ByteArray(0),
+            expectedFrames = packet.framesPerPacket,
+            usePlc = true,
+        )
+        if (recovered == null) {
             decodeFailures += 1
             if (decodeFailures == 1L || decodeFailures % 100L == 0L) {
-                Log.w(logTag, "libopus decode produced no PCM count=$decodeFailures")
+                Log.w(logTag, "libopus decode+plc produced no PCM count=$decodeFailures")
             }
             return null
         }
+        if (decoded == null) {
+            Log.w(logTag, "libopus decode failed; PLC fallback supplied concealment frame")
+        }
 
         val normalized = when {
-            decoded.size == expectedPcmBytes -> decoded
-            decoded.size > expectedPcmBytes -> decoded.copyOf(expectedPcmBytes)
+            recovered.size == expectedPcmBytes -> recovered
+            recovered.size > expectedPcmBytes -> recovered.copyOf(expectedPcmBytes)
             else -> {
                 Log.w(
                     logTag,
-                    "libopus decoded short frame decoded=${decoded.size}B expected=${expectedPcmBytes}B; padding with silence",
+                    "libopus decoded short frame decoded=${recovered.size}B expected=${expectedPcmBytes}B; padding with concealment tail",
                 )
-                decoded.copyOf(expectedPcmBytes)
+                recovered.copyOf(expectedPcmBytes)
             }
         }
 

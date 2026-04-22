@@ -26,6 +26,8 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $repoRoot
 
 try {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
+
     if (-not $AllowDirty) {
         $dirty = git status --porcelain
         if ($dirty) {
@@ -62,7 +64,7 @@ try {
     }
 
     Invoke-Step -Name 'Git add' -Action {
-        git add VERSION AGENTS.md .cargo README.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows
+        git add VERSION AGENTS.md .cargo README.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
     }
 
     $staged = git diff --cached --name-only

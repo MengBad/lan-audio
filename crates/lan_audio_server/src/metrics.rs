@@ -254,7 +254,7 @@ mod tests {
         m.set_current_audio_source("synthetic");
         m.set_capture_source_state("started");
         m.set_capture_device_name("device-id");
-        m.set_negotiated_session_path("v2_header", "opus_experimental");
+        m.set_negotiated_session_path("v2_header", "opus");
         m.set_capture_format(48_000, 2);
         m.set_capture_buffer_frames(960);
         m.set_capture_level(0.8, 0.2);
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(s.capture_source_state, "started");
         assert_eq!(s.capture_device_name, "device-id");
         assert_eq!(s.negotiated_data_plane, "v2_header");
-        assert_eq!(s.negotiated_codec, "opus_experimental");
+        assert_eq!(s.negotiated_codec, "opus");
         assert_eq!(s.capture_sample_rate, 48_000);
         assert_eq!(s.capture_channels, 2);
         assert_eq!(s.capture_buffer_frames, 960);

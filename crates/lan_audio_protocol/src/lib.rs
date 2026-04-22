@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use lan_audio_domain::{
+    mode_contract, AudioCodecPreference, AudioMode, ConnectionState, ConnectionStateMachine,
+    DataPlanePath, FailureCode, ReleaseDecision, ReleaseGate, RollbackState,
+    ServiceMetricsSnapshot, ServiceSnapshot, TransportType,
+};
+
 pub const DISCOVERY_PORT: u16 = 39990;
 pub const WS_PORT: u16 = 39991;
 pub const UDP_AUDIO_PORT: u16 = 39992;
@@ -29,24 +35,9 @@ pub enum DataPlanePacketKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AudioMode {
-    LowLatency,
-    Balanced,
-    HighQuality,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum SampleFormatPreference {
     Pcm16,
     F32,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AudioCodecPreference {
-    Pcm16,
-    OpusExperimental,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,52 +56,28 @@ pub struct AudioModeProfile {
 }
 
 pub fn audio_mode_profile(mode: AudioMode) -> AudioModeProfile {
-    match mode {
-        AudioMode::LowLatency => AudioModeProfile {
-            mode,
-            start_buffer_ms: 40,
-            max_buffer_ms: 180,
-            batch_frames: 1,
-            drop_threshold_ms: 140,
-            prefer_low_latency_path: true,
-            prefer_stable_audio_track: false,
-            preferred_codec: AudioCodecPreference::Pcm16,
-            preferred_sample_format: SampleFormatPreference::Pcm16,
-            frame_duration_ms: 10,
-            reset_buffer_on_switch: true,
-        },
-        AudioMode::Balanced => AudioModeProfile {
-            mode,
-            start_buffer_ms: 60,
-            max_buffer_ms: 300,
-            batch_frames: 2,
-            drop_threshold_ms: 220,
-            prefer_low_latency_path: false,
-            prefer_stable_audio_track: true,
-            preferred_codec: AudioCodecPreference::Pcm16,
-            preferred_sample_format: SampleFormatPreference::Pcm16,
-            frame_duration_ms: 10,
-            reset_buffer_on_switch: true,
-        },
-        AudioMode::HighQuality => AudioModeProfile {
-            mode,
-            start_buffer_ms: 120,
-            max_buffer_ms: 500,
-            batch_frames: 3,
-            drop_threshold_ms: 420,
-            prefer_low_latency_path: false,
-            prefer_stable_audio_track: true,
-            preferred_codec: AudioCodecPreference::Pcm16,
-            preferred_sample_format: SampleFormatPreference::Pcm16,
-            frame_duration_ms: 10,
-            reset_buffer_on_switch: false,
-        },
-    }
-}
+    let contract = mode_contract(mode);
+    let prefer_low_latency_path = contract
+        .output_backend_priority
+        .first()
+        .is_some_and(|backend| matches!(backend, lan_audio_domain::OutputBackend::FastPath));
+    let prefer_stable_audio_track = contract
+        .output_backend_priority
+        .iter()
+        .any(|backend| matches!(backend, lan_audio_domain::OutputBackend::AudioTrack));
 
-impl Default for AudioMode {
-    fn default() -> Self {
-        Self::Balanced
+    AudioModeProfile {
+        mode,
+        start_buffer_ms: contract.tuning.start_buffer_ms,
+        max_buffer_ms: contract.tuning.max_buffer_ms,
+        batch_frames: contract.tuning.batch_frames,
+        drop_threshold_ms: contract.tuning.drop_threshold_ms,
+        prefer_low_latency_path,
+        prefer_stable_audio_track,
+        preferred_codec: contract.preferred_codec,
+        preferred_sample_format: SampleFormatPreference::Pcm16,
+        frame_duration_ms: contract.tuning.frame_duration_ms,
+        reset_buffer_on_switch: contract.tuning.reset_buffer_on_switch,
     }
 }
 
@@ -128,6 +95,7 @@ pub struct ProtocolCapabilities {
     pub supports_modes: bool,
     pub supports_metrics: bool,
     pub supports_opus_future: bool,
+    pub supports_opus: bool,
     pub supports_opus_experimental: bool,
     pub supports_low_latency: bool,
     pub supports_high_quality: bool,
@@ -156,6 +124,8 @@ pub struct HelloAck {
     pub accepted: bool,
     pub session_id: Uuid,
     pub current_audio_mode: AudioMode,
+    #[serde(default)]
+    pub transport_type: TransportType,
     #[serde(default)]
     pub mode_profile: AudioModeProfile,
     pub capabilities: ProtocolCapabilities,
@@ -192,6 +162,8 @@ pub struct ClientInfo {
 pub struct SetAudioMode {
     pub mode: AudioMode,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_sample_rate: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,6 +173,30 @@ pub struct AudioModeChanged {
     pub reason: String,
     #[serde(default)]
     pub mode_profile: AudioModeProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientListEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub mode: AudioMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientList {
+    pub clients: Vec<ClientListEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientJoined {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientLeft {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,6 +229,8 @@ pub struct ErrorMessage {
     pub code: String,
     pub message: String,
     pub recoverable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<FailureCode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -248,6 +246,9 @@ pub enum ControlMessageV2 {
     HelloAck(HelloAck),
     ServerInfo(ServerInfo),
     ClientInfo(ClientInfo),
+    ClientList(ClientList),
+    ClientJoined(ClientJoined),
+    ClientLeft(ClientLeft),
     SetAudioMode(SetAudioMode),
     AudioModeChanged(AudioModeChanged),
     PlaybackState(PlaybackState),
@@ -312,7 +313,7 @@ pub enum ServerControlMessage {
 pub enum UdpAudioCodecV2 {
     Pcm16 = 1,
     F32 = 2,
-    OpusExperimental = 3,
+    Opus = 3,
 }
 
 impl UdpAudioCodecV2 {
@@ -320,7 +321,7 @@ impl UdpAudioCodecV2 {
         match value {
             1 => Some(Self::Pcm16),
             2 => Some(Self::F32),
-            3 => Some(Self::OpusExperimental),
+            3 => Some(Self::Opus),
             _ => None,
         }
     }
@@ -591,17 +592,22 @@ mod tests {
         assert!(high.prefer_stable_audio_track);
         assert!(low.start_buffer_ms < high.start_buffer_ms);
         assert!(low.max_buffer_ms < high.max_buffer_ms);
+        assert_eq!(
+            low.start_buffer_ms,
+            lan_audio_domain::mode_contract(AudioMode::LowLatency)
+                .tuning
+                .start_buffer_ms
+        );
     }
 
     #[test]
-    fn codec_preference_marks_opus_as_experimental() {
-        let json =
-            serde_json::to_string(&AudioCodecPreference::OpusExperimental).expect("serialize");
-        assert_eq!(json, "\"opus_experimental\"");
-        assert_eq!(
-            UdpAudioCodecV2::from_u8(3),
-            Some(UdpAudioCodecV2::OpusExperimental)
-        );
+    fn codec_preference_marks_opus_as_stable() {
+        let json = serde_json::to_string(&AudioCodecPreference::Opus).expect("serialize");
+        assert_eq!(json, "\"opus\"");
+        let legacy: AudioCodecPreference =
+            serde_json::from_str("\"opus_experimental\"").expect("legacy opus alias");
+        assert_eq!(legacy, AudioCodecPreference::Opus);
+        assert_eq!(UdpAudioCodecV2::from_u8(3), Some(UdpAudioCodecV2::Opus));
     }
 
     #[test]
@@ -612,6 +618,7 @@ mod tests {
             supports_modes: true,
             supports_metrics: true,
             supports_opus_future: true,
+            supports_opus: true,
             supports_opus_experimental: true,
             supports_low_latency: true,
             supports_high_quality: true,
@@ -641,6 +648,7 @@ mod tests {
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: true,
+                supports_opus: false,
                 supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
@@ -667,6 +675,7 @@ mod tests {
             accepted: true,
             session_id: Uuid::new_v4(),
             current_audio_mode: AudioMode::Balanced,
+            transport_type: TransportType::Wifi,
             mode_profile: audio_mode_profile(AudioMode::Balanced),
             capabilities: ProtocolCapabilities {
                 supports_pcm16: true,
@@ -674,6 +683,7 @@ mod tests {
                 supports_modes: true,
                 supports_metrics: true,
                 supports_opus_future: false,
+                supports_opus: false,
                 supports_opus_experimental: false,
                 supports_low_latency: true,
                 supports_high_quality: true,
@@ -697,11 +707,29 @@ mod tests {
         let msg = ControlMessageV2::SetAudioMode(SetAudioMode {
             mode: AudioMode::LowLatency,
             reason: "user_selected".to_string(),
+            preferred_sample_rate: Some(48_000),
         });
         let json = serde_json::to_string(&msg).expect("serialize set audio mode");
         assert!(json.contains("\"type\":\"set_audio_mode\""));
+        assert!(json.contains("\"preferred_sample_rate\":48000"));
         let decoded: ControlMessageV2 =
             serde_json::from_str(&json).expect("deserialize set audio mode");
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn v2_control_message_client_list_round_trip() {
+        let msg = ControlMessageV2::ClientList(ClientList {
+            clients: vec![ClientListEntry {
+                id: Uuid::new_v4(),
+                name: "Pixel 8".to_string(),
+                mode: AudioMode::Balanced,
+            }],
+        });
+        let json = serde_json::to_string(&msg).expect("serialize client list");
+        assert!(json.contains("\"type\":\"client_list\""));
+        let decoded: ControlMessageV2 =
+            serde_json::from_str(&json).expect("deserialize client list");
         assert_eq!(decoded, msg);
     }
 

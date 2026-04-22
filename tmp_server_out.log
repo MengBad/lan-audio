@@ -1,1 +1,0 @@
-Running: cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback

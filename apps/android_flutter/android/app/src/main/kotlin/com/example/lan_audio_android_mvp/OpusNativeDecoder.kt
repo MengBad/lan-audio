@@ -21,11 +21,11 @@ class OpusNativeDecoder(
     }
 
     @Synchronized
-    fun decodeToPcmBytes(packet: ByteArray, expectedFrames: Int): ByteArray? {
+    fun decodeToPcmBytes(packet: ByteArray, expectedFrames: Int, usePlc: Boolean = false): ByteArray? {
         check(handle != 0L) { "libopus decoder is closed" }
         val maxFrames = expectedFrames.coerceAtLeast(1)
         val pcm = ShortArray(maxFrames * channels.coerceAtLeast(1))
-        val frames = nativeDecode(handle, packet, 0, packet.size, pcm, maxFrames)
+        val frames = nativeDecode(handle, packet, 0, packet.size, pcm, maxFrames, usePlc)
         if (frames < 0) {
             Log.w(logTag, "libopus decode failed code=$frames")
             return null
@@ -61,6 +61,7 @@ class OpusNativeDecoder(
         length: Int,
         pcmOut: ShortArray,
         maxFrames: Int,
+        usePlc: Boolean,
     ): Int
     private external fun nativeDestroy(handle: Long)
     private external fun nativeSelfTestDecodePeak(sampleRate: Int, channels: Int): Int

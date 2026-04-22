@@ -37,6 +37,17 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Gate release by acceptance contract
+        shell: pwsh
+        run: |
+          ./scripts/assert_release_gate.ps1
+
   windows-exe:
     needs: resolve
     runs-on: windows-latest
@@ -171,14 +182,15 @@ jobs:
             dist/release/**/*.apk
             dist/release/SHA256SUMS.txt
           body: |
-            ## LAN Audio v1.1
+            ## LAN Audio v1.3
 
-            First productized release path for the Windows-to-Android LAN audio client.
-
-            - Default path: `legacy_las1 + pcm16`.
-            - Protocol v2: control plane connected; v2 data plane remains explicit gray path.
-            - Opus: `opus_experimental` is available only on explicit V2 header paths.
-            - Android: release APKs are split per ABI and use `versionCode=2101`.
-            - Android auto reconnect: abnormal disconnect retries up to 3 times; reopening the app restores the last successful server.
-            - Windows: artifact is EXE only, no MSI/NSIS installer bundle.
-            - Rollback: use `legacy_las1 + pcm16`, or `synthetic + v2_header + pcm16` for quick validation.
+            - Default path: `windows_loopback + v2_header + opus`
+            - Rollback path: `legacy_las1 + pcm16` (`--force-rollback`)
+            - USB mode: `adb reverse`, supports `low_latency` / `balanced`
+            - Codec status: `opus stable`
+            - Verified device: `5391d451` (`24129PN74C`)
+            - Verified scenarios: `USB synthetic` / `WiFi windows_loopback`
+            - Known limitations:
+              - Device forced `POWER_SAVING`, adapted with Oboe callback
+              - Phase 4/5 Android Runtime / Desktop refactor deferred to later versions
+            - Rollback: `--force-rollback` or UI safe mode button

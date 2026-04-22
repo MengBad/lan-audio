@@ -1,182 +1,149 @@
 # LAN Audio
 
-Windows-to-Android LAN audio streaming. Use a Windows PC as the sender and an Android phone as a speaker on the same local network.
+LAN Audio turns a Windows PC into an audio sender and an Android phone into a network speaker.
 
-Current version: `1.1`
+It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is built around a Rust server, a Flutter Android client, and a Tauri desktop app.
 
-> Status: usable MVP. The default path is still the safe PCM legacy path. Protocol v2, V2 header, and Opus are available as explicit gray/experimental paths.
+## Overview
 
-## What It Does
+- Latest release: `v1.3`
+- Primary path: `windows_loopback + v2_header + opus`
+- Rollback path: `legacy_las1 + pcm16`
+- Transport modes: `wifi`, `usb`
+- Audio modes: `low_latency`, `balanced`, `high_quality`
 
-- Streams audio from Windows to Android over LAN.
-- Supports Windows system audio capture (`windows_loopback`) and a built-in test tone (`synthetic`).
-- Provides an Android client with discovery, manual connection, recent servers, background playback, and bilingual UI.
-- Provides a Windows desktop client plus `desktop_headless` for debugging.
-- Keeps a safe rollback path while Protocol v2 and Opus evolve.
+## Features
 
-## Current Release Focus
+- Stream Windows system audio to Android in real time
+- Use a built-in `synthetic` source for testing and diagnostics
+- Run over normal LAN or USB via `adb reverse`
+- Switch between `low_latency`, `balanced`, and `high_quality` playback strategies
+- Keep Protocol v2 on the main path while preserving a stable legacy rollback route
+- Inspect runtime state from desktop and Android through a shared snapshot contract
 
-Version `1.1` is focused on productizing the first usable release path:
+## Current Status
 
-- Android app size reduction with release shrink and split-per-ABI APKs.
-- Android background playback and controlled auto reconnect.
-- Protocol v2 control plane and data-plane gray path retained.
-- Opus experimental path wired through standard libopus/JNI.
-- GitHub Actions release workflow builds Android release APKs and Windows exe artifacts.
+`v1.3` has been released.
 
-## Current Stability
+Current validated release facts:
 
-Current conclusion: **audio is playable, but not yet declared long-term stable across devices**.
+- Release gate: `allow_release`
+- Main path: `windows_loopback + v2_header + opus`
+- Rollback path: `legacy_las1 + pcm16`
+- Rollback verification: `desktop_headless --force-rollback`
+- Verified device: `5391d451` (`Xiaomi 24129PN74C`)
+- Verified scenarios:
+  - `USB + synthetic`
+  - `WiFi + windows_loopback`
 
-Validated so far:
-
-- Android real device can connect to Windows and play audio.
-- `synthetic + v2_header + opus_experimental` has passed real-device listening validation.
-- Android auto reconnect behavior has passed real-device validation:
-  - abnormal disconnect retries up to 3 times;
-  - after retries are exhausted, playback stops instead of retrying forever;
-  - reopening the app restores the last successful streaming server.
-
-Still gray/experimental:
-
-- `windows_loopback + v2_header`
-- `opus_experimental` on real system audio
-- long-duration, multi-device stability
-- USB low-latency validation
+Current mainline work after `v1.3` is focused on Android runtime and desktop refactor follow-up, not on changing the default path again.
 
 ## Architecture
 
 ```text
-Windows sender
-  ├─ Tauri desktop client        user-facing control app
-  ├─ desktop_headless            debug/regression entry
-  ├─ Rust server                 capture, protocol, UDP sender, metrics
-  └─ Protocol v1/v2              WebSocket control + UDP audio
+Windows
+  - Tauri desktop app
+  - desktop_headless debug entry
+  - Rust server
+  - Protocol v1/v2 control + audio transport
 
-Android client
-  ├─ Flutter UI                  discovery, controls, status, diagnostics
-  ├─ Foreground playback service background playback and reconnect
-  ├─ AudioTrack playback         PCM output
-  └─ libopus JNI                 experimental Opus decode path
+Android
+  - Flutter UI
+  - Foreground playback service
+  - Oboe / AudioTrack playback runtime
+  - libopus JNI decode path
 ```
 
-## Protocol And Codec Status
+## Repository Layout
 
-Default path:
+```text
+apps/
+  android_flutter/        Android client (Flutter + native playback bridge)
+  desktop/                Windows desktop app (Tauri)
 
-- Data plane: `legacy_las1`
-- Codec: `pcm16`
-- Recommended for normal use and rollback
+crates/
+  lan_audio_domain/       Shared domain contracts and release gate schema
+  lan_audio_protocol/     Protocol types and packet formats
+  lan_audio_server/       Capture, transport, session, and runtime logic
 
-Gray paths:
-
-- `synthetic + v2_header`
-- `windows_loopback + v2_header` only with explicit gray flag
-- `opus_experimental` only when V2 header is active and capabilities allow it
-
-Protocol v2 currently provides:
-
-- `hello / hello_ack`
-- capabilities negotiation
-- `set_audio_mode / audio_mode_changed`
-- mode profile synchronization
-- `config_changed / discontinuity` handling points
-- `LAS1 / LAV2` packet recognition on the client side
-
-## Audio Modes
-
-| Mode | Use case | Strategy |
-| --- | --- | --- |
-| `low_latency` | video/game sync | smaller buffer, batch=1, more aggressive catch-up |
-| `balanced` | default use | moderate buffer, stable playback |
-| `high_quality` | music/long listening | larger buffer, smoother playback |
-
-The modes are not just labels. They map to playback buffer, batch size, drop threshold, and backend preference across protocol/server/Android/desktop semantics.
-
-## Android Auto Reconnect
-
-The Android foreground playback service keeps the last successful server target.
-
-Behavior:
-
-- abnormal WebSocket disconnect enters `reconnecting`;
-- automatic reconnect is limited to 3 attempts;
-- after 3 failed attempts, playback stops and the last successful target remains recoverable;
-- reopening the app attempts `app_open_restore` to reconnect that target;
-- pressing Stop clears the restore target.
-
-Real-device validation on `2026-04-21`:
-
-- Device: `5391d451 / Xiaomi 24129PN74C`
-- Path: `synthetic + v2_header + opus_experimental`
-- Initial playback: `playing`, `buffered_ms≈70-80`, `rx_frames_per_sec≈99-101`, underrun/late/silence all 0
-- Disconnect test: observed `attempt=1/3`, `2/3`, `3/3`, then `auto reconnect exhausted`
-- Reopen test: app restored `10.0.0.185:39991/39992` and returned to `playing`
-
-## Build Artifacts
-
-GitHub Release `v1.1` is expected to contain:
-
-- Windows: `lan-audio-desktop-v1.1.exe`
-- Android release APKs split by ABI:
-  - `arm64-v8a`
-  - `armeabi-v7a`
-  - `x86_64`
-- `SHA256SUMS.txt`
-
-Windows release is intentionally exe-only for now. MSI/NSIS installers are not part of this release path.
+docs/                     Protocol, UI, release, and roadmap docs
+scripts/                  Local run, validate, package, and release scripts
+artifacts/release/        Tracked release gate and device acceptance evidence
+```
 
 ## Quick Start
 
-### Windows Sender
+### 1. Start the Windows sender
 
-Use the desktop client for normal operation.
-
-For debug or regression testing:
+Synthetic test source:
 
 ```powershell
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic
 ```
 
-System audio capture:
+Windows system audio:
 
 ```powershell
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
 ```
 
-V2 + Opus experimental test tone:
+USB mode:
 
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --data-plane v2_header --codec opus_experimental
+cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-serial <serial> --audio-source windows_loopback
 ```
 
-Loopback + V2 gray path requires an explicit flag:
+Force rollback path:
 
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --data-plane v2_header --allow-loopback-v2-header-gray
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --force-rollback
 ```
 
-### Android Client
+### 2. Install the Android app
 
-Install the APK matching your device ABI from the GitHub Release.
+Download the APK that matches your device ABI from the GitHub release:
 
-Recommended first test:
+- `arm64-v8a`
+- `armeabi-v7a`
+- `x86_64`
 
-1. Start Windows sender with `synthetic`.
-2. Open Android app.
-3. Use discovery, LAN scan, or manual address.
-4. Connect and start playback.
-5. If discovery fails, confirm both devices are on the same network and not isolated by guest/AP isolation.
+### 3. Connect and play
+
+1. Launch the Windows sender.
+2. Open the Android app.
+3. Use discovery, manual address entry, or USB mode.
+4. Start playback.
+5. If playback is unstable, use rollback mode on the desktop side.
+
+## Data Plane And Codec
+
+Recommended runtime path:
+
+- Source: `windows_loopback`
+- Data plane: `v2_header`
+- Codec: `opus`
+
+Maintained fallback path:
+
+- Data plane: `legacy_las1`
+- Codec: `pcm16`
+
+Service snapshots expose both configured and active runtime path state:
+
+- `data_plane`
+- `active_data_plane`
+- `rollback_available`
+- `rollback_state`
 
 ## Local Development
 
-Run the full local validation suite:
+Full local validation:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
 ```
 
-The validation script runs:
+This runs:
 
 - `cargo fmt --all -- --check`
 - `cargo check`
@@ -198,47 +165,48 @@ Outputs:
 - `dist/release/windows/`
 - `dist/release/SHA256SUMS.txt`
 
-## Release Process
+## Release
 
-Version source: `VERSION`
+Version source:
 
-Version rule:
+- `VERSION`
 
-- short version: `1.0`, `1.1`, `1.2`, ...
-- Git tag: `v<major.minor>`
-- Rust/Tauri semver: `<major.minor>.0`
-- Android version name: `<major.minor>`
-- Android version code: `2000 + major * 100 + minor` to stay installable over earlier test builds
-
-Release workflow:
-
-1. Update version with `scripts/bump_version.ps1 -Version 1.1`.
-2. Commit and tag `v1.1`.
-3. Push branch and tag.
-4. GitHub Actions builds release artifacts.
-5. GitHub Actions publishes the release.
-
-Manual release helper:
+Release entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.1
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3
 ```
+
+The release pipeline is contract-gated by:
+
+- `artifacts/release/acceptance_gate.json`
+- `artifacts/release/device_acceptance.json`
+
+GitHub Release artifacts include:
+
+- Windows desktop `.exe`
+- Android split-per-ABI release APKs
+- `SHA256SUMS.txt`
 
 ## Documentation
 
-- [Protocol v2](docs/protocol.md)
+- [Protocol](docs/protocol.md)
 - [Protocol v2 Migration](docs/protocol_v2_migration.md)
-- [Roadmap](docs/roadmap.md)
 - [Desktop UI](docs/desktop_ui.md)
 - [Release Policy](docs/RELEASE_POLICY.md)
 - [TODO / Status](docs/todo.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Rollback
 
-If a V2 or Opus path is unstable, use one of these safe paths:
+If the recommended path is unstable, fall back to one of these:
 
 - `legacy_las1 + pcm16`
-- `synthetic + legacy_las1`
+- `windows_loopback + legacy_las1 + pcm16`
 - `synthetic + v2_header + pcm16`
 
-Do not make V2 header or Opus the default until long-duration loopback validation passes.
+For explicit rollback verification, use:
+
+```powershell
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --force-rollback
+```

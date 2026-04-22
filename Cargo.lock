@@ -1732,21 +1732,32 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_desktop"
-version = "1.1.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "lan_audio_protocol",
  "lan_audio_server",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
 ]
 
 [[package]]
-name = "lan_audio_protocol"
-version = "1.1.0"
+name = "lan_audio_domain"
+version = "1.3.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lan_audio_protocol"
+version = "1.3.0"
+dependencies = [
+ "lan_audio_domain",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1755,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_server"
-version = "1.1.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1763,6 +1774,7 @@ dependencies = [
  "if-addrs",
  "lan_audio_protocol",
  "opus",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

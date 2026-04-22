@@ -9,9 +9,14 @@ import android.os.Process
 import android.util.Log
 import android.os.Build
 import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.DataInputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -20,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class StreamSessionManager(
     private val target: PlaybackTarget,
     private val pingIntervalMs: Int,
+    initialAudioMode: String = "balanced",
     private val callback: Callback,
 ) {
     private val logTag = "lan_audio_stream"
@@ -29,9 +35,16 @@ class StreamSessionManager(
         fun onWsConnected()
         fun onWsDisconnected(reason: String)
         fun onUdpPacket(packet: LasPacket)
-        fun onControlHelloAck(protocolVersion: Int, currentAudioMode: String, capabilities: Map<String, Boolean>)
+        fun onControlHelloAck(
+            protocolVersion: Int,
+            currentAudioMode: String,
+            capabilities: Map<String, Boolean>,
+            transportType: String,
+        )
         fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String)
         fun onAudioModeChanged(mode: String, applied: Boolean, reason: String)
+        fun onClientCountUpdated(count: Int)
+        fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int)
         fun onError(code: String, message: String)
     }
 
@@ -39,10 +52,16 @@ class StreamSessionManager(
     private var webSocket: WebSocket? = null
     private var udpSocket: DatagramSocket? = null
     private var udpThread: Thread? = null
+    private var tcpSocket: Socket? = null
+    private var tcpThread: Thread? = null
     private var pingExecutor: ScheduledExecutorService? = null
     private val pingSeq = AtomicInteger(0)
+    private val pingSentAt = ConcurrentHashMap<Int, Long>()
     private var wsReady = false
-    private var currentAudioMode: String = "balanced"
+    private var currentAudioMode: String = PlaybackModeProfiles.normalize(initialAudioMode)
+    private var connectedClients: Int = 0
+    private val recentRttMs = ArrayDeque<Int>()
+    private val preferredSampleRate: Int = AudioTrackController.preferredStreamSampleRate()
 
     @Volatile
     private var running = false
@@ -53,7 +72,11 @@ class StreamSessionManager(
         }
         running = true
         Log.i(logTag, "start host=${target.host} ws=${target.wsPort} udp=${target.udpPort}")
-        startUdpReceiver()
+        if (target.transportMode == "usb") {
+            startTcpReceiver()
+        } else {
+            startUdpReceiver()
+        }
         startWebSocket()
     }
 
@@ -71,6 +94,10 @@ class StreamSessionManager(
         udpSocket = null
         udpThread?.interrupt()
         udpThread = null
+        tcpSocket?.close()
+        tcpSocket = null
+        tcpThread?.interrupt()
+        tcpThread = null
         okHttpClient.dispatcher.executorService.shutdown()
         okHttpClient.connectionPool.evictAll()
         wsReady = false
@@ -85,6 +112,7 @@ class StreamSessionManager(
                 "type" to "set_audio_mode",
                 "mode" to mode,
                 "reason" to reason,
+                "preferred_sample_rate" to preferredSampleRate,
             ),
         )
         return webSocket?.send(setMode.toString()) ?: false
@@ -136,6 +164,57 @@ class StreamSessionManager(
         }, "lan-audio-service-udp").also { it.start() }
     }
 
+    private fun startTcpReceiver() {
+        Log.i(logTag, "tcp receiver start host=${target.host} port=${target.udpPort}")
+        callback.onLog("tcp_connect:${target.host}:${target.udpPort}")
+        tcpThread = Thread({
+            val threadName = Thread.currentThread().name
+            val threadId = Process.myTid()
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+                val effectivePriority = Process.getThreadPriority(threadId)
+                Log.i(
+                    logTag,
+                    "tcp receiver thread priority set name=$threadName tid=$threadId requested=THREAD_PRIORITY_AUDIO(${Process.THREAD_PRIORITY_AUDIO}) effective=$effectivePriority",
+                )
+            } catch (t: Throwable) {
+                Log.w(
+                    logTag,
+                    "tcp receiver thread priority set failed name=$threadName tid=$threadId requested=THREAD_PRIORITY_AUDIO(${Process.THREAD_PRIORITY_AUDIO}) error=${t.message}",
+                )
+            }
+            try {
+                val socket = Socket(target.host, target.udpPort)
+                socket.soTimeout = 1000
+                tcpSocket = socket
+                DataInputStream(BufferedInputStream(socket.getInputStream())).use { input ->
+                    while (running) {
+                        try {
+                            val frameLen = input.readInt()
+                            if (frameLen <= 0 || frameLen > 256 * 1024) {
+                                callback.onError("tcp_frame_invalid", "invalid tcp frame length=$frameLen")
+                                continue
+                            }
+                            val raw = ByteArray(frameLen)
+                            input.readFully(raw)
+                            val las = LasPacketParser.parse(raw) ?: continue
+                            callback.onUdpPacket(las)
+                        } catch (_: SocketTimeoutException) {
+                            continue
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                if (running) {
+                    Log.e(logTag, "tcp receive failed: ${t.message}")
+                    callback.onError("tcp_receive_failed", "tcp receive failed: ${t.message}")
+                }
+            } finally {
+                Log.i(logTag, "tcp receiver stopped")
+            }
+        }, "lan-audio-service-tcp").also { it.start() }
+    }
+
     private fun startWebSocket() {
         val request = Request.Builder()
             .url("ws://${target.host}:${target.wsPort}/")
@@ -144,8 +223,12 @@ class StreamSessionManager(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (!running || this@StreamSessionManager.webSocket !== webSocket) {
+                        webSocket.close(1000, "stale_session")
+                        return
+                    }
                     Log.i(logTag, "ws open")
-                    val localUdpPort = udpSocket?.localPort ?: 0
+                    val localUdpPort = if (target.transportMode == "usb") 0 else (udpSocket?.localPort ?: 0)
                     val platformOpusDecoderAvailable = OpusFrameDecoder.isAvailable()
                     // Opus remains opt-in and experimental, but can be negotiated whenever
                     // the bundled libopus/JNI decoder is available. PCM16 remains default.
@@ -157,7 +240,7 @@ class StreamSessionManager(
                             "device_name" to "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
                             "client_id" to "android-${System.currentTimeMillis()}",
                             "udp_port" to localUdpPort,
-                            "desired_sample_rate" to 48000,
+                            "desired_sample_rate" to preferredSampleRate,
                             "channels" to 2,
                             "preferred_audio_mode" to currentAudioMode,
                             "capabilities" to mapOf(
@@ -166,6 +249,7 @@ class StreamSessionManager(
                                 "supports_modes" to true,
                                 "supports_metrics" to true,
                                 "supports_opus_future" to platformOpusDecoderAvailable,
+                                "supports_opus" to supportsVerifiedOpusPlayback,
                                 "supports_opus_experimental" to supportsVerifiedOpusPlayback,
                                 "supports_low_latency" to true,
                                 "supports_high_quality" to true,
@@ -194,7 +278,7 @@ class StreamSessionManager(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    if (!running) {
+                    if (!running || this@StreamSessionManager.webSocket !== webSocket) {
                         return
                     }
                     try {
@@ -210,7 +294,16 @@ class StreamSessionManager(
                                 currentAudioMode = msg.optString("current_audio_mode", currentAudioMode)
                                 val capabilitiesJson = msg.optJSONObject("capabilities")
                                 val capabilities = jsonObjectToBooleanMap(capabilitiesJson)
-                                callback.onControlHelloAck(protocolVersion, currentAudioMode, capabilities)
+                                val transportType = msg.optString(
+                                    "transport_type",
+                                    if (target.transportMode == "usb") "usb" else "wifi",
+                                ).lowercase()
+                                callback.onControlHelloAck(
+                                    protocolVersion,
+                                    currentAudioMode,
+                                    capabilities,
+                                    transportType,
+                                )
                                 if (!wsReady) {
                                     wsReady = true
                                     callback.onWsConnected()
@@ -227,6 +320,25 @@ class StreamSessionManager(
                                 )
                                 callback.onLog("v2_server_info")
                             }
+                            "server_pong" -> {
+                                val seq = msg.optInt("seq", -1)
+                                if (seq >= 0) {
+                                    val sentAt = pingSentAt.remove(seq)
+                                    if (sentAt != null) {
+                                        val rttMs = (System.currentTimeMillis() - sentAt).coerceAtLeast(0)
+                                        val currentRtt = rttMs.toInt()
+                                        val median = updateRttMedian(currentRtt)
+                                        if (median > 0 && currentRtt > median * 10) {
+                                            Log.w(
+                                                logTag,
+                                                "tcp_rtt_spike current=${currentRtt}ms median=${median}ms transport=${target.transportMode}",
+                                            )
+                                            callback.onLog("tcp_rtt_spike:${currentRtt}ms/${median}ms")
+                                        }
+                                        callback.onTcpRoundTripMs(currentRtt, median)
+                                    }
+                                }
+                            }
                             "audio_mode_changed" -> {
                                 val mode = msg.optString("mode", currentAudioMode)
                                 val applied = msg.optBoolean("applied", false)
@@ -236,6 +348,19 @@ class StreamSessionManager(
                                 }
                                 callback.onAudioModeChanged(mode, applied, reason)
                                 callback.onLog("v2_audio_mode_changed:$mode")
+                            }
+                            "client_list" -> {
+                                val clients = msg.optJSONArray("clients")
+                                connectedClients = clients?.length() ?: 0
+                                callback.onClientCountUpdated(connectedClients)
+                            }
+                            "client_joined" -> {
+                                connectedClients += 1
+                                callback.onClientCountUpdated(connectedClients)
+                            }
+                            "client_left" -> {
+                                connectedClients = (connectedClients - 1).coerceAtLeast(0)
+                                callback.onClientCountUpdated(connectedClients)
                             }
                             "error" -> {
                                 callback.onError(
@@ -261,7 +386,7 @@ class StreamSessionManager(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    if (!running) {
+                    if (!running || this@StreamSessionManager.webSocket !== webSocket) {
                         return
                     }
                     Log.e(logTag, "ws failure: ${t.message}")
@@ -271,7 +396,7 @@ class StreamSessionManager(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    if (!running) {
+                    if (!running || this@StreamSessionManager.webSocket !== webSocket) {
                         return
                     }
                     Log.w(logTag, "ws closed code=$code reason=$reason")
@@ -299,6 +424,10 @@ class StreamSessionManager(
                         "ts_unix_ms" to System.currentTimeMillis(),
                     ),
                 )
+                val seq = ping.optInt("seq", -1)
+                if (seq >= 0) {
+                    pingSentAt[seq] = System.currentTimeMillis()
+                }
                 webSocket?.send(ping.toString())
             } catch (t: Throwable) {
                 Log.e(logTag, "ws ping failed: ${t.message}")
@@ -319,5 +448,17 @@ class StreamSessionManager(
             out[key] = json.optBoolean(key, false)
         }
         return out
+    }
+
+    private fun updateRttMedian(sampleMs: Int): Int {
+        if (recentRttMs.size >= 20) {
+            recentRttMs.removeFirst()
+        }
+        recentRttMs.addLast(sampleMs.coerceAtLeast(0))
+        if (recentRttMs.isEmpty()) {
+            return 0
+        }
+        val sorted = recentRttMs.toMutableList().sorted()
+        return sorted[sorted.size / 2]
     }
 }

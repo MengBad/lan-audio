@@ -267,6 +267,35 @@
         color: #2e3a47;
       }
 
+      .usb-panel {
+        margin-top: 10px;
+        border-top: 1px solid #e6ebf2;
+        padding-top: 10px;
+      }
+
+      .usb-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .usb-device-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .usb-device {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .usb-meta {
+        color: var(--muted);
+      }
+
       details {
         margin-top: 12px;
         background: #fff;
@@ -387,8 +416,8 @@
             <span id="fallbackLabel"></span>
           </label>
           <label class="toggle">
-            <input type="checkbox" id="loopbackV2GrayToggle" />
-            <span id="loopbackV2GrayLabel"></span>
+            <button class="copy-btn" id="safeModeBtn" type="button"></button>
+            <span id="safeModeHint"></span>
           </label>
           <label class="toggle">
             <input type="checkbox" id="dumpToggle" />
@@ -427,6 +456,23 @@
             <div class="device-subtitle" id="recentDeviceLabel"></div>
             <ul class="device-recent" id="deviceRecentList"></ul>
           </div>
+
+          <div class="usb-panel">
+            <div class="device-subtitle" id="usbTitle"></div>
+            <div class="usb-actions">
+              <button class="copy-btn" id="usbRefreshBtn" type="button"></button>
+              <button class="copy-btn" id="usbDisableBtn" type="button"></button>
+            </div>
+            <div class="row">
+              <span class="label" id="usbStateLabel"></span>
+              <span class="value" id="usbStateValue"></span>
+            </div>
+            <div class="row">
+              <span class="label" id="usbForwardLabel"></span>
+              <span class="value" id="usbForwardValue"></span>
+            </div>
+            <div class="usb-device-list" id="usbDeviceList"></div>
+          </div>
         </section>
       </div>
 
@@ -461,16 +507,19 @@
           subtitle: 'Windows 系统音频推送到 Android 手机',
           sourceTitle: '音频源设置',
           dataPlaneTitle: '数据面',
-          codecTitle: 'Codec（V2 实验）',
+          codecTitle: 'Codec（推荐路径）',
           deviceTitle: '设备 / 会话',
           loopback: '系统音频',
           synthetic: '测试音',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus 实验（V2）',
+          opusExperimental: 'Opus',
           fallback: '采集失败自动回退到测试音',
-          loopbackV2Gray: '仅在显式灰度下允许 loopback 使用 v2_header',
+          safeMode: '安全模式',
+          safeModeEnable: '切回安全模式',
+          safeModeDisable: '恢复推荐路径',
+          safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
           dump: '导出 capture wav（调试）',
           address: '连接地址',
           copy: '复制',
@@ -489,10 +538,10 @@
           healthStream: '推流状态',
           healthDevices: '设备',
           healthSource: '音频源',
-          grayOn: '已启用受控灰度',
-          grayOff: '默认安全路径',
+          grayOn: '推荐路径',
+          grayOff: '回滚路径',
           codecFallback: 'Opus 需要 V2 Header；当前有效 Codec 为 PCM16',
-          codecExperimentalActive: 'Opus 实验链路已启用',
+          codecExperimentalActive: 'Opus 稳定链路已启用',
           healthOk: '正常',
           healthNotStarted: '未启动',
           healthError: '异常',
@@ -509,6 +558,12 @@
           state_stopping: '停止中',
           state_error: '错误',
           session_streaming: '推流中',
+          session_disconnected: '未连接',
+          session_handshaking: '握手中',
+          session_negotiated: '已协商',
+          session_reconfiguring: '重配置中',
+          session_recovering: '恢复中',
+          session_closed: '已关闭',
           session_waiting_for_device: '等待手机连接',
           session_starting: '服务启动中',
           session_stopping: '服务停止中',
@@ -537,6 +592,13 @@
           captureFrames: '采集帧数',
           captureErrors: '采集错误数',
           captureUnderruns: '采集欠载',
+          bufferedMs: '缓冲毫秒',
+          latePackets: '迟到包',
+          droppedPackets: '丢弃包',
+          rttMs: 'RTT(ms)',
+          reconnectCount: '重连次数',
+          decodeErrors: '解码错误',
+          sinkWriteGap: 'Sink 写入间隔 P95',
           capturePeak: '峰值',
           captureRms: '均方根',
           serviceStatus: '服务状态',
@@ -545,22 +607,35 @@
           captureDevice: '采集设备',
           sampleRate: '采样率',
           channels: '声道'
+          ,
+          usbTitle: 'USB 模式（adb）',
+          usbRefresh: '刷新设备',
+          usbDisable: '停用 USB',
+          usbEnable: '启用 USB',
+          usbState: 'USB 状态',
+          usbForward: 'Forward 端口',
+          usbStateOn: 'USB 已连接 · {serial}',
+          usbStateOff: '未启用（Wi-Fi）',
+          usbNoDevices: '未检测到 adb 在线设备'
         },
         en: {
           title: 'LAN Audio Streaming Console',
           subtitle: 'Stream Windows system audio to Android devices',
           sourceTitle: 'Audio Source',
           dataPlaneTitle: 'Data Plane',
-          codecTitle: 'Codec (V2 experiment)',
+          codecTitle: 'Codec (Recommended Path)',
           deviceTitle: 'Devices / Session',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          opusExperimental: 'Opus experimental (V2)',
+          opusExperimental: 'Opus',
           fallback: 'Fallback to test tone when capture fails',
-          loopbackV2Gray: 'Allow loopback to use v2_header only behind explicit gray switch',
+          safeMode: 'Safe mode',
+          safeModeEnable: 'Switch to safe mode',
+          safeModeDisable: 'Restore recommended path',
+          safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
           dump: 'Export capture wav (debug)',
           address: 'Connect Address',
           copy: 'Copy',
@@ -579,10 +654,10 @@
           healthStream: 'Streaming',
           healthDevices: 'Devices',
           healthSource: 'Source',
-          grayOn: 'Controlled gray path enabled',
-          grayOff: 'Default safe path',
+          grayOn: 'Recommended path',
+          grayOff: 'Rollback path',
           codecFallback: 'Opus requires V2 Header; effective codec is PCM16',
-          codecExperimentalActive: 'Opus experimental path is active',
+          codecExperimentalActive: 'Opus stable path is active',
           healthOk: 'Healthy',
           healthNotStarted: 'Not started',
           healthError: 'Abnormal',
@@ -599,6 +674,12 @@
           state_stopping: 'Stopping',
           state_error: 'Error',
           session_streaming: 'Streaming',
+          session_disconnected: 'Disconnected',
+          session_handshaking: 'Handshaking',
+          session_negotiated: 'Negotiated',
+          session_reconfiguring: 'Reconfiguring',
+          session_recovering: 'Recovering',
+          session_closed: 'Closed',
           session_waiting_for_device: 'Waiting for mobile device',
           session_starting: 'Service starting',
           session_stopping: 'Service stopping',
@@ -627,6 +708,13 @@
           captureFrames: 'Captured frames',
           captureErrors: 'Capture errors',
           captureUnderruns: 'Capture underruns',
+          bufferedMs: 'Buffered ms',
+          latePackets: 'Late packets',
+          droppedPackets: 'Dropped packets',
+          rttMs: 'RTT (ms)',
+          reconnectCount: 'Reconnect count',
+          decodeErrors: 'Decode errors',
+          sinkWriteGap: 'Sink write gap P95',
           capturePeak: 'Peak',
           captureRms: 'RMS',
           serviceStatus: 'Service status',
@@ -634,7 +722,16 @@
           audioSource: 'Audio source',
           captureDevice: 'Capture device',
           sampleRate: 'Sample rate',
-          channels: 'Channels'
+          channels: 'Channels',
+          usbTitle: 'USB Mode (adb)',
+          usbRefresh: 'Refresh Devices',
+          usbDisable: 'Disable USB',
+          usbEnable: 'Enable USB',
+          usbState: 'USB Status',
+          usbForward: 'Forward Ports',
+          usbStateOn: 'USB connected · {serial}',
+          usbStateOff: 'Disabled (Wi-Fi)',
+          usbNoDevices: 'No online adb devices detected'
         }
       };
 
@@ -642,6 +739,7 @@
         lang: navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en',
         snapshot: null,
         busy: false,
+        adbDevices: [],
       };
 
       function t(key) {
@@ -670,6 +768,10 @@
 
       function dataPlaneName(dataPlane) {
         return t(`data_plane_${dataPlane}`) || dataPlane;
+      }
+
+      function runtimeSnapshot(snapshot) {
+        return snapshot?.service_snapshot || {};
       }
 
       function formatLogLine(line) {
@@ -710,14 +812,77 @@
       }
 
       function buildSubline(snapshot) {
+        if (snapshot.transport_mode === 'usb' && snapshot.usb_serial) {
+          return trf('usbStateOn', { serial: snapshot.usb_serial });
+        }
         if (snapshot.service_status === 'running') return t('subRunning');
         if (snapshot.service_status === 'error') return t('subError');
         return t('subStopped');
       }
 
+      async function refreshAdbDevices() {
+        try {
+          state.adbDevices = await tauriInvoke('list_adb_devices');
+        } catch {
+          state.adbDevices = [];
+        }
+      }
+
+      async function enableUsbMode(serial) {
+        await call('enable_usb_mode', { serial });
+      }
+
+      async function disableUsbMode() {
+        await call('disable_usb_mode');
+      }
+
+      function renderUsbPanel(snapshot) {
+        document.getElementById('usbStateValue').textContent =
+          snapshot.transport_mode === 'usb' && snapshot.usb_serial
+            ? trf('usbStateOn', { serial: snapshot.usb_serial })
+            : t('usbStateOff');
+        document.getElementById('usbForwardValue').textContent =
+          `ws tcp:${snapshot.ws_port} · data tcp:${snapshot.udp_port}`;
+
+        const list = document.getElementById('usbDeviceList');
+        list.innerHTML = '';
+        if (!state.adbDevices || state.adbDevices.length === 0) {
+          const row = document.createElement('div');
+          row.className = 'usb-meta';
+          row.textContent = t('usbNoDevices');
+          list.appendChild(row);
+          return;
+        }
+
+        state.adbDevices.forEach((device) => {
+          const row = document.createElement('div');
+          row.className = 'usb-device';
+
+          const meta = document.createElement('div');
+          const model = device.model ? ` · ${device.model}` : '';
+          const tid = device.transport_id ? ` · tid:${device.transport_id}` : '';
+          meta.innerHTML = `<strong>${device.serial}</strong><span class="usb-meta">${model}${tid}</span>`;
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'copy-btn';
+          btn.textContent = t('usbEnable');
+          btn.disabled = state.busy;
+          btn.addEventListener('click', () => enableUsbMode(device.serial));
+
+          row.appendChild(meta);
+          row.appendChild(btn);
+          list.appendChild(row);
+        });
+      }
+
       function streamHealth(snapshot) {
+        const runtime = runtimeSnapshot(snapshot);
         if (snapshot.service_status === 'error') return t('healthError');
         if (snapshot.service_status !== 'running') return t('healthNotStarted');
+        if (runtime.state && runtime.state !== 'streaming' && runtime.state !== 'disconnected') {
+          return runtime.state;
+        }
         return t('healthOk');
       }
 
@@ -736,7 +901,7 @@
         document.getElementById('codecPcm16').textContent = t('pcm16');
         document.getElementById('codecOpus').textContent = t('opusExperimental');
         document.getElementById('fallbackLabel').textContent = t('fallback');
-        document.getElementById('loopbackV2GrayLabel').textContent = t('loopbackV2Gray');
+        document.getElementById('safeModeHint').textContent = t('safeModeHint');
         document.getElementById('dumpLabel').textContent = t('dump');
         document.getElementById('addrLabel').textContent = t('address');
         document.getElementById('copyAddrBtn').textContent = t('copy');
@@ -752,6 +917,11 @@
         document.getElementById('versionLabel').textContent = t('version');
         document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
         document.getElementById('recentDeviceLabel').textContent = t('recentDevice');
+        document.getElementById('usbTitle').textContent = t('usbTitle');
+        document.getElementById('usbRefreshBtn').textContent = t('usbRefresh');
+        document.getElementById('usbDisableBtn').textContent = t('usbDisable');
+        document.getElementById('usbStateLabel').textContent = t('usbState');
+        document.getElementById('usbForwardLabel').textContent = t('usbForward');
         document.getElementById('healthTitle').textContent = t('healthTitle');
         document.getElementById('healthStreamLabel').textContent = `${t('healthStream')}:`;
         document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
@@ -765,6 +935,8 @@
 
       function renderSnapshot(snapshot) {
         state.snapshot = snapshot;
+        const runtime = runtimeSnapshot(snapshot);
+        const runtimeMetrics = runtime.metrics || {};
         const main = getMainAction(snapshot);
         const dot = document.getElementById('statusDot');
         dot.className = 'status-dot';
@@ -787,20 +959,21 @@
         document.getElementById('healthSourceValue').textContent = sourceName(snapshot.audio_source);
 
         document.getElementById('addrValue').textContent = snapshot.connect_address;
-        document.getElementById('sessionValue').textContent = t(`session_${snapshot.session_status}`) || snapshot.session_status;
+        document.getElementById('sessionValue').textContent = t(`session_${runtime.state}`) || runtime.state || snapshot.session_status;
         document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
-        document.getElementById('dataPlaneValue').textContent = dataPlaneName(snapshot.data_plane_format);
-        document.getElementById('modeValue').textContent = snapshot.current_audio_mode || 'balanced';
+        document.getElementById('dataPlaneValue').textContent = dataPlaneName(runtime.data_plane || snapshot.data_plane_format);
+        document.getElementById('modeValue').textContent = runtime.mode || snapshot.current_audio_mode || 'balanced';
         document.getElementById('strategyValue').textContent =
           `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
           `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
-        const codecText = snapshot.codec_selection === 'opus_experimental'
-          ? (snapshot.effective_codec === 'opus_experimental'
-            ? `${snapshot.effective_codec} · ${t('codecExperimentalActive')}`
-            : `${snapshot.effective_codec} · ${t('codecFallback')}`)
-          : snapshot.effective_codec;
+        const isSafeMode = runtime.rollback_state === 'forced_legacy_las1_pcm16';
+        const codecText = snapshot.codec_selection === 'opus'
+          ? ((runtime.effective_codec || snapshot.effective_codec) === 'opus'
+            ? `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecExperimentalActive')}`
+            : `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecFallback')}`)
+          : (runtime.effective_codec || snapshot.effective_codec);
         document.getElementById('codecValue').textContent = codecText;
-        document.getElementById('grayValue').textContent = snapshot.gray_mode ? t('grayOn') : t('grayOff');
+        document.getElementById('grayValue').textContent = runtime.rollback_state || (isSafeMode ? t('grayOff') : t('grayOn'));
         document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
@@ -811,10 +984,12 @@
         document.getElementById('dataPlaneLegacy').classList.toggle('active', snapshot.data_plane_format === 'legacy_las1');
         document.getElementById('dataPlaneV2Header').classList.toggle('active', snapshot.data_plane_format === 'v2_header');
         document.getElementById('codecPcm16').classList.toggle('active', snapshot.codec_selection === 'pcm16');
-        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus_experimental');
+        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus');
         document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
-        document.getElementById('loopbackV2GrayToggle').checked = snapshot.loopback_v2_header_gray_enabled;
         document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
+        const safeModeBtn = document.getElementById('safeModeBtn');
+        safeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
+        safeModeBtn.title = t('safeModeHint');
 
         const recent = snapshot.recent_clients || [];
         const currentDevice = snapshot.connected_devices > 0 && recent.length > 0 ? recent[0] : t('noDevice');
@@ -837,27 +1012,27 @@
 
         const m = snapshot.metrics;
         document.getElementById('debugTx').innerHTML =
-          `<div>${t('sentPackets')}: ${m.tx_packets}</div>` +
-          `<div>${t('sentBytes')}: ${m.tx_bytes}</div>` +
-          `<div>${t('activeSessions')}: ${m.active_sessions}</div>`;
+          `<div>${t('bufferedMs')}: ${runtimeMetrics.buffered_ms ?? 0}</div>` +
+          `<div>${t('captureUnderruns')}: ${runtimeMetrics.underrun ?? 0}</div>` +
+          `<div>${t('latePackets')}: ${runtimeMetrics.late_packets ?? 0}</div>` +
+          `<div>${t('droppedPackets')}: ${runtimeMetrics.dropped_packets ?? 0}</div>`;
 
         document.getElementById('debugCapture').innerHTML =
-          `<div>${t('captureState')}: ${m.capture_source_state}</div>` +
-          `<div>${t('captureFrames')}: ${m.capture_frames_produced}</div>` +
-          `<div>${t('captureErrors')}: ${m.capture_read_errors}</div>` +
-          `<div>${t('captureUnderruns')}: ${m.capture_underruns}</div>` +
-          `<div>${t('capturePeak')}: ${Number(m.capture_last_peak || 0).toFixed(3)}</div>` +
-          `<div>${t('captureRms')}: ${Number(m.capture_last_rms || 0).toFixed(3)}</div>`;
+          `<div>${t('rttMs')}: ${runtimeMetrics.rtt_ms ?? 0}</div>` +
+          `<div>${t('reconnectCount')}: ${runtimeMetrics.reconnect_count ?? 0}</div>` +
+          `<div>${t('decodeErrors')}: ${runtimeMetrics.decode_errors ?? 0}</div>` +
+          `<div>${t('sinkWriteGap')}: ${runtimeMetrics.sink_write_gap_ms_p95 ?? 0}</div>`;
 
         document.getElementById('debugState').innerHTML =
           `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
-          `<div>${t('sessionStatus')}: ${snapshot.session_status}</div>` +
+          `<div>${t('sessionStatus')}: ${runtime.state || snapshot.session_status}</div>` +
           `<div>${t('protocol')}: v${snapshot.protocol_version}</div>` +
           `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
-          `<div>${t('dataPlane')}: ${snapshot.data_plane_format}</div>` +
-          `<div>${t('mode')}: ${snapshot.current_audio_mode}</div>` +
-          `<div>${t('codec')}: ${snapshot.effective_codec}</div>` +
+          `<div>${t('dataPlane')}: ${runtime.data_plane || snapshot.data_plane_format}</div>` +
+          `<div>${t('mode')}: ${runtime.mode || snapshot.current_audio_mode}</div>` +
+          `<div>${t('codec')}: ${runtime.effective_codec || snapshot.effective_codec}</div>` +
           `<div>${t('strategy')}: ${JSON.stringify(snapshot.mode_profile || {})}</div>` +
+          `<div>service_snapshot: ${JSON.stringify(runtime)}</div>` +
           `<div>capabilities: ${Object.entries(snapshot.capabilities || {}).filter(([, v]) => v).map(([k]) => k).join(', ')}</div>` +
           `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
           `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
@@ -880,13 +1055,18 @@
         document.getElementById('codecPcm16').disabled = disabled;
         document.getElementById('codecOpus').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
-        document.getElementById('loopbackV2GrayToggle').disabled = disabled;
+        document.getElementById('safeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
+        document.getElementById('usbRefreshBtn').disabled = disabled;
+        document.getElementById('usbDisableBtn').disabled = disabled || snapshot.transport_mode !== 'usb';
+
+        renderUsbPanel(snapshot);
       }
 
       async function refresh() {
         try {
+          await refreshAdbDevices();
           const snapshot = await tauriInvoke('get_desktop_snapshot');
           renderSnapshot(snapshot);
         } catch (error) {
@@ -913,12 +1093,34 @@
             data_plane_format:
               document.getElementById('dataPlaneV2Header').classList.contains('active') ? 'v2_header' : 'legacy_las1',
             codec_selection:
-              document.getElementById('codecOpus').classList.contains('active') ? 'opus_experimental' : 'pcm16',
-            allow_loopback_v2_header_gray: document.getElementById('loopbackV2GrayToggle').checked,
+              document.getElementById('codecOpus').classList.contains('active') ? 'opus' : 'pcm16',
+            allow_loopback_v2_header_gray: false,
             fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
             capture_dump_wav: document.getElementById('dumpToggle').checked,
           }
         });
+      }
+
+      async function toggleSafeMode() {
+        if (!state.snapshot) return;
+        const isSafeMode = state.snapshot.data_plane_format === 'legacy_las1' && state.snapshot.codec_selection === 'pcm16';
+        document.getElementById('sourceLoopback').classList.add('active');
+        document.getElementById('sourceSynthetic').classList.remove('active');
+        document.getElementById('fallbackToggle').checked = state.snapshot.fallback_to_synthetic;
+        document.getElementById('dumpToggle').checked = state.snapshot.capture_dump_wav;
+        if (isSafeMode) {
+          document.getElementById('dataPlaneLegacy').classList.remove('active');
+          document.getElementById('dataPlaneV2Header').classList.add('active');
+          document.getElementById('codecPcm16').classList.remove('active');
+          document.getElementById('codecOpus').classList.add('active');
+          await applySettings('windows_loopback');
+          return;
+        }
+        document.getElementById('dataPlaneLegacy').classList.add('active');
+        document.getElementById('dataPlaneV2Header').classList.remove('active');
+        document.getElementById('codecPcm16').classList.add('active');
+        document.getElementById('codecOpus').classList.remove('active');
+        await applySettings('windows_loopback');
       }
 
       async function copyAddress() {
@@ -971,9 +1173,11 @@
           await applySettings();
         });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
-        document.getElementById('loopbackV2GrayToggle').addEventListener('change', () => applySettings());
+        document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
+        document.getElementById('usbRefreshBtn').addEventListener('click', refresh);
+        document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 
       async function init() {

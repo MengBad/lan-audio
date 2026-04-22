@@ -1,9 +1,11 @@
 ﻿#include <jni.h>
 #include <android/log.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
 
+#include "oboe_sink.h"
 #include "opus.h"
 
 namespace {
@@ -26,6 +28,9 @@ jint throw_illegal_state(JNIEnv *env, const char *message) {
     }
     return -1;
 }
+
+OboeAudioSink *g_sink = nullptr;
+int g_sink_channel_count = 2;
 }  // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -80,35 +85,46 @@ Java_com_example_lan_1audio_1android_1mvp_OpusNativeDecoder_nativeDecode(
     jint offset,
     jint length,
     jshortArray pcm_out,
-    jint max_frames) {
+    jint max_frames,
+    jboolean use_plc) {
     DecoderHandle *handle = from_handle(handle_value);
     if (handle == nullptr || handle->decoder == nullptr) {
         return throw_illegal_state(env, "opus decoder is closed");
     }
-    if (packet == nullptr || pcm_out == nullptr || offset < 0 || length <= 0 || max_frames <= 0) {
+    if (pcm_out == nullptr || offset < 0 || length < 0 || max_frames <= 0) {
         return throw_illegal_state(env, "invalid opus decode input");
     }
 
-    const jsize packet_size = env->GetArrayLength(packet);
     const jsize out_size = env->GetArrayLength(pcm_out);
-    if (offset + length > packet_size) {
-        return throw_illegal_state(env, "opus packet range is out of bounds");
-    }
     if (out_size < max_frames * handle->channels) {
         return throw_illegal_state(env, "opus pcm output buffer is too small");
     }
 
-    std::vector<unsigned char> encoded(static_cast<size_t>(length));
-    env->GetByteArrayRegion(packet, offset, length, reinterpret_cast<jbyte *>(encoded.data()));
-    if (env->ExceptionCheck()) {
-        return -1;
+    std::vector<unsigned char> encoded;
+    const unsigned char *encoded_ptr = nullptr;
+    int encoded_length = 0;
+    if (!use_plc) {
+        if (packet == nullptr || length <= 0) {
+            return throw_illegal_state(env, "opus packet is required when PLC is disabled");
+        }
+        const jsize packet_size = env->GetArrayLength(packet);
+        if (offset + length > packet_size) {
+            return throw_illegal_state(env, "opus packet range is out of bounds");
+        }
+        encoded.resize(static_cast<size_t>(length));
+        env->GetByteArrayRegion(packet, offset, length, reinterpret_cast<jbyte *>(encoded.data()));
+        if (env->ExceptionCheck()) {
+            return -1;
+        }
+        encoded_ptr = encoded.data();
+        encoded_length = length;
     }
 
     std::vector<opus_int16> decoded(static_cast<size_t>(max_frames * handle->channels));
     const int frames = opus_decode(
         handle->decoder,
-        encoded.data(),
-        length,
+        encoded_ptr,
+        encoded_length,
         decoded.data(),
         max_frames,
         0);
@@ -177,4 +193,83 @@ Java_com_example_lan_1audio_1android_1mvp_OpusNativeDecoder_nativeSelfTestDecode
         }
     }
     return peak;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeOpen(
+    JNIEnv *env, jobject, jint sample_rate, jint channel_count) {
+    if (sample_rate <= 0 || channel_count <= 0 || channel_count > 2) {
+        throw_illegal_state(env, "invalid Oboe sink format");
+        return JNI_FALSE;
+    }
+    if (g_sink != nullptr) {
+        g_sink->close();
+        delete g_sink;
+        g_sink = nullptr;
+    }
+    g_sink = new OboeAudioSink();
+    g_sink_channel_count = channel_count;
+    return g_sink->open(sample_rate, channel_count) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeClose(
+    JNIEnv *, jobject) {
+    if (g_sink == nullptr) {
+        return;
+    }
+    g_sink->close();
+    delete g_sink;
+    g_sink = nullptr;
+    g_sink_channel_count = 2;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativePushPcm(
+    JNIEnv *env, jobject, jbyteArray pcm_bytes, jint frames) {
+    if (g_sink == nullptr || pcm_bytes == nullptr || frames <= 0) {
+        return JNI_FALSE;
+    }
+    const jsize pcm_len = env->GetArrayLength(pcm_bytes);
+    if (pcm_len <= 0) {
+        return JNI_FALSE;
+    }
+    const int channel_count = std::max(1, g_sink_channel_count);
+    const int expected_bytes = frames * channel_count * 2;  // PCM16
+    if (pcm_len != expected_bytes) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            "lan_audio_oboe",
+            "nativePushPcm size mismatch bytes=%d expected=%d frames=%d channels=%d",
+            static_cast<int>(pcm_len),
+            expected_bytes,
+            frames,
+            channel_count);
+        return JNI_FALSE;
+    }
+    auto *data = env->GetByteArrayElements(pcm_bytes, nullptr);
+    if (data == nullptr) {
+        return JNI_FALSE;
+    }
+    const bool ok = g_sink->pushPcm(reinterpret_cast<int16_t *>(data), frames);
+    env->ReleaseByteArrayElements(pcm_bytes, data, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeGetSilenceFill(
+    JNIEnv *, jobject) {
+    return g_sink != nullptr ? g_sink->getSilenceFillCount() : 0;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeGetUnderrunCount(
+    JNIEnv *, jobject) {
+    return g_sink != nullptr ? g_sink->getUnderrunCount() : 0;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeGetRingBufferLevelFrames(
+    JNIEnv *, jobject) {
+    return g_sink != nullptr ? g_sink->getRingBufferLevelFrames() : 0;
 }

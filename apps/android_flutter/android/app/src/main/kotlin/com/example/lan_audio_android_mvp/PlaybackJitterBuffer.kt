@@ -15,12 +15,13 @@ data class JitterStats(
     var underrunCount: Int = 0,
     var droppedFrames: Int = 0,
     var lateFrames: Int = 0,
+    var floorHoldCount: Int = 0,
 )
 
 class PlaybackJitterBuffer(
-    private val startBufferMs: Int,
-    private val maxBufferMs: Int,
-    private val dropThresholdMs: Int = maxBufferMs,
+    private var startBufferMs: Int,
+    private var maxBufferMs: Int,
+    private var dropThresholdMs: Int = maxBufferMs,
 ) {
     private val frames = TreeMap<Int, PcmFrame>(::compareSeq)
     private var playoutStarted = false
@@ -29,6 +30,7 @@ class PlaybackJitterBuffer(
 
     val stats = JitterStats()
 
+    @Synchronized
     fun clear() {
         frames.clear()
         playoutStarted = false
@@ -38,8 +40,20 @@ class PlaybackJitterBuffer(
         stats.underrunCount = 0
         stats.droppedFrames = 0
         stats.lateFrames = 0
+        stats.floorHoldCount = 0
     }
 
+    @Synchronized
+    fun reconfigure(startBufferMs: Int, maxBufferMs: Int, dropThresholdMs: Int = maxBufferMs) {
+        this.startBufferMs = startBufferMs.coerceAtLeast(1)
+        this.maxBufferMs = maxBufferMs.coerceAtLeast(this.startBufferMs)
+        this.dropThresholdMs = dropThresholdMs.coerceAtLeast(this.startBufferMs)
+        trimIfNeeded()
+        trimLatencyTailIfNeeded()
+        stats.bufferedFrames = frames.size
+    }
+
+    @Synchronized
     fun push(packet: LasPacket) {
         frameDurationMs = packet.frameDurationMs.takeIf { it > 0 } ?: 10
         val frame = PcmFrame(
@@ -66,7 +80,8 @@ class PlaybackJitterBuffer(
         stats.bufferedFrames = frames.size
     }
 
-    fun pop(): PcmFrame? {
+    @Synchronized
+    fun pop(usbLowLatencyHardFloor: Boolean = false): PcmFrame? {
         if (!playoutStarted) {
             val startFrames = kotlin.math.ceil(startBufferMs / frameDurationMs.toDouble()).toInt()
             if (frames.size < startFrames) {
@@ -77,6 +92,12 @@ class PlaybackJitterBuffer(
             expectedSequence = frames.firstKey()
         }
 
+        if (usbLowLatencyHardFloor && bufferedMs() <= HARD_FLOOR_MS) {
+            stats.floorHoldCount += 1
+            stats.bufferedFrames = frames.size
+            return null
+        }
+
         val expected = expectedSequence ?: return null
         val frame = frames.remove(expected)
         if (frame != null) {
@@ -85,7 +106,7 @@ class PlaybackJitterBuffer(
             return frame
         }
 
-        val oldest = frames.firstKeyOrNull()
+        val oldest = frames.firstEntry()?.key
         if (oldest == null) {
             stats.underrunCount += 1
             playoutStarted = false
@@ -110,7 +131,53 @@ class PlaybackJitterBuffer(
         return recovered
     }
 
+    // Used by playout batching to fetch only immediately available contiguous frames.
+    // Unlike pop(), this helper does not mark underrun or reset playout state when
+    // the next expected frame is not available.
+    @Synchronized
+    fun popContiguousForBatch(): PcmFrame? {
+        if (!playoutStarted) {
+            return null
+        }
+        val expected = expectedSequence ?: return null
+        val frame = frames.remove(expected) ?: return null
+        expectedSequence = nextSeq(expected)
+        stats.bufferedFrames = frames.size
+        return frame
+    }
+
+    @Synchronized
     fun bufferedMs(): Int = frames.size * frameDurationMs
+
+    // Drop oldest frames to quickly pull latency back toward target.
+    @Synchronized
+    fun dropOldestMs(ms: Int): Int {
+        if (ms <= 0 || frames.isEmpty()) {
+            return 0
+        }
+        val framesToDrop = kotlin.math.ceil(ms / frameDurationMs.toDouble()).toInt().coerceAtLeast(1)
+        var dropped = 0
+        repeat(framesToDrop) {
+            if (frames.pollFirstEntry() != null) {
+                dropped += 1
+            }
+        }
+        if (dropped > 0) {
+            stats.droppedFrames += dropped
+            stats.bufferedFrames = frames.size
+            val expected = expectedSequence
+            if (expected != null) {
+                val oldest = frames.firstEntry()?.key
+                if (oldest == null || isOlder(expected, oldest)) {
+                    expectedSequence = oldest
+                    if (oldest == null) {
+                        playoutStarted = false
+                    }
+                }
+            }
+        }
+        return dropped
+    }
 
     private fun trimIfNeeded() {
         val maxFrames = kotlin.math.ceil(maxBufferMs / frameDurationMs.toDouble()).toInt()
@@ -134,7 +201,7 @@ class PlaybackJitterBuffer(
             stats.droppedFrames += 1
         }
         playoutStarted = false
-        expectedSequence = frames.firstKeyOrNull()
+        expectedSequence = frames.firstEntry()?.key
     }
 
     private fun compareSeq(a: Int, b: Int): Int {
@@ -151,6 +218,8 @@ class PlaybackJitterBuffer(
     private fun nextSeq(seq: Int): Int {
         return ((seq.toLong() + 1L) and 0xFFFFFFFFL).toInt()
     }
-}
 
-private fun <K, V> TreeMap<K, V>.firstKeyOrNull(): K? = if (isEmpty()) null else firstKey()
+    private companion object {
+        private const val HARD_FLOOR_MS = 8
+    }
+}

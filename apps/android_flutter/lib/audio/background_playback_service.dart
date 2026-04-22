@@ -4,94 +4,103 @@ import 'package:flutter/services.dart';
 
 class PlaybackServiceSnapshot {
   PlaybackServiceSnapshot({
-    required this.serviceState,
-    required this.connectionState,
-    required this.playbackState,
-    required this.targetHost,
-    required this.targetName,
-    required this.protocolVersion,
-    required this.currentAudioMode,
-    required this.negotiatedCapabilities,
-    required this.modeProfile,
-    required this.connectionPath,
-    required this.playbackBackend,
-    required this.protocolPath,
-    required this.experimentalPath,
+    required this.transport,
+    required this.mode,
+    required this.dataPlane,
+    required this.activeDataPlane,
+    required this.rollbackAvailable,
+    required this.codec,
     required this.effectiveCodec,
-    required this.clientPlatform,
-    required this.clientAppVersion,
+    required this.state,
+    required this.rollbackState,
+    required this.protocolVersion,
+    required this.modeProfile,
+    required this.negotiatedCapabilities,
     required this.serverPlatform,
     required this.serverAppVersion,
+    required this.transportMode,
+    required this.playbackBackend,
+    required this.connectedClientCount,
     required this.metrics,
-    required this.recentLog,
-    required this.error,
-    required this.raw,
   });
 
-  final String serviceState;
-  final String connectionState;
-  final String playbackState;
-  final String? targetHost;
-  final String? targetName;
-  final int? protocolVersion;
-  final String currentAudioMode;
-  final Map<String, bool> negotiatedCapabilities;
-  final Map<String, dynamic> modeProfile;
-  final String connectionPath;
-  final String playbackBackend;
-  final String protocolPath;
-  final bool experimentalPath;
+  final String transport;
+  final String mode;
+  final String dataPlane;
+  final String activeDataPlane;
+  final bool rollbackAvailable;
+  final String codec;
   final String effectiveCodec;
-  final String clientPlatform;
-  final String clientAppVersion;
+  final String state;
+  final String rollbackState;
+  final int? protocolVersion;
+  final Map<String, dynamic> modeProfile;
+  final Map<String, bool> negotiatedCapabilities;
   final String? serverPlatform;
   final String? serverAppVersion;
+  final String transportMode;
+  final String playbackBackend;
+  final int connectedClientCount;
   final Map<String, dynamic> metrics;
-  final String recentLog;
-  final Map<String, dynamic>? error;
-  final Map<String, dynamic> raw;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
     final normalized = map.map(
       (key, value) => MapEntry('$key', value),
     );
     return PlaybackServiceSnapshot(
-      serviceState: '${normalized['serviceState'] ?? 'idle'}',
-      connectionState: '${normalized['connectionState'] ?? 'idle'}',
-      playbackState: '${normalized['playbackState'] ?? 'stopped'}',
-      targetHost: normalized['targetHost']?.toString(),
-      targetName: normalized['targetName']?.toString(),
-      protocolVersion: (normalized['protocolVersion'] as num?)?.toInt(),
-      currentAudioMode: '${normalized['currentAudioMode'] ?? 'balanced'}',
+      transport: '${normalized['transport'] ?? 'wifi'}',
+      mode: '${normalized['mode'] ?? 'balanced'}',
+      dataPlane: '${normalized['data_plane'] ?? 'legacy_las1'}',
+      activeDataPlane: '${normalized['active_data_plane'] ?? normalized['data_plane'] ?? 'legacy_las1'}',
+      rollbackAvailable: normalized['rollback_available'] == true,
+      codec: '${normalized['codec'] ?? 'pcm16'}',
+      effectiveCodec: '${normalized['effective_codec'] ?? 'pcm16'}',
+      state: '${normalized['state'] ?? 'disconnected'}',
+      rollbackState: '${normalized['rollback_state'] ?? 'main_path_active'}',
+      protocolVersion: (normalized['protocol_version'] as num?)?.toInt(),
+      modeProfile: (normalized['mode_profile'] as Map?)?.map(
+            (key, value) => MapEntry('$key', value),
+          ) ??
+          const <String, dynamic>{},
       negotiatedCapabilities:
-          (normalized['negotiatedCapabilities'] as Map?)?.map(
+          (normalized['negotiated_capabilities'] as Map?)?.map(
                 (key, value) => MapEntry('$key', value == true),
               ) ??
               const <String, bool>{},
-      modeProfile: (normalized['modeProfile'] as Map?)?.map(
-            (key, value) => MapEntry('$key', value),
-          ) ??
-          const <String, dynamic>{},
-      connectionPath: '${normalized['connectionPath'] ?? 'lan_ip_wifi_or_usb'}',
-      playbackBackend:
-          '${normalized['playbackBackend'] ?? 'audiotrack_stable'}',
-      protocolPath: '${normalized['protocolPath'] ?? 'legacy_or_v2_auto'}',
-      experimentalPath: normalized['experimentalPath'] == true,
-      effectiveCodec: '${normalized['effectiveCodec'] ?? 'pcm16'}',
-      clientPlatform: '${normalized['clientPlatform'] ?? 'android'}',
-      clientAppVersion: '${normalized['clientAppVersion'] ?? ''}',
-      serverPlatform: normalized['serverPlatform']?.toString(),
-      serverAppVersion: normalized['serverAppVersion']?.toString(),
+      serverPlatform: normalized['server_platform']?.toString(),
+      serverAppVersion: normalized['server_app_version']?.toString(),
+      transportMode: '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
+      playbackBackend: '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
+      connectedClientCount:
+          (normalized['connected_client_count'] as num?)?.toInt() ?? 0,
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
-          const <String, dynamic>{},
-      recentLog: '${normalized['recentLog'] ?? ''}',
-      error: (normalized['error'] as Map?)?.map(
-        (key, value) => MapEntry('$key', value),
-      ),
-      raw: normalized,
+              const <String, dynamic>{},
     );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'transport': transport,
+      'mode': mode,
+      'data_plane': dataPlane,
+      'active_data_plane': activeDataPlane,
+      'rollback_available': rollbackAvailable,
+      'codec': codec,
+      'effective_codec': effectiveCodec,
+      'state': state,
+      'rollback_state': rollbackState,
+      'protocol_version': protocolVersion,
+      'mode_profile': modeProfile,
+      'negotiated_capabilities': negotiatedCapabilities,
+      'server_platform': serverPlatform,
+      'server_app_version': serverAppVersion,
+      'transport_mode': transportMode,
+      'playback_backend': playbackBackend,
+      'connected_client_count': connectedClientCount,
+      'metrics': metrics,
+    };
   }
 }
 
@@ -120,12 +129,14 @@ class BackgroundPlaybackService {
     required int wsPort,
     required int udpPort,
     required String serverName,
+    String transportMode = 'wifi',
   }) async {
     await _methodChannel.invokeMethod<void>('startPlayback', <String, dynamic>{
       'host': host,
       'wsPort': wsPort,
       'udpPort': udpPort,
       'serverName': serverName,
+      'transportMode': transportMode,
     });
   }
 

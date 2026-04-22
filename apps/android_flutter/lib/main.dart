@@ -11,7 +11,7 @@ import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 
-const String kUiBuildTag = 'UI build: playback-diagnostics-v30';
+const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
 const bool kUseBackgroundPlaybackService = true;
 
 void main() {
@@ -58,6 +58,7 @@ enum PlaybackState {
 enum ConnectMode {
   discovered,
   manual,
+  usb,
 }
 
 enum AudioModePreference {
@@ -127,19 +128,28 @@ class _DebugPageState extends State<DebugPage> {
   String? _serviceTargetHost;
   String? _serviceTargetName;
   int _serviceBufferedMs = 0;
+  int _serviceJitterBufferedMs = 0;
+  int _serviceTrackQueuedMs = 0;
   int _serviceUnderrun = 0;
   int _serviceDropped = 0;
   int _serviceLate = 0;
+  int _serviceFloorHoldCount = 0;
   int _serviceUdpPackets = 0;
   int _serviceUdpBytes = 0;
   int _serviceLoss = 0;
   int? _serviceLastSeq;
+  int? _serviceAudioTrackLatencyMs;
   int? _protocolVersion;
   Map<String, bool> _negotiatedCapabilities = const {};
   String? _serverPlatform;
   String? _serverAppVersion;
   Map<String, dynamic> _modeProfile = const {};
   String _connectionPath = 'lan_ip_wifi_or_usb';
+  String _transportMode = 'wifi';
+  int _connectedClientCount = 0;
+  int? _tcpRoundTripMs;
+  int? _tcpRoundTripMedianMs;
+  int? _serviceJitterP95Ms;
   String _protocolPath = 'legacy_or_v2_auto';
   String _playbackBackend = 'audiotrack_stable';
   String _effectiveCodec = 'pcm16';
@@ -214,6 +224,8 @@ class _DebugPageState extends State<DebugPage> {
         return tr('局域网 IP（Wi-Fi / USB）', 'LAN IP (Wi-Fi / USB)');
       case 'usb_tethering':
         return tr('USB 共享网络', 'USB tethering');
+      case 'usb_localhost':
+        return tr('USB（adb localhost）', 'USB (adb localhost)');
       case 'wifi':
         return tr('Wi-Fi', 'Wi-Fi');
       default:
@@ -237,63 +249,71 @@ class _DebugPageState extends State<DebugPage> {
       return;
     }
     final metrics = snapshot.metrics;
-    final servicePlayback = snapshot.playbackState.toLowerCase();
-    final serviceConnection = snapshot.connectionState.toLowerCase();
+    final runtimeState = snapshot.state.toLowerCase();
     setState(() {
-      _serviceTargetHost = snapshot.targetHost;
-      _serviceTargetName = snapshot.targetName;
-      if (snapshot.targetHost != null && snapshot.targetHost!.isNotEmpty) {
-        _recentConnectedHosts[snapshot.targetHost!] = DateTime.now();
-      }
-      _sampleRate = (metrics['sampleRate'] as num?)?.toInt() ?? _sampleRate;
+      _sampleRate = (metrics['sample_rate'] as num?)?.toInt() ?? _sampleRate;
       _channels = (metrics['channels'] as num?)?.toInt() ?? _channels;
       _serviceBufferedMs =
-          (metrics['bufferedMs'] as num?)?.toInt() ?? _serviceBufferedMs;
-      _serviceUnderrun =
-          (metrics['jitterUnderrun'] as num?)?.toInt() ?? _serviceUnderrun;
+          (metrics['buffered_ms'] as num?)?.toInt() ?? _serviceBufferedMs;
+      _serviceJitterBufferedMs =
+          (metrics['jitter_buffered_ms'] as num?)?.toInt() ??
+              _serviceJitterBufferedMs;
+      _serviceTrackQueuedMs =
+          (metrics['audio_track_queued_ms'] as num?)?.toInt() ??
+              _serviceTrackQueuedMs;
+      _serviceUnderrun = (metrics['underrun'] as num?)?.toInt() ?? _serviceUnderrun;
       _serviceDropped =
-          (metrics['jitterDropped'] as num?)?.toInt() ?? _serviceDropped;
-      _serviceLate = (metrics['jitterLate'] as num?)?.toInt() ?? _serviceLate;
+          (metrics['dropped_packets'] as num?)?.toInt() ?? _serviceDropped;
+      _serviceLate = (metrics['late_packets'] as num?)?.toInt() ?? _serviceLate;
+      _serviceFloorHoldCount =
+          (metrics['floor_hold_count'] as num?)?.toInt() ??
+              _serviceFloorHoldCount;
       _serviceUdpPackets =
-          (metrics['udpPackets'] as num?)?.toInt() ?? _serviceUdpPackets;
+          (metrics['udp_packets'] as num?)?.toInt() ?? _serviceUdpPackets;
       _serviceUdpBytes =
-          (metrics['udpBytes'] as num?)?.toInt() ?? _serviceUdpBytes;
-      _serviceLoss = (metrics['lossEstimate'] as num?)?.toInt() ?? _serviceLoss;
-      _serviceLastSeq = (metrics['lastSeq'] as num?)?.toInt();
-      _currentAudioMode = _audioModeFromWire(snapshot.currentAudioMode);
-      _protocolVersion = snapshot.protocolVersion;
+          (metrics['udp_bytes'] as num?)?.toInt() ?? _serviceUdpBytes;
+      _serviceLoss =
+          (metrics['loss_estimate'] as num?)?.toInt() ?? _serviceLoss;
+      _serviceLastSeq =
+          (metrics['last_seq'] as num?)?.toInt() ?? _serviceLastSeq;
+      _serviceAudioTrackLatencyMs =
+          (metrics['audio_track_latency_ms'] as num?)?.toInt() ??
+              _serviceAudioTrackLatencyMs;
+      _currentAudioMode = _audioModeFromWire(snapshot.mode);
+      _protocolVersion =
+          snapshot.protocolVersion ?? (snapshot.dataPlane == 'v2_header' ? 2 : 1);
       _negotiatedCapabilities = snapshot.negotiatedCapabilities;
       _serverPlatform = snapshot.serverPlatform;
       _serverAppVersion = snapshot.serverAppVersion;
       _modeProfile = snapshot.modeProfile;
-      _connectionPath = snapshot.connectionPath;
-      _protocolPath = snapshot.protocolPath;
+      _connectionPath = snapshot.transport == 'usb' ? 'usb_localhost' : 'lan_ip_wifi_or_usb';
+      _transportMode = snapshot.transportMode;
+      _connectedClientCount = snapshot.connectedClientCount;
+      _protocolPath = snapshot.dataPlane;
       _playbackBackend = snapshot.playbackBackend;
       _effectiveCodec = snapshot.effectiveCodec;
-      _experimentalPath = snapshot.experimentalPath;
+      _experimentalPath = snapshot.dataPlane == 'v2_header';
+      _tcpRoundTripMs = (metrics['rtt_ms'] as num?)?.toInt();
+      _tcpRoundTripMedianMs = _tcpRoundTripMs;
+      _serviceJitterP95Ms =
+          (metrics['jitter_p95_ms'] as num?)?.toInt() ?? _serviceJitterP95Ms;
 
-      if (servicePlayback == 'playing') {
+      if (runtimeState == 'streaming') {
         _playbackState = PlaybackState.playing;
-      } else if (servicePlayback == 'buffering') {
+      } else if (runtimeState == 'handshaking' ||
+          runtimeState == 'negotiated' ||
+          runtimeState == 'reconfiguring' ||
+          runtimeState == 'recovering') {
         _playbackState = PlaybackState.buffering;
       } else {
         _playbackState = PlaybackState.stopped;
       }
 
-      _wsConnected = serviceConnection == 'connected' ||
-          serviceConnection == 'reconnecting' ||
-          servicePlayback == 'playing' ||
-          servicePlayback == 'buffering';
+      _wsConnected = runtimeState != 'disconnected' && runtimeState != 'closed';
 
-      final serviceLabel =
-          snapshot.targetName != null && snapshot.targetHost != null
-              ? '${snapshot.targetName} (${snapshot.targetHost})'
-              : (snapshot.targetHost ?? '');
-      _status = '${snapshot.connectionState}/${snapshot.playbackState}'
-          '${serviceLabel.isEmpty ? '' : ' $serviceLabel'}';
-      _audioLog =
-          snapshot.recentLog.isNotEmpty ? snapshot.recentLog : _audioLog;
-      _wsLog = jsonEncode(snapshot.raw);
+      _status = '${snapshot.state}/${snapshot.rollbackState}';
+      _audioLog = snapshot.state;
+      _wsLog = jsonEncode(snapshot.toMap());
     });
   }
 
@@ -605,6 +625,16 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Future<void> _connectUsb() async {
+    await _connectToHost(
+      host: '127.0.0.1',
+      wsPort: 39991,
+      udpPort: 39992,
+      serverName: 'usb:localhost',
+      transportMode: 'usb',
+    );
+  }
+
   Future<void> _connectQuickRecent() async {
     final host = _mostRecentHost();
     if (host == null) {
@@ -628,6 +658,7 @@ class _DebugPageState extends State<DebugPage> {
     required int wsPort,
     required int udpPort,
     required String serverName,
+    String transportMode = 'wifi',
   }) async {
     setState(() {
       _isConnecting = true;
@@ -642,6 +673,7 @@ class _DebugPageState extends State<DebugPage> {
           wsPort: wsPort,
           udpPort: udpPort,
           serverName: serverName,
+          transportMode: transportMode,
         );
         setState(() {
           _recentConnectedHosts[host] = DateTime.now();
@@ -701,6 +733,7 @@ class _DebugPageState extends State<DebugPage> {
           'supports_modes': true,
           'supports_metrics': true,
           'supports_opus_future': false,
+          'supports_opus': false,
           'supports_opus_experimental': false,
           'supports_low_latency': true,
           'supports_high_quality': true,
@@ -1021,6 +1054,7 @@ class _DebugPageState extends State<DebugPage> {
 
   String _connectActionLabel() {
     if (_isConnecting) return tr('连接中...', 'Connecting...');
+    if (_connectMode == ConnectMode.usb) return tr('USB 连接', 'USB Connect');
     if (_connectMode == ConnectMode.manual) return tr('手动连接', 'Connect Manual');
     if (_selectedServerId != null) {
       final selected = _servers[_selectedServerId!];
@@ -1034,6 +1068,12 @@ class _DebugPageState extends State<DebugPage> {
   int get _uiBufferedMs =>
       kUseBackgroundPlaybackService ? _serviceBufferedMs : _jitter.bufferedMs;
 
+  int get _uiJitterBufferedMs =>
+      kUseBackgroundPlaybackService ? _serviceJitterBufferedMs : _jitter.bufferedMs;
+
+  int get _uiTrackQueuedMs =>
+      kUseBackgroundPlaybackService ? _serviceTrackQueuedMs : 0;
+
   int get _uiUnderrun => kUseBackgroundPlaybackService
       ? _serviceUnderrun
       : _jitter.stats.underrunCount;
@@ -1045,6 +1085,12 @@ class _DebugPageState extends State<DebugPage> {
   int get _uiLate =>
       kUseBackgroundPlaybackService ? _serviceLate : _jitter.stats.lateFrames;
 
+  int get _uiFloorHoldCount =>
+      kUseBackgroundPlaybackService ? _serviceFloorHoldCount : 0;
+
+  int? get _uiJitterP95Ms =>
+      kUseBackgroundPlaybackService ? _serviceJitterP95Ms : null;
+
   int get _uiUdpPackets =>
       kUseBackgroundPlaybackService ? _serviceUdpPackets : _udpPackets;
 
@@ -1055,6 +1101,9 @@ class _DebugPageState extends State<DebugPage> {
 
   int? get _uiLastSeq =>
       kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
+
+  int? get _uiAudioTrackLatencyMs =>
+      kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
 
   Widget _metricTile(String label, String value) {
     return Container(
@@ -1203,6 +1252,10 @@ class _DebugPageState extends State<DebugPage> {
                         value: ConnectMode.manual,
                         label: Text(tr('手动地址', 'Manual')),
                       ),
+                      ButtonSegment(
+                        value: ConnectMode.usb,
+                        label: Text(tr('USB（adb）', 'USB (adb)')),
+                      ),
                     ],
                     selected: <ConnectMode>{_connectMode},
                     onSelectionChanged: (selection) {
@@ -1327,6 +1380,8 @@ class _DebugPageState extends State<DebugPage> {
                               : () {
                                   if (_connectMode == ConnectMode.discovered) {
                                     _connectSelected();
+                                  } else if (_connectMode == ConnectMode.usb) {
+                                    _connectUsb();
                                   } else {
                                     _connectManual();
                                   }
@@ -1395,6 +1450,17 @@ class _DebugPageState extends State<DebugPage> {
                     '${tr('连接来源', 'Connection path')}: ${_connectionPathLabel(_connectionPath)}',
                     style: const TextStyle(color: Colors.black54),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${tr('传输模式', 'Transport mode')}: ${_transportMode == 'usb' ? 'USB' : 'WiFi'}  ·  '
+                    '${tr('当前共', 'Connected')}: $_connectedClientCount ${tr('台设备连接中', 'devices listening')}',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'TCP RTT: ${_tcpRoundTripMs == null ? '-' : '${_tcpRoundTripMs} ms'} / ${_tcpRoundTripMedianMs == null ? '-' : '${_tcpRoundTripMedianMs} ms'}(med)',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
                   const SizedBox(height: 6),
                   SegmentedButton<AudioModePreference>(
                     segments: [
@@ -1425,7 +1491,10 @@ class _DebugPageState extends State<DebugPage> {
                     runSpacing: 8,
                     children: [
                       _metricTile(tr('状态', 'Status'), _playbackLabel()),
-                      _metricTile(tr('缓冲', 'Buffered'), '$_uiBufferedMs ms'),
+                      _metricTile(
+                        'total_buffered',
+                        '${_uiBufferedMs} ms (jitter: ${_uiJitterBufferedMs} ms + track: ${_uiTrackQueuedMs} ms)',
+                      ),
                       _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
                       _metricTile(
                         tr('策略', 'Strategy'),
@@ -1510,13 +1579,30 @@ class _DebugPageState extends State<DebugPage> {
                 const SizedBox(height: 8),
                 _metricTile('channels', '$_channels'),
                 const SizedBox(height: 8),
-                _metricTile('buffered_ms', '$_uiBufferedMs'),
+                _metricTile(
+                  'total_buffered_ms',
+                  '${_uiBufferedMs} (jitter: ${_uiJitterBufferedMs} + track: ${_uiTrackQueuedMs})',
+                ),
+                const SizedBox(height: 8),
+                _metricTile(
+                  tr('AudioTrack 延迟', 'AudioTrack reported latency'),
+                  _uiAudioTrackLatencyMs == null
+                      ? '-'
+                      : '${_uiAudioTrackLatencyMs} ms',
+                ),
                 const SizedBox(height: 8),
                 _metricTile('jitter_underrun', '$_uiUnderrun'),
                 const SizedBox(height: 8),
                 _metricTile('jitter_dropped', '$_uiDropped'),
                 const SizedBox(height: 8),
                 _metricTile('jitter_late', '$_uiLate'),
+                const SizedBox(height: 8),
+                _metricTile('floor_hold_count', '$_uiFloorHoldCount'),
+                const SizedBox(height: 8),
+                _metricTile(
+                  'jitter_p95_ms',
+                  _uiJitterP95Ms == null ? '-' : '${_uiJitterP95Ms} ms',
+                ),
                 const SizedBox(height: 8),
                 _metricTile(tr('UDP 包数', 'UDP packets'), '$_uiUdpPackets'),
                 const SizedBox(height: 8),

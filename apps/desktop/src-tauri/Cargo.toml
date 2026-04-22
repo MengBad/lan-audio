@@ -1,6 +1,6 @@
 [package]
 name = "lan_audio_desktop"
-version = "1.1.0"
+version = "1.3.0"
 edition = "2021"
 license = "MIT"
 
@@ -18,3 +18,6 @@ lan_audio_server = { path = "../../../crates/lan_audio_server" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+
+[dev-dependencies]
+serde_json = "1"

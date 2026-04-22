@@ -8,7 +8,7 @@ object PlaybackEventBus {
     private val lock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sink: EventChannel.EventSink? = null
-    private var latest: Map<String, Any?> = PlaybackSnapshot().toMap()
+    private var latest: Map<String, Any?> = PlaybackSnapshot().toStableServiceSnapshot().toMap()
 
     fun attachSink(eventSink: EventChannel.EventSink) {
         val snapshot: Map<String, Any?>
@@ -26,7 +26,7 @@ object PlaybackEventBus {
     }
 
     fun publish(snapshot: PlaybackSnapshot) {
-        val payload = snapshot.toMap()
+        val payload = snapshot.toStableServiceSnapshot().toMap()
         val currentSink: EventChannel.EventSink?
         synchronized(lock) {
             latest = payload

@@ -1,38 +1,66 @@
-use std::sync::{Arc, Mutex};
-
-use lan_audio_protocol::AudioMode;
+use lan_audio_protocol::{AudioMode, DataPlanePath};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::config::CodecSelection;
 use crate::config::ServerConfig;
+use crate::data_plane::DataPlaneRouter;
 use crate::discovery::{run_discovery_broadcast, DiscoveryConfig};
 use crate::metrics::{Metrics, MetricsSnapshot};
-use crate::session::SessionServer;
-use crate::transport::UdpTransport;
+use crate::session::{ClientRegistry, SessionServer};
+use crate::transport::BroadcastTransport;
+use crate::usb_transport::{setup_adb_reverse, AdbReverseManager};
 
 pub struct LanAudioService {
     cfg: Arc<ServerConfig>,
     metrics: Arc<Metrics>,
-    current_audio_mode: Arc<Mutex<AudioMode>>,
     shutdown_tx: broadcast::Sender<()>,
+    adb_reverse_manager: AdbReverseManager,
+    active_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
+    data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DataPlaneStatus {
+    pub active_path: DataPlanePath,
+    pub active_codec: CodecSelection,
+    pub rollback_available: bool,
+    pub is_on_main_path: bool,
 }
 
 impl LanAudioService {
     pub async fn new(cfg: ServerConfig) -> anyhow::Result<Self> {
+        let router = DataPlaneRouter::from_config(&cfg);
+        if cfg.force_rollback {
+            info!(
+                active_data_plane = router.active_path().as_str(),
+                "forced_rollback: legacy_las1 + pcm16"
+            );
+        }
         let cfg = Arc::new(cfg);
         let metrics = Metrics::new_shared();
         metrics.set_current_audio_source(cfg.audio_source.as_str());
         metrics.set_capture_source_state("created");
         metrics.set_capture_device_name("n/a");
         metrics.set_capture_format(cfg.sample_rate, cfg.channels as u16);
-        let current_audio_mode = Arc::new(Mutex::new(cfg.current_audio_mode));
         let (shutdown_tx, _) = broadcast::channel(16);
+        let adb_reverse_manager = AdbReverseManager::default();
+        let active_audio_mode = Arc::new(std::sync::Mutex::new(cfg.current_audio_mode));
+        if let Some(serial) = cfg.transport_mode.adb_serial() {
+            setup_adb_reverse(serial, cfg.ws_bind.port(), cfg.ws_bind.port())?;
+            adb_reverse_manager.track_reverse(serial.to_string(), cfg.ws_bind.port());
+            setup_adb_reverse(serial, cfg.udp_bind.port(), cfg.udp_bind.port())?;
+            adb_reverse_manager.track_reverse(serial.to_string(), cfg.udp_bind.port());
+        }
         Ok(Self {
-            cfg,
+            cfg: Arc::clone(&cfg),
             metrics,
-            current_audio_mode,
             shutdown_tx,
+            adb_reverse_manager,
+            active_audio_mode,
+            data_plane_router: Arc::new(std::sync::Mutex::new(router)),
         })
     }
 
@@ -41,31 +69,50 @@ impl LanAudioService {
     }
 
     pub fn current_audio_mode(&self) -> AudioMode {
-        *self
-            .current_audio_mode
-            .lock()
-            .expect("current_audio_mode lock")
+        *self.active_audio_mode.lock().unwrap()
     }
 
     pub fn set_current_audio_mode(&self, mode: AudioMode) {
-        *self
-            .current_audio_mode
-            .lock()
-            .expect("current_audio_mode lock") = mode;
+        let mut guard = self.active_audio_mode.lock().unwrap();
+        if *guard != mode {
+            info!(from = ?*guard, to = ?mode, "audio mode changed");
+            *guard = mode;
+        }
+    }
+
+    pub fn current_audio_mode_handle(&self) -> Arc<std::sync::Mutex<AudioMode>> {
+        Arc::clone(&self.active_audio_mode)
+    }
+
+    pub fn data_plane_router(&self) -> Arc<std::sync::Mutex<DataPlaneRouter>> {
+        Arc::clone(&self.data_plane_router)
+    }
+
+    pub fn data_plane_status(&self) -> DataPlaneStatus {
+        let router = self.data_plane_router.lock().unwrap();
+        DataPlaneStatus {
+            active_path: router.active_path(),
+            active_codec: router.active_codec(),
+            rollback_available: router.rollback_available(),
+            is_on_main_path: router.is_on_main_path(),
+        }
     }
 
     pub async fn run_until_shutdown(&self) -> anyhow::Result<()> {
-        let transport = UdpTransport::new(
+        let registry = ClientRegistry::new(Arc::clone(&self.metrics));
+        let transport = BroadcastTransport::new(
             Arc::clone(&self.cfg),
             Arc::clone(&self.metrics),
-            Arc::clone(&self.current_audio_mode),
+            registry.clone(),
+            self.data_plane_router(),
         )
         .await?;
         let session_server = SessionServer::new(
             Arc::clone(&self.cfg),
             Arc::clone(&self.metrics),
-            transport,
-            Arc::clone(&self.current_audio_mode),
+            registry,
+            self.data_plane_router(),
+            self.current_audio_mode_handle(),
         );
 
         let discovery_cfg = DiscoveryConfig {
@@ -78,11 +125,16 @@ impl LanAudioService {
         };
 
         let mut handles = Vec::new();
-        {
+        if self.cfg.transport_mode.as_str() == "wifi" {
             let rx = self.shutdown_tx.subscribe();
             handles.push(tokio::spawn(async move {
                 run_discovery_broadcast(discovery_cfg, rx).await
             }));
+        }
+        {
+            let transport = transport.clone();
+            let rx = self.shutdown_tx.subscribe();
+            handles.push(tokio::spawn(async move { transport.run(rx).await }));
         }
         {
             let rx = self.shutdown_tx.subscribe();
@@ -151,6 +203,7 @@ impl LanAudioService {
     }
 
     pub fn stop(&self) {
+        let _ = &self.adb_reverse_manager;
         let _ = self.shutdown_tx.send(());
     }
 }
