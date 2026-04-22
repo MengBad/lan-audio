@@ -1,4 +1,4 @@
-﻿//! Shared protocol definitions for desktop and mobile.
+//! Shared protocol definitions for desktop and mobile.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -466,7 +466,7 @@ impl UdpAudioHeaderV2 {
 impl UdpAudioPacketV2 {
     pub fn encode(&self) -> Vec<u8> {
         let mut header = self.header.clone();
-        header.payload_size = self.payload.len() as u16;
+        header.payload_size = u16::try_from(self.payload.len()).expect("v2 payload too large");
 
         let mut out = header.encode();
         out.extend_from_slice(&self.payload);
@@ -500,7 +500,8 @@ impl UdpAudioPacket {
         out.extend_from_slice(&self.sample_rate.to_le_bytes());
         out.push(self.channels);
         out.extend_from_slice(&self.frames_per_packet.to_le_bytes());
-        out.extend_from_slice(&(self.payload.len() as u16).to_le_bytes());
+        let payload_len = u16::try_from(self.payload.len()).expect("v1 payload too large");
+        out.extend_from_slice(&payload_len.to_le_bytes());
         out.extend_from_slice(&self.payload);
         out
     }
@@ -755,6 +756,44 @@ mod tests {
         assert_eq!(decoded, header);
     }
 
+    #[test]
+    #[should_panic(expected = "v1 payload too large")]
+    fn udp_packet_encode_rejects_payload_larger_than_u16() {
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 1,
+            timestamp_ms: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            payload: vec![0; (u16::MAX as usize) + 1],
+        };
+        let _ = packet.encode();
+    }
+
+    #[test]
+    #[should_panic(expected = "v2 payload too large")]
+    fn udp_packet_v2_encode_rejects_payload_larger_than_u16() {
+        let packet = UdpAudioPacketV2 {
+            header: UdpAudioHeaderV2 {
+                magic: UDP_AUDIO_MAGIC_V2,
+                protocol_version: PROTOCOL_VERSION_V2,
+                header_size: UDP_AUDIO_HEADER_V2_LEN as u16,
+                flags: 0,
+                sequence: 7,
+                timestamp_ms: 99,
+                codec: UdpAudioCodecV2::Pcm16,
+                channels: 2,
+                sample_rate: 48_000,
+                frame_duration_ms: 10,
+                payload_size: 0,
+                reserved: 0,
+            },
+            payload: vec![0; (u16::MAX as usize) + 1],
+        };
+        let _ = packet.encode();
+    }
     #[test]
     fn udp_v2_packet_round_trip() {
         let packet = UdpAudioPacketV2 {

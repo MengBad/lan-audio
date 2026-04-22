@@ -116,6 +116,7 @@ class _DebugPageState extends State<DebugPage> {
   bool _audioTrackInitialized = false;
   bool _audioTrackStarted = false;
   bool _playTickBusy = false;
+  bool _resyncInFlight = false;
 
   int _sampleRate = 48000;
   int _channels = 2;
@@ -848,19 +849,44 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+
+  Future<void> _resetPlaybackPipeline({required String reason}) async {
+    if (_resyncInFlight) {
+      return;
+    }
+    _resyncInFlight = true;
+    try {
+      _jitter.clear();
+      _audioLog = reason;
+      if (_playbackState == PlaybackState.stopped) {
+        return;
+      }
+      _audioTrackInitialized = false;
+      _audioTrackStarted = false;
+      try {
+        await _audioOutput.stop();
+      } catch (_) {}
+      try {
+        await _audioOutput.release();
+      } catch (_) {}
+    } finally {
+      _resyncInFlight = false;
+    }
+  }
+
   void _handleUdpPacket(Uint8List bytes) {
     final packet = LasPacket.parse(bytes);
     if (packet == null) {
       return;
     }
 
-    if (packet.hasConfigChanged) {
-      // TODO(protocol-v2): when LAS2/LAV2 header is enabled, refresh playback config here.
-      _audioLog = 'protocol hint: config_changed';
-    }
-    if (packet.hasDiscontinuity) {
-      // TODO(protocol-v2): reset jitter/decoder state on discontinuity.
-      _audioLog = 'protocol hint: discontinuity';
+    if (!kUseBackgroundPlaybackService &&
+        (packet.hasConfigChanged || packet.hasDiscontinuity)) {
+      unawaited(_resetPlaybackPipeline(
+        reason: packet.hasConfigChanged
+            ? 'protocol resync: config_changed'
+            : 'protocol resync: discontinuity',
+      ));
     }
 
     _udpPackets += 1;
