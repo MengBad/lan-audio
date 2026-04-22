@@ -374,6 +374,10 @@
       </header>
 
       <section class="panel">
+        <div id="updateBanner" class="status-sub" style="display:none; margin-bottom: 8px;">
+          <span id="updateBannerText"></span>
+          <button class="copy-btn" id="updateBannerBtn" type="button" style="margin-left: 10px;"></button>
+        </div>
         <div class="status-line">
           <span id="statusDot" class="status-dot"></span>
           <span id="statusHeadline"></span>
@@ -496,6 +500,9 @@
 
       <details>
         <summary id="logSummary"></summary>
+        <div style="margin: 10px 0;">
+          <button class="copy-btn" id="exportDiagBtn" type="button"></button>
+        </div>
         <div class="log-pane" id="logPane"></div>
       </details>
     </div>
@@ -521,6 +528,10 @@
           safeModeDisable: '恢复推荐路径',
           safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
           dump: '导出 capture wav（调试）',
+          exportDiag: '导出诊断快照（JSON）',
+          exportDiagDone: '诊断快照已导出：{path}',
+          updateBannerText: '发现新版本 v{version}',
+          updateBannerBtn: '前往下载',
           address: '连接地址',
           copy: '复制',
           copied: '已复制地址',
@@ -637,6 +648,10 @@
           safeModeDisable: 'Restore recommended path',
           safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
           dump: 'Export capture wav (debug)',
+          exportDiag: 'Export diagnostics snapshot (JSON)',
+          exportDiagDone: 'Diagnostics snapshot exported: {path}',
+          updateBannerText: 'New version v{version} is available',
+          updateBannerBtn: 'Open release page',
           address: 'Connect Address',
           copy: 'Copy',
           copied: 'Address copied',
@@ -903,6 +918,8 @@
         document.getElementById('fallbackLabel').textContent = t('fallback');
         document.getElementById('safeModeHint').textContent = t('safeModeHint');
         document.getElementById('dumpLabel').textContent = t('dump');
+        document.getElementById('exportDiagBtn').textContent = t('exportDiag');
+        document.getElementById('updateBannerBtn').textContent = t('updateBannerBtn');
         document.getElementById('addrLabel').textContent = t('address');
         document.getElementById('copyAddrBtn').textContent = t('copy');
         document.getElementById('sessionLabel').textContent = t('session');
@@ -978,6 +995,15 @@
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
         document.getElementById('errorText').textContent = snapshot.error_message || '';
+        const banner = document.getElementById('updateBanner');
+        if (snapshot.update_banner?.latest_version) {
+          banner.style.display = 'block';
+          document.getElementById('updateBannerText').textContent =
+            trf('updateBannerText', { version: snapshot.update_banner.latest_version });
+        } else {
+          banner.style.display = 'none';
+          document.getElementById('updateBannerText').textContent = '';
+        }
 
         document.getElementById('sourceLoopback').classList.toggle('active', snapshot.audio_source === 'windows_loopback');
         document.getElementById('sourceSynthetic').classList.toggle('active', snapshot.audio_source === 'synthetic');
@@ -1060,6 +1086,8 @@
         document.getElementById('copyAddrBtn').disabled = disabled;
         document.getElementById('usbRefreshBtn').disabled = disabled;
         document.getElementById('usbDisableBtn').disabled = disabled || snapshot.transport_mode !== 'usb';
+        document.getElementById('exportDiagBtn').disabled = disabled;
+        document.getElementById('updateBannerBtn').disabled = disabled || !snapshot.update_banner?.release_url;
 
         renderUsbPanel(snapshot);
       }
@@ -1133,6 +1161,23 @@
         }
       }
 
+      async function exportDiagnostics() {
+        try {
+          const path = await tauriInvoke('export_diagnostics_report');
+          document.getElementById('statusSubline').textContent = trf('exportDiagDone', { path });
+        } catch (error) {
+          document.getElementById('errorText').textContent = String(error);
+        }
+      }
+
+      async function openReleasePage() {
+        try {
+          await tauriInvoke('open_release_page');
+        } catch (error) {
+          document.getElementById('errorText').textContent = String(error);
+        }
+      }
+
       function bindEvents() {
         document.getElementById('langSelect').addEventListener('change', (e) => {
           state.lang = e.target.value;
@@ -1176,6 +1221,8 @@
         document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
+        document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);
+        document.getElementById('updateBannerBtn').addEventListener('click', openReleasePage);
         document.getElementById('usbRefreshBtn').addEventListener('click', refresh);
         document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }

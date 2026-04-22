@@ -46,6 +46,7 @@ Layout:
 - Select codec: default `opus` on the recommended V2 path, with `pcm16` retained for explicit rollback
 - Copy connection address
 - Open diagnostics/logs when needed
+- Check updates manually from tray menu
 
 Only one primary button should be visually dominant:
 
@@ -80,6 +81,7 @@ The UI should explain V2 as product state rather than raw protocol fields:
 - Current codec: Opus by default on the recommended path; PCM16 remains available for rollback
 - Rollback hint: switch back to `legacy_las1 + pcm16` if the recommended path is unstable
 - Recommended connection: same Wi-Fi, 5GHz Wi-Fi, or USB tethering
+- Update banner: when a newer GitHub release is detected, show in-window banner with a release-page jump action (no auto-download)
 
 These fields should be shown as compact text rows, not as many separate cards.
 
@@ -125,5 +127,5 @@ Language defaults should follow the system locale (`zh*` -> Chinese, otherwise E
 - Richer session detail
 - More guided USB tethering help
 - Firewall help text
-- Structured diagnostics export
+- Structured diagnostics export (desktop JSON snapshot export is available; Android bundle still pending)
 - Android real-device latency revalidation for the recommended `windows_loopback + v2_header + opus` path before release sign-off

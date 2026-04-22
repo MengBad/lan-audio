@@ -42,11 +42,14 @@
 - [ ] Improve buffering and underrun diagnostics
 - [ ] Reduce runtime complexity in playback/session coordination
 - [ ] Preserve Oboe callback path as the maintained playback direction
+- [x] MediaSession 集成（PlaybackState/Metadata/MediaStyle 通知/PLAY_PAUSE+STOP）
+- [x] Android 更新检测（启动后静默检查 + 设置页手动检查 + SnackBar 跳转 Release）
 
 ## Desktop Follow-Up
 
 - [ ] Simplify service lifecycle ownership
-- [ ] Improve diagnostics export
+- [x] Improve diagnostics export（desktop 可导出 JSON 诊断快照到 `dist/diagnostics/`）
+- [x] Windows 更新检测（启动后静默检查 + 托盘“检查更新” + 窗口内升级 Banner）
 - [ ] Improve rollback/safe-mode discoverability
 - [ ] Keep desktop state rendering contract-driven
 
@@ -56,4 +59,4 @@
 - [ ] Richer session history
 - [ ] More guided USB help
 - [ ] Firewall guidance UX
-- [ ] Structured support bundle export
+- [x] Structured support bundle export（当前先提供 desktop diagnostics snapshot，后续补充 Android 侧）
