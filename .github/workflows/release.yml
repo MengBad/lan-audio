@@ -37,6 +37,17 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Gate release by acceptance contract
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\assert_release_gate.ps1
+
   windows-exe:
     needs: resolve
     runs-on: windows-latest

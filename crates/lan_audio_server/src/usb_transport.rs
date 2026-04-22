@@ -48,57 +48,57 @@ pub fn adb_devices() -> Result<Vec<AdbDevice>> {
     Ok(devices)
 }
 
-pub fn setup_adb_forward(serial: &str, host_port: u16, device_port: u16) -> Result<()> {
+pub fn setup_adb_reverse(serial: &str, device_port: u16, host_port: u16) -> Result<()> {
     run_adb(&[
         "-s",
         serial,
-        "forward",
-        &format!("tcp:{host_port}"),
+        "reverse",
         &format!("tcp:{device_port}"),
+        &format!("tcp:{host_port}"),
     ])
     .with_context(|| {
-        format!("setup adb forward serial={serial} host_port={host_port} device_port={device_port}")
+        format!("setup adb reverse serial={serial} device_port={device_port} host_port={host_port}")
     })?;
-    info!(serial, host_port, device_port, "adb forward configured");
+    info!(serial, device_port, host_port, "adb reverse configured");
     Ok(())
 }
 
-pub fn teardown_adb_forward(serial: &str, host_port: u16) -> Result<()> {
+pub fn teardown_adb_reverse(serial: &str, device_port: u16) -> Result<()> {
     run_adb(&[
         "-s",
         serial,
-        "forward",
+        "reverse",
         "--remove",
-        &format!("tcp:{host_port}"),
+        &format!("tcp:{device_port}"),
     ])
-    .with_context(|| format!("teardown adb forward serial={serial} host_port={host_port}"))?;
-    info!(serial, host_port, "adb forward teardown completed");
+    .with_context(|| format!("teardown adb reverse serial={serial} device_port={device_port}"))?;
+    info!(serial, device_port, "adb reverse teardown completed");
     Ok(())
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct AdbForwardManager {
+pub struct AdbReverseManager {
     inner: Arc<Mutex<Vec<(String, u16)>>>,
 }
 
-impl AdbForwardManager {
-    pub fn track_forward(&self, serial: impl Into<String>, host_port: u16) {
+impl AdbReverseManager {
+    pub fn track_reverse(&self, serial: impl Into<String>, device_port: u16) {
         if let Ok(mut guard) = self.inner.lock() {
-            guard.push((serial.into(), host_port));
+            guard.push((serial.into(), device_port));
         }
     }
 }
 
-impl Drop for AdbForwardManager {
+impl Drop for AdbReverseManager {
     fn drop(&mut self) {
         let tracked = if let Ok(mut guard) = self.inner.lock() {
             std::mem::take(&mut *guard)
         } else {
             Vec::new()
         };
-        for (serial, host_port) in tracked.into_iter().rev() {
-            if let Err(err) = teardown_adb_forward(&serial, host_port) {
-                warn!(serial, host_port, error = %err, "adb forward teardown failed");
+        for (serial, device_port) in tracked.into_iter().rev() {
+            if let Err(err) = teardown_adb_reverse(&serial, device_port) {
+                warn!(serial, device_port, error = %err, "adb reverse teardown failed");
             }
         }
     }

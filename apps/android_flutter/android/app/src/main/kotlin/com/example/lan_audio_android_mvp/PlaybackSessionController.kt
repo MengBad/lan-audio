@@ -8,11 +8,13 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import java.util.Locale
+import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -24,17 +26,20 @@ class PlaybackSessionController(
     private val stateStore: PlaybackStateStore,
 ) {
     private val logTag = "lan_audio_session"
+    private val decodeLogTag = "lan_audio_decode"
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val audioTrackController = AudioTrackController()
+    private var playbackSink: PlaybackAudioSink = createPlaybackSink()
     private val opusDecoder = OpusFrameDecoder()
     private val controlExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
     private var reconnectFuture: ScheduledFuture<*>? = null
     private var reconnectAttemptCount = 0
+    private var reconnectTotalCount = 0
     private var streamManager: StreamSessionManager? = null
     private var options = PlaybackModeProfiles.forMode("balanced").toOptions()
     private var jitterBuffer = newJitterBuffer(options)
+    private var currentTransportHint: TransportHint = TransportHint.Wifi
     private var currentTarget: PlaybackTarget? = null
     private var focusRequest: AudioFocusRequest? = null
     private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
@@ -59,6 +64,22 @@ class PlaybackSessionController(
     private var bufferingCandidateSinceMs: Long = 0
     private var playbackStateStableSinceMs: Long = 0
     private var lastLatencyGuardAtMs: Long = 0
+    private var lastPacketArrivalAtMs: Long = 0
+    private val recentArrivalIntervalsMs = ArrayDeque<Int>()
+    private var jitterP95Ms: Int? = null
+    private var adaptiveStartBufferMs: Int? = null
+    private var adaptiveStableSinceMs: Long = 0
+    private var lastDecodeSummaryAtMs: Long = 0
+    private var lastRxSeqRaw: Int? = null
+    private var rxSeqGapCount = 0
+    private var rxLastSeqWindow: Int? = null
+    private var decodeWindowMsSamples = ArrayList<Float>()
+    private var decodeProducedWindowFrames = 0
+    private var decodeFailCount = 0
+    private var decodeErrorTotal = 0
+    private var rxWindowFrames = 0
+    private var lastAudioFormat: ActiveAudioFormat? = null
+    private var oboeUnderrunCount = 0
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -71,9 +92,13 @@ class PlaybackSessionController(
     fun startPlayback(target: PlaybackTarget) {
         Log.i(logTag, "startPlayback target=${target.serverName} host=${target.host} ws=${target.wsPort} udp=${target.udpPort}")
         currentTarget = target
+        currentTransportHint = transportHintFromWire(target.transportMode)
+        val currentMode = PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode)
+        options = PlaybackModeProfiles.forMode(currentMode, currentTransportHint).toOptions(options.pingIntervalMs)
         reconnectFuture?.cancel(false)
         reconnectFuture = null
         reconnectAttemptCount = 0
+        reconnectTotalCount = 0
         stopStreamAndAudio()
         val generation = ++streamGeneration
 
@@ -101,16 +126,35 @@ class PlaybackSessionController(
         bufferingCandidateSinceMs = 0
         playbackStateStableSinceMs = SystemClock.elapsedRealtime()
         lastLatencyGuardAtMs = 0
-        audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
+        lastPacketArrivalAtMs = 0
+        recentArrivalIntervalsMs.clear()
+        jitterP95Ms = null
+        adaptiveStartBufferMs = null
+        adaptiveStableSinceMs = 0
+        lastDecodeSummaryAtMs = 0
+        lastRxSeqRaw = null
+        rxSeqGapCount = 0
+        rxLastSeqWindow = null
+        decodeWindowMsSamples = ArrayList()
+        decodeProducedWindowFrames = 0
+        decodeFailCount = 0
+        decodeErrorTotal = 0
+        rxWindowFrames = 0
+        lastAudioFormat = null
+        oboeUnderrunCount = 0
+        playbackSink.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
 
         stateStore.update {
             it.copy(
                 serviceState = "running",
                 connectionState = "connecting",
                 playbackState = "buffering",
-                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode),
-                playbackBackend = playbackBackendLabel(options),
+                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode, currentTransportHint),
+                connectionPath = if (target.transportMode == "usb") "usb_localhost" else "lan_ip_wifi_or_usb",
+        playbackBackend = playbackBackendLabel(),
                 protocolPath = "legacy_or_v2_auto",
+                transportMode = target.transportMode,
+                connectedClientCount = 0,
                 experimentalPath = false,
                 effectiveCodec = "pcm16",
                 targetHost = target.host,
@@ -118,7 +162,9 @@ class PlaybackSessionController(
                 recentLog = "connecting:${target.serverName}(${target.host})",
                 error = null,
                 metrics = it.metrics.copy(
-                    bufferedMs = 0,
+                    totalBufferedMs = 0,
+                    jitterBufferedMs = 0,
+                    audioTrackQueuedMs = 0,
                     jitterUnderrun = 0,
                     jitterDropped = 0,
                     jitterLate = 0,
@@ -131,11 +177,22 @@ class PlaybackSessionController(
                     audioTrackWriteFramesPerSec = 0.0,
                     cfgChangedCount = 0,
                     discontinuityCount = 0,
+                    tcpRoundTripMs = null,
+                    tcpRoundTripMedianMs = null,
+                    jitterP95Ms = null,
+                    floorHoldCount = 0,
+                    reconnectCount = 0,
+                    decodeErrors = 0,
+                    sinkWriteGapMsP95 = 0,
                 ),
             )
         }
 
-        streamManager = StreamSessionManager(target, options.pingIntervalMs, callback = object :
+        streamManager = StreamSessionManager(
+            target,
+            options.pingIntervalMs,
+            stateStore.current().currentAudioMode,
+            callback = object :
             StreamSessionManager.Callback {
             override fun onLog(message: String) {
                 if (generation != streamGeneration) return
@@ -152,6 +209,7 @@ class PlaybackSessionController(
                     it.copy(
                         connectionState = "connected",
                         playbackState = "buffering",
+                        connectedClientCount = if (it.connectedClientCount <= 0) 1 else it.connectedClientCount,
                         recentLog = "ws_connected",
                     )
                 }
@@ -183,14 +241,19 @@ class PlaybackSessionController(
                 protocolVersion: Int,
                 currentAudioMode: String,
                 capabilities: Map<String, Boolean>,
+                transportType: String,
             ) {
                 if (generation != streamGeneration) return
-                applyAudioModeProfile(currentAudioMode, "hello_ack")
+                applyAudioModeProfile(currentAudioMode, "hello_ack", transportType)
                 stateStore.update {
                     it.copy(
                         protocolVersion = protocolVersion,
                         currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
-                        modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+                        modeProfile = PlaybackModeProfiles.forMode(
+                            currentAudioMode,
+                            currentTransportHint,
+                        ),
+                        transportMode = if (currentTransportHint == TransportHint.Usb) "usb" else "wifi",
                         negotiatedCapabilities = capabilities,
                         recentLog = "hello_ack_v2",
                     )
@@ -205,7 +268,10 @@ class PlaybackSessionController(
                         serverPlatform = platform,
                         serverAppVersion = appVersion,
                         currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
-                        modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+                        modeProfile = PlaybackModeProfiles.forMode(
+                            currentAudioMode,
+                            currentTransportHint,
+                        ),
                     )
                 }
             }
@@ -218,8 +284,27 @@ class PlaybackSessionController(
                 stateStore.update {
                     it.copy(
                         currentAudioMode = PlaybackModeProfiles.normalize(mode),
-                        modeProfile = PlaybackModeProfiles.forMode(mode),
+                        modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
                         recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
+                    )
+                }
+            }
+
+            override fun onClientCountUpdated(count: Int) {
+                if (generation != streamGeneration) return
+                stateStore.update {
+                    it.copy(connectedClientCount = count.coerceAtLeast(0))
+                }
+            }
+
+            override fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int) {
+                if (generation != streamGeneration) return
+                stateStore.update {
+                    it.copy(
+                        metrics = it.metrics.copy(
+                            tcpRoundTripMs = roundTripMs,
+                            tcpRoundTripMedianMs = medianMs,
+                        ),
                     )
                 }
             }
@@ -239,6 +324,7 @@ class PlaybackSessionController(
         reconnectFuture?.cancel(false)
         reconnectFuture = null
         reconnectAttemptCount = 0
+        reconnectTotalCount = 0
         stateStore.update {
             it.copy(
                 serviceState = "stopping",
@@ -276,12 +362,12 @@ class PlaybackSessionController(
             "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
         )
         options = next
-        audioTrackController.setQueueSoftCapFrames(msToFrames(next.audioQueueSoftCapMs))
+        playbackSink.setQueueSoftCapFrames(msToFrames(next.audioQueueSoftCapMs))
         jitterBuffer = newJitterBuffer(options)
         stateStore.update {
             it.copy(
-                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode),
-                playbackBackend = playbackBackendLabel(options),
+                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode, currentTransportHint),
+                playbackBackend = playbackBackendLabel(),
                 recentLog = "options_updated",
             )
         }
@@ -294,8 +380,8 @@ class PlaybackSessionController(
         stateStore.update {
             it.copy(
                 currentAudioMode = normalized,
-                modeProfile = PlaybackModeProfiles.forMode(normalized),
-                playbackBackend = playbackBackendLabel(options),
+                modeProfile = PlaybackModeProfiles.forMode(normalized, currentTransportHint),
+                playbackBackend = playbackBackendLabel(),
                 recentLog = if (sent) "set_audio_mode:$normalized" else "set_audio_mode_pending:$normalized",
             )
         }
@@ -349,6 +435,17 @@ class PlaybackSessionController(
     }
 
     private fun handleUdpPacket(packet: LasPacket) {
+        rxWindowFrames += 1
+        val currentSeq = packet.sequence
+        rxLastSeqWindow = currentSeq
+        val previousSeq = lastRxSeqRaw
+        if (previousSeq != null) {
+            val expectedRawSeq = ((previousSeq.toLong() + 1L) and 0xFFFFFFFFL).toInt()
+            if (currentSeq != expectedRawSeq) {
+                rxSeqGapCount += 1
+            }
+        }
+        lastRxSeqRaw = currentSeq
         if (packet.hasDiscontinuity) {
             discontinuityCount += 1
             jitterBuffer.clear()
@@ -361,8 +458,9 @@ class PlaybackSessionController(
             cfgChangedCount += 1
             opusDecoder.release()
             if (options.resetBufferOnSwitch) {
-                audioTrackController.stop()
-                audioTrackController.release()
+                playbackSink.stop()
+                playbackSink.release()
+                playbackSink = createPlaybackSink()
                 audioInit = false
                 audioStarted = false
             }
@@ -370,8 +468,17 @@ class PlaybackSessionController(
         }
 
         val wireBytes = packet.payload.size + packet.headerSize
-        val playbackPacket = decodePacketForPlayback(packet) ?: return
+        val decodeResult = decodePacketForPlayback(packet)
+        val playbackPacket = decodeResult.packet ?: run {
+            decodeFailCount += 1
+            decodeErrorTotal += 1
+            maybeLogDecodeAndRxSummary(SystemClock.elapsedRealtime())
+            return
+        }
+        decodeWindowMsSamples.add(decodeResult.decodeMs)
+        decodeProducedWindowFrames += 1
         currentPacketCodecLabel = packet.codecLabel
+        updateLowLatencyJitterGuard(SystemClock.elapsedRealtime())
 
         if (lastSeq != null) {
             val expected = ((lastSeq!! + 1L) and 0xFFFFFFFFL).toInt()
@@ -383,13 +490,19 @@ class PlaybackSessionController(
         jitterBuffer.push(playbackPacket)
 
         val stats = jitterBuffer.stats
+        val audioStats = playbackSink.stats()
+        val jitterBufferedMs = jitterBuffer.bufferedMs()
+        val audioTrackQueuedMs = audioStats.reportedLatencyMs ?: framesToMs(audioStats.nativeQueuedAudioFrames)
+        val totalBufferedMs = jitterBufferedMs + audioTrackQueuedMs
         stateStore.update {
             val current = it.metrics
             it.copy(
                 metrics = current.copy(
                     sampleRate = playbackPacket.sampleRate,
                     channels = playbackPacket.channels,
-                    bufferedMs = jitterBuffer.bufferedMs(),
+                    totalBufferedMs = totalBufferedMs,
+                    jitterBufferedMs = jitterBufferedMs,
+                    audioTrackQueuedMs = audioTrackQueuedMs,
                     jitterUnderrun = stats.underrunCount,
                     jitterDropped = stats.droppedFrames,
                     jitterLate = stats.lateFrames,
@@ -400,35 +513,114 @@ class PlaybackSessionController(
                     silenceFillCount = silenceFillCount,
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
+                    jitterP95Ms = jitterP95Ms,
+                    floorHoldCount = stats.floorHoldCount,
+                    reconnectCount = reconnectTotalCount,
+                    decodeErrors = decodeErrorTotal,
+                    sinkWriteGapMsP95 = audioStats.writeGapP95Ms,
                 ),
                 protocolVersion = playbackPacket.protocolVersion,
                 protocolPath = if (playbackPacket.protocolVersion == 2) "v2_header" else "legacy_las1",
                 experimentalPath = playbackPacket.protocolVersion == 2,
                 effectiveCodec = packet.codecLabel,
-                playbackBackend = playbackBackendLabel(options),
+                playbackBackend = playbackBackendLabel(),
             )
         }
+        maybeLogDecodeAndRxSummary(SystemClock.elapsedRealtime())
         maybeLogMetrics()
     }
 
-    private fun decodePacketForPlayback(packet: LasPacket): LasPacket? {
+    private fun decodePacketForPlayback(packet: LasPacket): DecodeResult {
         return when (packet.codec) {
-            LasPacket.CODEC_PCM16 -> packet
+            LasPacket.CODEC_PCM16 -> DecodeResult(packet, 0f)
             LasPacket.CODEC_OPUS_EXPERIMENTAL -> {
                 try {
-                    val pcm = opusDecoder.decode(packet) ?: return null
-                    packet.copy(payload = pcm)
+                    val t0 = System.nanoTime()
+                    val pcm = opusDecoder.decode(packet)
+                    val decodeMs = (System.nanoTime() - t0) / 1_000_000f
+                    if (pcm == null) {
+                        DecodeResult(null, decodeMs)
+                    } else {
+                        DecodeResult(packet.copy(payload = pcm), decodeMs)
+                    }
                 } catch (t: Throwable) {
                     Log.e(logTag, "opus decode failed: ${t.message}")
                     publishError("opus_decode_failed", t.message ?: "opus decode failed")
-                    null
+                    DecodeResult(null, 0f)
                 }
             }
             else -> {
                 publishError("unsupported_codec", "unsupported codec=${packet.codec}")
-                null
+                DecodeResult(null, 0f)
             }
         }
+    }
+
+    private fun maybeLogDecodeAndRxSummary(nowMs: Long) {
+        if (lastDecodeSummaryAtMs == 0L) {
+            lastDecodeSummaryAtMs = nowMs
+            return
+        }
+        val elapsed = nowMs - lastDecodeSummaryAtMs
+        if (elapsed < DECODE_SUMMARY_INTERVAL_MS) {
+            return
+        }
+
+        val intervalSec = elapsed.toDouble() / 1000.0
+        val avgDecodeMs = averageOrZero(decodeWindowMsSamples)
+        val p99DecodeMs = percentileOrZero(decodeWindowMsSamples, 0.99)
+        val rxPerSec = if (intervalSec <= 0.0) 0.0 else rxWindowFrames.toDouble() / intervalSec
+        val producedPerSec = if (intervalSec <= 0.0) 0.0 else decodeProducedWindowFrames.toDouble() / intervalSec
+        val seqLast = rxLastSeqWindow?.toString() ?: "none"
+
+        Log.i(
+            decodeLogTag,
+            String.format(
+                Locale.US,
+                "rx_summary interval_5s rx_frames=%d rx_per_sec=%.1f seq_gap_count=%d seq_last=%s",
+                rxWindowFrames,
+                rxPerSec,
+                rxSeqGapCount,
+                seqLast,
+            ),
+        )
+        Log.i(
+            decodeLogTag,
+            String.format(
+                Locale.US,
+                "decode_summary interval_5s produced=%d produced_per_sec=%.1f decode_avg_ms=%.3f decode_p99_ms=%.3f decode_fail_count=%d",
+                decodeProducedWindowFrames,
+                producedPerSec,
+                avgDecodeMs,
+                p99DecodeMs,
+                decodeFailCount,
+            ),
+        )
+
+        lastDecodeSummaryAtMs = nowMs
+        decodeWindowMsSamples.clear()
+        decodeProducedWindowFrames = 0
+        decodeFailCount = 0
+        rxWindowFrames = 0
+        rxSeqGapCount = 0
+        rxLastSeqWindow = null
+    }
+
+    private fun averageOrZero(samples: List<Float>): Double {
+        if (samples.isEmpty()) {
+            return 0.0
+        }
+        return samples.sumOf { it.toDouble() } / samples.size.toDouble()
+    }
+
+    private fun percentileOrZero(samples: List<Float>, percentile: Double): Double {
+        if (samples.isEmpty()) {
+            return 0.0
+        }
+        val sorted = samples.sorted()
+        val p = percentile.coerceIn(0.0, 1.0)
+        val idx = kotlin.math.ceil(sorted.size * p).toInt().coerceIn(1, sorted.size) - 1
+        return sorted[idx].toDouble()
     }
 
     private fun playoutTick() {
@@ -441,13 +633,17 @@ class PlaybackSessionController(
             return
         }
 
-        val frame = jitterBuffer.pop()
+        val usbLowLatencyHardFloor = currentTransportHint == TransportHint.Usb &&
+            PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) == "low_latency"
+        val frame = jitterBuffer.pop(usbLowLatencyHardFloor)
         val stats = jitterBuffer.stats
         if (frame == null) {
             consecutivePlayoutHits = 0
             consecutivePlayoutMisses += 1
-            val audioStats = audioTrackController.stats()
-            val audioQueuedMs = framesToMs(audioStats.nativeQueuedAudioFrames)
+            val audioStats = playbackSink.stats()
+            silenceFillCount = audioStats.silenceFillTotal.toInt()
+            oboeUnderrunCount = audioStats.underrunTotal
+            val audioQueuedMs = audioStats.reportedLatencyMs ?: framesToMs(audioStats.nativeQueuedAudioFrames)
             val totalBufferedMs = jitterBuffer.bufferedMs() + audioQueuedMs
             val hasQueuedAudio = audioStarted && audioStats.nativeQueuedAudioFrames > 0
             if (hasQueuedAudio) {
@@ -482,13 +678,20 @@ class PlaybackSessionController(
                 it.copy(
                     playbackState = nextPlaybackState,
                     metrics = it.metrics.copy(
-                        bufferedMs = jitterBuffer.bufferedMs(),
+                        totalBufferedMs = totalBufferedMs,
+                        jitterBufferedMs = jitterBuffer.bufferedMs(),
+                        audioTrackQueuedMs = audioQueuedMs,
                         jitterUnderrun = stats.underrunCount,
                         jitterDropped = stats.droppedFrames,
                         jitterLate = stats.lateFrames,
                         silenceFillCount = silenceFillCount,
                         cfgChangedCount = cfgChangedCount,
                         discontinuityCount = discontinuityCount,
+                        jitterP95Ms = jitterP95Ms,
+                        floorHoldCount = stats.floorHoldCount,
+                        reconnectCount = reconnectTotalCount,
+                        decodeErrors = decodeErrorTotal,
+                        sinkWriteGapMsP95 = audioStats.writeGapP95Ms,
                     ),
                 )
             }
@@ -499,29 +702,29 @@ class PlaybackSessionController(
         consecutiveEmptyQueueMisses = 0
         bufferingCandidateSinceMs = 0
         consecutivePlayoutHits += 1
+        lastAudioFormat = ActiveAudioFormat(
+            sampleRate = frame.sampleRate,
+            channels = frame.channels,
+            frameSamplesPerChannel = frame.frameDurationMs * frame.sampleRate / 1000,
+        )
 
         if (!audioInit) {
             Log.i(logTag, "init AudioTrack sr=${frame.sampleRate} ch=${frame.channels}")
-            audioTrackController.init(
-                sampleRate = frame.sampleRate,
-                channels = frame.channels,
-                frameSamplesPerChannel = frame.frameDurationMs * frame.sampleRate / 1000,
-                preferLowLatency = options.preferLowLatencyPath,
-                encoding = AudioFormat.ENCODING_PCM_16BIT,
-            )
-            audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
+            initPlaybackSink(lastAudioFormat!!)
             audioInit = true
         }
         if (!audioStarted) {
-            audioTrackController.start()
+            playbackSink.start()
             audioStarted = true
         }
         val writeBatch = collectWritePayload(frame)
-        audioTrackController.writePcm16(writeBatch.payload, writeBatch.frames)
-        val writtenFrameCount = writeBatch.frames.coerceAtLeast(1)
+        playbackSink.writePcm16(writeBatch.payload, writeBatch.pcmFrames)
+        val writtenPacketCount = writeBatch.packetCount.coerceAtLeast(1)
         val frameDurationMs = frame.frameDurationMs.takeIf { it > 0 } ?: 10
-        val audioStats = audioTrackController.stats()
-        val audioQueuedMs = framesToMs(audioStats.nativeQueuedAudioFrames)
+        val audioStats = playbackSink.stats()
+        silenceFillCount = audioStats.silenceFillTotal.toInt()
+        oboeUnderrunCount = audioStats.underrunTotal
+        val audioQueuedMs = audioStats.reportedLatencyMs ?: framesToMs(audioStats.nativeQueuedAudioFrames)
         var totalBufferedMs = jitterBuffer.bufferedMs() + audioQueuedMs
         val latencyGuardCooldownMs = 220L
         if (totalBufferedMs > options.maxTotalLatencyMs && now - lastLatencyGuardAtMs >= latencyGuardCooldownMs) {
@@ -542,8 +745,8 @@ class PlaybackSessionController(
             catchupMs >= 35 -> 2
             else -> 0
         }
-        val effectiveIntervalMs = (writtenFrameCount * frameDurationMs - paceAdjustMs)
-            .coerceIn(frameDurationMs, writtenFrameCount * frameDurationMs)
+        val effectiveIntervalMs = (writtenPacketCount * frameDurationMs - paceAdjustMs)
+            .coerceIn(frameDurationMs, writtenPacketCount * frameDurationMs)
         nextPlayoutAtMs = now + effectiveIntervalMs.toLong()
         val resumeThreshold = if (options.preferLowLatencyPath) {
             1
@@ -564,7 +767,9 @@ class PlaybackSessionController(
                 metrics = it.metrics.copy(
                     sampleRate = frame.sampleRate,
                     channels = frame.channels,
-                    bufferedMs = jitterBuffer.bufferedMs(),
+                    totalBufferedMs = totalBufferedMs,
+                    jitterBufferedMs = jitterBuffer.bufferedMs(),
+                    audioTrackQueuedMs = audioQueuedMs,
                     audioTrackLatencyMs = audioStats.reportedLatencyMs,
                     jitterUnderrun = stats.underrunCount,
                     jitterDropped = stats.droppedFrames,
@@ -575,7 +780,10 @@ class PlaybackSessionController(
                     silenceFillCount = silenceFillCount,
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
+                    jitterP95Ms = jitterP95Ms,
+                    floorHoldCount = stats.floorHoldCount,
                 ),
+                playbackBackend = playbackBackendLabel(),
             )
         }
         maybeLogMetrics()
@@ -605,6 +813,7 @@ class PlaybackSessionController(
         val attemptNumber = if (immediate) 0 else reconnectAttemptCount + 1
         if (!immediate) {
             reconnectAttemptCount = attemptNumber
+            reconnectTotalCount += 1
         }
         val delayMs = if (immediate) 0L else AUTO_RECONNECT_DELAY_MS
         Log.w(
@@ -627,13 +836,18 @@ class PlaybackSessionController(
             }
             streamManager?.stop()
             streamManager = null
-            audioTrackController.stop()
-            audioTrackController.release()
+            playbackSink.stop()
+            playbackSink.release()
+            playbackSink = createPlaybackSink()
             audioInit = false
             audioStarted = false
             opusDecoder.release()
             jitterBuffer.clear()
-            streamManager = StreamSessionManager(target, options.pingIntervalMs, object : StreamSessionManager.Callback {
+            streamManager = StreamSessionManager(
+                target,
+                options.pingIntervalMs,
+                stateStore.current().currentAudioMode,
+                object : StreamSessionManager.Callback {
                 override fun onLog(message: String) {
                     if (generation != streamGeneration) return
                     stateStore.update { it.copy(recentLog = message) }
@@ -663,14 +877,19 @@ class PlaybackSessionController(
                     protocolVersion: Int,
                     currentAudioMode: String,
                     capabilities: Map<String, Boolean>,
+                    transportType: String,
                 ) {
                     if (generation != streamGeneration) return
-                    applyAudioModeProfile(currentAudioMode, "hello_ack")
+                    applyAudioModeProfile(currentAudioMode, "hello_ack", transportType)
                     stateStore.update {
                         it.copy(
                             protocolVersion = protocolVersion,
                             currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
-                            modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+                            modeProfile = PlaybackModeProfiles.forMode(
+                                currentAudioMode,
+                                currentTransportHint,
+                            ),
+                            transportMode = if (currentTransportHint == TransportHint.Usb) "usb" else "wifi",
                             negotiatedCapabilities = capabilities,
                             recentLog = "hello_ack_v2",
                         )
@@ -685,7 +904,10 @@ class PlaybackSessionController(
                             serverPlatform = platform,
                             serverAppVersion = appVersion,
                             currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
-                            modeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+                            modeProfile = PlaybackModeProfiles.forMode(
+                                currentAudioMode,
+                                currentTransportHint,
+                            ),
                         )
                     }
                 }
@@ -698,8 +920,27 @@ class PlaybackSessionController(
                     stateStore.update {
                         it.copy(
                             currentAudioMode = PlaybackModeProfiles.normalize(mode),
-                            modeProfile = PlaybackModeProfiles.forMode(mode),
+                            modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
                             recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
+                        )
+                    }
+                }
+
+                override fun onClientCountUpdated(count: Int) {
+                    if (generation != streamGeneration) return
+                    stateStore.update {
+                        it.copy(connectedClientCount = count.coerceAtLeast(0))
+                    }
+                }
+
+                override fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int) {
+                    if (generation != streamGeneration) return
+                    stateStore.update {
+                        it.copy(
+                            metrics = it.metrics.copy(
+                                tcpRoundTripMs = roundTripMs,
+                                tcpRoundTripMedianMs = medianMs,
+                            ),
                         )
                     }
                 }
@@ -722,11 +963,13 @@ class PlaybackSessionController(
         playoutFuture?.cancel(true)
         playoutFuture = null
         opusDecoder.release()
-        audioTrackController.stop()
-        audioTrackController.release()
+        playbackSink.stop()
+        playbackSink.release()
+        playbackSink = createPlaybackSink()
         audioInit = false
         audioStarted = false
         currentPacketCodecLabel = "pcm16"
+        lastAudioFormat = null
         nextPlayoutAtMs = 0
         consecutivePlayoutMisses = 0
         consecutiveEmptyQueueMisses = 0
@@ -734,7 +977,21 @@ class PlaybackSessionController(
         bufferingCandidateSinceMs = 0
         playbackStateStableSinceMs = 0
         lastLatencyGuardAtMs = 0
+        lastPacketArrivalAtMs = 0
+        recentArrivalIntervalsMs.clear()
+        jitterP95Ms = null
+        adaptiveStartBufferMs = null
+        adaptiveStableSinceMs = 0
+        lastRxSeqRaw = null
+        rxSeqGapCount = 0
+        rxLastSeqWindow = null
+        decodeProducedWindowFrames = 0
+        decodeFailCount = 0
+        decodeErrorTotal = 0
+        rxWindowFrames = 0
+        decodeWindowMsSamples.clear()
         jitterBuffer.clear()
+        oboeUnderrunCount = 0
     }
 
     private fun publishError(code: String, message: String) {
@@ -822,20 +1079,41 @@ class PlaybackSessionController(
         Log.i(logTag, "audio focus released")
     }
 
-    private fun applyAudioModeProfile(mode: String, reason: String) {
+    private fun applyAudioModeProfile(mode: String, reason: String, transportType: String? = null) {
+        val previousBackendConfig = currentAudioBackendConfig()
+        transportType?.let {
+            currentTransportHint = transportHintFromWire(it)
+        }
         val normalized = PlaybackModeProfiles.normalize(mode)
-        val profile = PlaybackModeProfiles.forMode(normalized)
+        val profile = PlaybackModeProfiles.forMode(normalized, currentTransportHint)
         options = profile.toOptions(options.pingIntervalMs)
-        audioTrackController.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
+        val nextBackendConfig = currentAudioBackendConfig()
+        if (normalized != "low_latency") {
+            adaptiveStartBufferMs = null
+            adaptiveStableSinceMs = 0
+            recentArrivalIntervalsMs.clear()
+            jitterP95Ms = null
+        }
+        jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
+        playbackSink.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
         val streamActive = streamManager != null
-        if (profile.resetBufferOnSwitch && !streamActive) {
+        val backendChanged = previousBackendConfig != nextBackendConfig
+        if (streamActive && audioInit && backendChanged) {
+            reinitAudioBackend(normalized, reason)
+        } else if (profile.resetBufferOnSwitch && !streamActive) {
             jitterBuffer = newJitterBuffer(options)
-            audioTrackController.stop()
-            audioTrackController.release()
-            audioInit = false
-            audioStarted = false
+        playbackSink.stop()
+        playbackSink.release()
+        playbackSink = createPlaybackSink()
+        audioInit = false
+        audioStarted = false
             opusDecoder.release()
             lastSeq = null
+        } else if (streamActive && backendChanged) {
+            Log.i(
+                logTag,
+                "audio_backend_reinit_pending mode=$normalized transport=${currentTransportHint.name.lowercase()} reason=$reason audioInit=$audioInit",
+            )
         } else if (profile.resetBufferOnSwitch) {
             Log.i(
                 logTag,
@@ -844,12 +1122,178 @@ class PlaybackSessionController(
         }
         Log.i(
             logTag,
-            "applyAudioModeProfile mode=$normalized reason=$reason startBufferMs=${options.startBufferMs} maxBufferMs=${options.maxBufferMs} batchFrames=${options.batchFrames} dropThresholdMs=${options.dropThresholdMs}"
+            "applyAudioModeProfile mode=$normalized transport=${currentTransportHint.name.lowercase()} reason=$reason startBufferMs=${options.startBufferMs} maxBufferMs=${options.maxBufferMs} batchFrames=${options.batchFrames} dropThresholdMs=${options.dropThresholdMs}"
         )
+    }
+
+    private fun transportHintFromWire(value: String): TransportHint {
+        return if (value.equals("usb", ignoreCase = true)) TransportHint.Usb else TransportHint.Wifi
+    }
+
+    private fun updateLowLatencyJitterGuard(nowMs: Long) {
+        val interval = if (lastPacketArrivalAtMs > 0L) {
+            (nowMs - lastPacketArrivalAtMs).coerceAtLeast(0L).toInt()
+        } else {
+            null
+        }
+        lastPacketArrivalAtMs = nowMs
+        if (interval != null) {
+            if (recentArrivalIntervalsMs.size >= JITTER_P95_WINDOW_FRAMES) {
+                recentArrivalIntervalsMs.removeFirst()
+            }
+            recentArrivalIntervalsMs.addLast(interval)
+        }
+
+        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "low_latency") {
+            adaptiveStableSinceMs = 0
+            adaptiveStartBufferMs = null
+            jitterP95Ms = null
+            return
+        }
+        if (recentArrivalIntervalsMs.isEmpty()) {
+            return
+        }
+        val p95 = percentile95(recentArrivalIntervalsMs)
+        jitterP95Ms = p95
+        val triggerThreshold = options.dropThresholdMs * 0.8
+        val capStartBufferMs = WIFI_BALANCED_MAX_BUFFER_CAP_MS
+        if (p95 > triggerThreshold) {
+            adaptiveStableSinceMs = 0
+            val baseStartBufferMs = PlaybackModeProfiles
+                .forMode("low_latency", currentTransportHint)
+                .startBufferMs
+            val boostedStartBufferMs = (baseStartBufferMs + LOW_LATENCY_ADAPTIVE_BOOST_MS)
+                .coerceAtMost(capStartBufferMs)
+            if (adaptiveStartBufferMs != boostedStartBufferMs) {
+                adaptiveStartBufferMs = boostedStartBufferMs
+                applyAdaptiveStartBuffer(boostedStartBufferMs, p95)
+            }
+            return
+        }
+
+        if (adaptiveStartBufferMs == null) {
+            adaptiveStableSinceMs = 0
+            return
+        }
+        if (adaptiveStableSinceMs == 0L) {
+            adaptiveStableSinceMs = nowMs
+            return
+        }
+        if (nowMs - adaptiveStableSinceMs >= LOW_LATENCY_RECOVER_MS) {
+            adaptiveStableSinceMs = 0
+            adaptiveStartBufferMs = null
+            val base = PlaybackModeProfiles.forMode("low_latency", currentTransportHint)
+            options = base.toOptions(options.pingIntervalMs)
+            jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
+            Log.i(logTag, "low_latency_jitter_guard_recover startBufferMs=${options.startBufferMs}")
+        }
+    }
+
+    private fun applyAdaptiveStartBuffer(startBufferMs: Int, p95Ms: Int) {
+        options = options.copy(startBufferMs = startBufferMs)
+        jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
+        Log.w(
+            logTag,
+            "low_latency_jitter_guard_boost startBufferMs=$startBufferMs p95_ms=$p95Ms dropThresholdMs=${options.dropThresholdMs}",
+        )
+    }
+
+    private fun percentile95(samples: Collection<Int>): Int {
+        if (samples.isEmpty()) {
+            return 0
+        }
+        val sorted = samples.sorted()
+        val idx = kotlin.math.ceil(sorted.size * 0.95).toInt().coerceIn(1, sorted.size) - 1
+        return sorted[idx].coerceAtLeast(0)
     }
 
     private fun newJitterBuffer(opts: PlaybackOptions): PlaybackJitterBuffer {
         return PlaybackJitterBuffer(opts.startBufferMs, opts.maxBufferMs, opts.dropThresholdMs)
+    }
+
+    private fun createPlaybackSink(): PlaybackAudioSink {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            OboeAudioTrackController()
+        } else {
+            AudioTrackController()
+        }
+    }
+
+    private fun initPlaybackSink(format: ActiveAudioFormat) {
+        val preferredSink = createPlaybackSink()
+        val initializedSink = try {
+            preferredSink.init(
+                sampleRate = format.sampleRate,
+                channels = format.channels,
+                frameSamplesPerChannel = format.frameSamplesPerChannel,
+                transportHint = currentTransportHint,
+                encoding = AudioFormat.ENCODING_PCM_16BIT,
+            )
+            preferredSink
+        } catch (t: Throwable) {
+            preferredSink.release()
+            if (preferredSink is AudioTrackController) {
+                throw t
+            }
+            Log.w(
+                logTag,
+                "oboe_open_failed_fallback transport=${currentTransportHint.name.lowercase()} reason=${t.message}",
+                t,
+            )
+            AudioTrackController().also {
+                it.init(
+                    sampleRate = format.sampleRate,
+                    channels = format.channels,
+                    frameSamplesPerChannel = format.frameSamplesPerChannel,
+                    transportHint = currentTransportHint,
+                    encoding = AudioFormat.ENCODING_PCM_16BIT,
+                )
+            }
+        }
+        playbackSink = initializedSink
+        playbackSink.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
+        stateStore.update {
+            it.copy(playbackBackend = playbackBackendLabel())
+        }
+    }
+
+    private fun currentAudioBackendConfig(): AudioBackendConfig {
+        return AudioBackendConfig(
+            transportHint = currentTransportHint,
+            preferLowLatencyPath = options.preferLowLatencyPath,
+            lowLatencyBufferMultiplier = options.lowLatencyBufferMultiplier,
+            lowLatencyFallbackBufferMultiplier = options.lowLatencyFallbackBufferMultiplier,
+            preferredBackend = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) "oboe" else "audiotrack",
+        )
+    }
+
+    private fun reinitAudioBackend(mode: String, reason: String) {
+        val format = lastAudioFormat
+        if (format == null) {
+            Log.w(
+                logTag,
+                "audio_backend_reinit_skipped mode=$mode transport=${currentTransportHint.name.lowercase()} reason=$reason missing_format=true",
+            )
+            return
+        }
+        Log.i(
+            logTag,
+            "audio_backend_reinit mode=$mode transport=${currentTransportHint.name.lowercase()} reason=$reason sampleRate=${format.sampleRate} channels=${format.channels} frameSamples=${format.frameSamplesPerChannel}",
+        )
+        val shouldStart = audioStarted
+        playbackSink.stop()
+        playbackSink.release()
+        initPlaybackSink(format)
+        audioInit = true
+        audioStarted = false
+        if (shouldStart) {
+            playbackSink.start()
+            audioStarted = true
+        }
+        Log.i(
+            logTag,
+            "audio_backend_reinit_done mode=$mode transport=${currentTransportHint.name.lowercase()} reason=$reason restarted=$shouldStart",
+        )
     }
 
     private fun msToFrames(ms: Int): Int {
@@ -873,17 +1317,28 @@ class PlaybackSessionController(
         return desired
     }
 
-    private fun playbackBackendLabel(opts: PlaybackOptions): String {
-        return if (opts.preferLowLatencyPath) "audiotrack_fast_path" else "audiotrack_stable"
+    private fun playbackBackendLabel(): String {
+        return playbackSink.backendLabel(options)
     }
 
     private fun collectWritePayload(first: PcmFrame): WriteBatch {
+        val bytesPerFrame = first.channels.coerceAtLeast(1) * 2
+        fun frameCountFor(payload: ByteArray): Int = (payload.size / bytesPerFrame).coerceAtLeast(1)
+
         if (currentPacketCodecLabel == "opus") {
-            return WriteBatch(first.payload, 1)
+            return WriteBatch(
+                payload = first.payload,
+                packetCount = 1,
+                pcmFrames = frameCountFor(first.payload),
+            )
         }
         val batchSize = options.batchFrames.coerceIn(1, 4)
         if (batchSize == 1) {
-            return WriteBatch(first.payload, 1)
+            return WriteBatch(
+                payload = first.payload,
+                packetCount = 1,
+                pcmFrames = frameCountFor(first.payload),
+            )
         }
         val chunks = ArrayList<ByteArray>(batchSize)
         chunks.add(first.payload)
@@ -894,7 +1349,11 @@ class PlaybackSessionController(
             }
         }
         if (chunks.size == 1) {
-            return WriteBatch(first.payload, 1)
+            return WriteBatch(
+                payload = first.payload,
+                packetCount = 1,
+                pcmFrames = frameCountFor(first.payload),
+            )
         }
         val total = chunks.sumOf { it.size }
         val out = ByteArray(total)
@@ -903,13 +1362,20 @@ class PlaybackSessionController(
             System.arraycopy(chunk, 0, out, offset, chunk.size)
             offset += chunk.size
         }
-        return WriteBatch(out, chunks.size)
+        return WriteBatch(
+            payload = out,
+            packetCount = chunks.size,
+            pcmFrames = frameCountFor(out),
+        )
     }
 
     private fun maybeLogMetrics(force: Boolean = false, reason: String = "periodic") {
         val now = SystemClock.elapsedRealtime()
         val snapshot = stateStore.current()
         val metrics = snapshot.metrics
+        val sinkStats = playbackSink.stats()
+        silenceFillCount = sinkStats.silenceFillTotal.toInt()
+        oboeUnderrunCount = sinkStats.underrunTotal
         if (lastMetricsLogAtMs == 0L) {
             lastMetricsLogAtMs = now
             lastLoggedUdpPackets = metrics.udpPackets
@@ -938,6 +1404,10 @@ class PlaybackSessionController(
                     silenceFillCount = silenceFillCount,
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
+                    jitterP95Ms = jitterP95Ms,
+                    floorHoldCount = jitterBuffer.stats.floorHoldCount,
+                    reconnectCount = reconnectTotalCount,
+                    decodeErrors = decodeErrorTotal,
                 ),
             )
         }
@@ -946,11 +1416,18 @@ class PlaybackSessionController(
             logTag,
             String.format(
                 Locale.US,
-                "playback_summary reason=%s playback=%s buffered_ms=%d jitter_underrun=%d dropped_late_frames=%d/%d silence_fill_count=%d rx_frames_per_sec=%.1f audio_track_write_frames_per_sec=%.1f cfg_changed=%d discontinuity=%d mode=%s recent=%s",
+                "playback_summary reason=%s playback=%s total_buffered_ms=%d (jitter=%d+track=%d) audio_track_reported_latency_ms=%s tcp_rtt_ms=%s/%s(med) jitter_p95_ms=%s jitter_underrun=%d floor_hold_count=%d dropped_late_frames=%d/%d silence_fill_count=%d rx_frames_per_sec=%.1f audio_track_write_frames_per_sec=%.1f cfg_changed=%d discontinuity=%d mode=%s recent=%s",
                 reason,
                 snapshot.playbackState,
-                metrics.bufferedMs,
+                metrics.totalBufferedMs,
+                metrics.jitterBufferedMs,
+                metrics.audioTrackQueuedMs,
+                metrics.audioTrackLatencyMs?.toString() ?: "null",
+                metrics.tcpRoundTripMs?.toString() ?: "null",
+                metrics.tcpRoundTripMedianMs?.toString() ?: "null",
+                metrics.jitterP95Ms?.toString() ?: "null",
                 metrics.jitterUnderrun,
+                metrics.floorHoldCount,
                 metrics.jitterDropped,
                 metrics.jitterLate,
                 silenceFillCount,
@@ -971,10 +1448,35 @@ class PlaybackSessionController(
     companion object {
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
         private const val AUTO_RECONNECT_DELAY_MS = 2000L
+        private const val DECODE_SUMMARY_INTERVAL_MS = 5_000L
+        private const val JITTER_P95_WINDOW_FRAMES = 50
+        private const val LOW_LATENCY_ADAPTIVE_BOOST_MS = 5
+        private const val LOW_LATENCY_RECOVER_MS = 10_000L
+        private const val WIFI_BALANCED_MAX_BUFFER_CAP_MS = 30
     }
 
     private data class WriteBatch(
         val payload: ByteArray,
-        val frames: Int,
+        val packetCount: Int,
+        val pcmFrames: Int,
+    )
+
+    private data class ActiveAudioFormat(
+        val sampleRate: Int,
+        val channels: Int,
+        val frameSamplesPerChannel: Int,
+    )
+
+    private data class AudioBackendConfig(
+        val transportHint: TransportHint,
+        val preferLowLatencyPath: Boolean,
+        val lowLatencyBufferMultiplier: Int,
+        val lowLatencyFallbackBufferMultiplier: Int,
+        val preferredBackend: String,
+    )
+
+    private data class DecodeResult(
+        val packet: LasPacket?,
+        val decodeMs: Float,
     )
 }

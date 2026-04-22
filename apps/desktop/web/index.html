@@ -267,6 +267,35 @@
         color: #2e3a47;
       }
 
+      .usb-panel {
+        margin-top: 10px;
+        border-top: 1px solid #e6ebf2;
+        padding-top: 10px;
+      }
+
+      .usb-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .usb-device-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .usb-device {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .usb-meta {
+        color: var(--muted);
+      }
+
       details {
         margin-top: 12px;
         background: #fff;
@@ -427,6 +456,23 @@
             <div class="device-subtitle" id="recentDeviceLabel"></div>
             <ul class="device-recent" id="deviceRecentList"></ul>
           </div>
+
+          <div class="usb-panel">
+            <div class="device-subtitle" id="usbTitle"></div>
+            <div class="usb-actions">
+              <button class="copy-btn" id="usbRefreshBtn" type="button"></button>
+              <button class="copy-btn" id="usbDisableBtn" type="button"></button>
+            </div>
+            <div class="row">
+              <span class="label" id="usbStateLabel"></span>
+              <span class="value" id="usbStateValue"></span>
+            </div>
+            <div class="row">
+              <span class="label" id="usbForwardLabel"></span>
+              <span class="value" id="usbForwardValue"></span>
+            </div>
+            <div class="usb-device-list" id="usbDeviceList"></div>
+          </div>
         </section>
       </div>
 
@@ -512,6 +558,12 @@
           state_stopping: '停止中',
           state_error: '错误',
           session_streaming: '推流中',
+          session_disconnected: '未连接',
+          session_handshaking: '握手中',
+          session_negotiated: '已协商',
+          session_reconfiguring: '重配置中',
+          session_recovering: '恢复中',
+          session_closed: '已关闭',
           session_waiting_for_device: '等待手机连接',
           session_starting: '服务启动中',
           session_stopping: '服务停止中',
@@ -540,6 +592,13 @@
           captureFrames: '采集帧数',
           captureErrors: '采集错误数',
           captureUnderruns: '采集欠载',
+          bufferedMs: '缓冲毫秒',
+          latePackets: '迟到包',
+          droppedPackets: '丢弃包',
+          rttMs: 'RTT(ms)',
+          reconnectCount: '重连次数',
+          decodeErrors: '解码错误',
+          sinkWriteGap: 'Sink 写入间隔 P95',
           capturePeak: '峰值',
           captureRms: '均方根',
           serviceStatus: '服务状态',
@@ -548,6 +607,16 @@
           captureDevice: '采集设备',
           sampleRate: '采样率',
           channels: '声道'
+          ,
+          usbTitle: 'USB 模式（adb）',
+          usbRefresh: '刷新设备',
+          usbDisable: '停用 USB',
+          usbEnable: '启用 USB',
+          usbState: 'USB 状态',
+          usbForward: 'Forward 端口',
+          usbStateOn: 'USB 已连接 · {serial}',
+          usbStateOff: '未启用（Wi-Fi）',
+          usbNoDevices: '未检测到 adb 在线设备'
         },
         en: {
           title: 'LAN Audio Streaming Console',
@@ -605,6 +674,12 @@
           state_stopping: 'Stopping',
           state_error: 'Error',
           session_streaming: 'Streaming',
+          session_disconnected: 'Disconnected',
+          session_handshaking: 'Handshaking',
+          session_negotiated: 'Negotiated',
+          session_reconfiguring: 'Reconfiguring',
+          session_recovering: 'Recovering',
+          session_closed: 'Closed',
           session_waiting_for_device: 'Waiting for mobile device',
           session_starting: 'Service starting',
           session_stopping: 'Service stopping',
@@ -633,6 +708,13 @@
           captureFrames: 'Captured frames',
           captureErrors: 'Capture errors',
           captureUnderruns: 'Capture underruns',
+          bufferedMs: 'Buffered ms',
+          latePackets: 'Late packets',
+          droppedPackets: 'Dropped packets',
+          rttMs: 'RTT (ms)',
+          reconnectCount: 'Reconnect count',
+          decodeErrors: 'Decode errors',
+          sinkWriteGap: 'Sink write gap P95',
           capturePeak: 'Peak',
           captureRms: 'RMS',
           serviceStatus: 'Service status',
@@ -640,7 +722,16 @@
           audioSource: 'Audio source',
           captureDevice: 'Capture device',
           sampleRate: 'Sample rate',
-          channels: 'Channels'
+          channels: 'Channels',
+          usbTitle: 'USB Mode (adb)',
+          usbRefresh: 'Refresh Devices',
+          usbDisable: 'Disable USB',
+          usbEnable: 'Enable USB',
+          usbState: 'USB Status',
+          usbForward: 'Forward Ports',
+          usbStateOn: 'USB connected · {serial}',
+          usbStateOff: 'Disabled (Wi-Fi)',
+          usbNoDevices: 'No online adb devices detected'
         }
       };
 
@@ -648,6 +739,7 @@
         lang: navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en',
         snapshot: null,
         busy: false,
+        adbDevices: [],
       };
 
       function t(key) {
@@ -676,6 +768,10 @@
 
       function dataPlaneName(dataPlane) {
         return t(`data_plane_${dataPlane}`) || dataPlane;
+      }
+
+      function runtimeSnapshot(snapshot) {
+        return snapshot?.service_snapshot || {};
       }
 
       function formatLogLine(line) {
@@ -716,14 +812,77 @@
       }
 
       function buildSubline(snapshot) {
+        if (snapshot.transport_mode === 'usb' && snapshot.usb_serial) {
+          return trf('usbStateOn', { serial: snapshot.usb_serial });
+        }
         if (snapshot.service_status === 'running') return t('subRunning');
         if (snapshot.service_status === 'error') return t('subError');
         return t('subStopped');
       }
 
+      async function refreshAdbDevices() {
+        try {
+          state.adbDevices = await tauriInvoke('list_adb_devices');
+        } catch {
+          state.adbDevices = [];
+        }
+      }
+
+      async function enableUsbMode(serial) {
+        await call('enable_usb_mode', { serial });
+      }
+
+      async function disableUsbMode() {
+        await call('disable_usb_mode');
+      }
+
+      function renderUsbPanel(snapshot) {
+        document.getElementById('usbStateValue').textContent =
+          snapshot.transport_mode === 'usb' && snapshot.usb_serial
+            ? trf('usbStateOn', { serial: snapshot.usb_serial })
+            : t('usbStateOff');
+        document.getElementById('usbForwardValue').textContent =
+          `ws tcp:${snapshot.ws_port} · data tcp:${snapshot.udp_port}`;
+
+        const list = document.getElementById('usbDeviceList');
+        list.innerHTML = '';
+        if (!state.adbDevices || state.adbDevices.length === 0) {
+          const row = document.createElement('div');
+          row.className = 'usb-meta';
+          row.textContent = t('usbNoDevices');
+          list.appendChild(row);
+          return;
+        }
+
+        state.adbDevices.forEach((device) => {
+          const row = document.createElement('div');
+          row.className = 'usb-device';
+
+          const meta = document.createElement('div');
+          const model = device.model ? ` · ${device.model}` : '';
+          const tid = device.transport_id ? ` · tid:${device.transport_id}` : '';
+          meta.innerHTML = `<strong>${device.serial}</strong><span class="usb-meta">${model}${tid}</span>`;
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'copy-btn';
+          btn.textContent = t('usbEnable');
+          btn.disabled = state.busy;
+          btn.addEventListener('click', () => enableUsbMode(device.serial));
+
+          row.appendChild(meta);
+          row.appendChild(btn);
+          list.appendChild(row);
+        });
+      }
+
       function streamHealth(snapshot) {
+        const runtime = runtimeSnapshot(snapshot);
         if (snapshot.service_status === 'error') return t('healthError');
         if (snapshot.service_status !== 'running') return t('healthNotStarted');
+        if (runtime.state && runtime.state !== 'streaming' && runtime.state !== 'disconnected') {
+          return runtime.state;
+        }
         return t('healthOk');
       }
 
@@ -758,6 +917,11 @@
         document.getElementById('versionLabel').textContent = t('version');
         document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
         document.getElementById('recentDeviceLabel').textContent = t('recentDevice');
+        document.getElementById('usbTitle').textContent = t('usbTitle');
+        document.getElementById('usbRefreshBtn').textContent = t('usbRefresh');
+        document.getElementById('usbDisableBtn').textContent = t('usbDisable');
+        document.getElementById('usbStateLabel').textContent = t('usbState');
+        document.getElementById('usbForwardLabel').textContent = t('usbForward');
         document.getElementById('healthTitle').textContent = t('healthTitle');
         document.getElementById('healthStreamLabel').textContent = `${t('healthStream')}:`;
         document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
@@ -771,6 +935,8 @@
 
       function renderSnapshot(snapshot) {
         state.snapshot = snapshot;
+        const runtime = runtimeSnapshot(snapshot);
+        const runtimeMetrics = runtime.metrics || {};
         const main = getMainAction(snapshot);
         const dot = document.getElementById('statusDot');
         dot.className = 'status-dot';
@@ -793,21 +959,21 @@
         document.getElementById('healthSourceValue').textContent = sourceName(snapshot.audio_source);
 
         document.getElementById('addrValue').textContent = snapshot.connect_address;
-        document.getElementById('sessionValue').textContent = t(`session_${snapshot.session_status}`) || snapshot.session_status;
+        document.getElementById('sessionValue').textContent = t(`session_${runtime.state}`) || runtime.state || snapshot.session_status;
         document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
-        document.getElementById('dataPlaneValue').textContent = dataPlaneName(snapshot.data_plane_format);
-        document.getElementById('modeValue').textContent = snapshot.current_audio_mode || 'balanced';
+        document.getElementById('dataPlaneValue').textContent = dataPlaneName(runtime.data_plane || snapshot.data_plane_format);
+        document.getElementById('modeValue').textContent = runtime.mode || snapshot.current_audio_mode || 'balanced';
         document.getElementById('strategyValue').textContent =
           `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
           `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
-        const isSafeMode = snapshot.data_plane_format === 'legacy_las1' && snapshot.codec_selection === 'pcm16';
+        const isSafeMode = runtime.rollback_state === 'forced_legacy_las1_pcm16';
         const codecText = snapshot.codec_selection === 'opus'
-          ? (snapshot.effective_codec === 'opus'
-            ? `${snapshot.effective_codec} · ${t('codecExperimentalActive')}`
-            : `${snapshot.effective_codec} · ${t('codecFallback')}`)
-          : snapshot.effective_codec;
+          ? ((runtime.effective_codec || snapshot.effective_codec) === 'opus'
+            ? `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecExperimentalActive')}`
+            : `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecFallback')}`)
+          : (runtime.effective_codec || snapshot.effective_codec);
         document.getElementById('codecValue').textContent = codecText;
-        document.getElementById('grayValue').textContent = isSafeMode ? t('grayOff') : t('grayOn');
+        document.getElementById('grayValue').textContent = runtime.rollback_state || (isSafeMode ? t('grayOff') : t('grayOn'));
         document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
@@ -846,27 +1012,27 @@
 
         const m = snapshot.metrics;
         document.getElementById('debugTx').innerHTML =
-          `<div>${t('sentPackets')}: ${m.tx_packets}</div>` +
-          `<div>${t('sentBytes')}: ${m.tx_bytes}</div>` +
-          `<div>${t('activeSessions')}: ${m.active_sessions}</div>`;
+          `<div>${t('bufferedMs')}: ${runtimeMetrics.buffered_ms ?? 0}</div>` +
+          `<div>${t('captureUnderruns')}: ${runtimeMetrics.underrun ?? 0}</div>` +
+          `<div>${t('latePackets')}: ${runtimeMetrics.late_packets ?? 0}</div>` +
+          `<div>${t('droppedPackets')}: ${runtimeMetrics.dropped_packets ?? 0}</div>`;
 
         document.getElementById('debugCapture').innerHTML =
-          `<div>${t('captureState')}: ${m.capture_source_state}</div>` +
-          `<div>${t('captureFrames')}: ${m.capture_frames_produced}</div>` +
-          `<div>${t('captureErrors')}: ${m.capture_read_errors}</div>` +
-          `<div>${t('captureUnderruns')}: ${m.capture_underruns}</div>` +
-          `<div>${t('capturePeak')}: ${Number(m.capture_last_peak || 0).toFixed(3)}</div>` +
-          `<div>${t('captureRms')}: ${Number(m.capture_last_rms || 0).toFixed(3)}</div>`;
+          `<div>${t('rttMs')}: ${runtimeMetrics.rtt_ms ?? 0}</div>` +
+          `<div>${t('reconnectCount')}: ${runtimeMetrics.reconnect_count ?? 0}</div>` +
+          `<div>${t('decodeErrors')}: ${runtimeMetrics.decode_errors ?? 0}</div>` +
+          `<div>${t('sinkWriteGap')}: ${runtimeMetrics.sink_write_gap_ms_p95 ?? 0}</div>`;
 
         document.getElementById('debugState').innerHTML =
           `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
-          `<div>${t('sessionStatus')}: ${snapshot.session_status}</div>` +
+          `<div>${t('sessionStatus')}: ${runtime.state || snapshot.session_status}</div>` +
           `<div>${t('protocol')}: v${snapshot.protocol_version}</div>` +
           `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
-          `<div>${t('dataPlane')}: ${snapshot.data_plane_format}</div>` +
-          `<div>${t('mode')}: ${snapshot.current_audio_mode}</div>` +
-          `<div>${t('codec')}: ${snapshot.effective_codec}</div>` +
+          `<div>${t('dataPlane')}: ${runtime.data_plane || snapshot.data_plane_format}</div>` +
+          `<div>${t('mode')}: ${runtime.mode || snapshot.current_audio_mode}</div>` +
+          `<div>${t('codec')}: ${runtime.effective_codec || snapshot.effective_codec}</div>` +
           `<div>${t('strategy')}: ${JSON.stringify(snapshot.mode_profile || {})}</div>` +
+          `<div>service_snapshot: ${JSON.stringify(runtime)}</div>` +
           `<div>capabilities: ${Object.entries(snapshot.capabilities || {}).filter(([, v]) => v).map(([k]) => k).join(', ')}</div>` +
           `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
           `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
@@ -892,10 +1058,15 @@
         document.getElementById('safeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
+        document.getElementById('usbRefreshBtn').disabled = disabled;
+        document.getElementById('usbDisableBtn').disabled = disabled || snapshot.transport_mode !== 'usb';
+
+        renderUsbPanel(snapshot);
       }
 
       async function refresh() {
         try {
+          await refreshAdbDevices();
           const snapshot = await tauriInvoke('get_desktop_snapshot');
           renderSnapshot(snapshot);
         } catch (error) {
@@ -1005,6 +1176,8 @@
         document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
+        document.getElementById('usbRefreshBtn').addEventListener('click', refresh);
+        document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 
       async function init() {

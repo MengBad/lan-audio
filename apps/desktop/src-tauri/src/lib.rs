@@ -4,12 +4,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lan_audio_protocol::{
-    audio_mode_profile, AudioMode, AudioModeProfile, ProtocolCapabilities, PROTOCOL_VERSION_V2,
+    audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeProfile, ConnectionState,
+    DataPlanePath, ProtocolCapabilities, RollbackState, ServiceMetricsSnapshot, ServiceSnapshot,
+    TransportType, PROTOCOL_VERSION_V2,
 };
 use lan_audio_server::config::{
     select_data_plane_format, AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig,
     TransportMode,
 };
+use lan_audio_server::data_plane::DataPlaneRouter;
 use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use lan_audio_server::usb_transport::adb_devices;
@@ -89,6 +92,7 @@ impl From<MetricsSnapshot> for DesktopMetrics {
 struct DesktopSnapshot {
     service_status: ServiceStatus,
     error_message: Option<String>,
+    service_snapshot: ServiceSnapshot,
     audio_source: String,
     data_plane_format: String,
     protocol_path: String,
@@ -204,7 +208,33 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .unwrap_or(cfg.current_audio_mode);
     let mode_profile = audio_mode_profile(current_audio_mode);
     let selected_data_plane = selected_data_plane_for_desktop_config(&cfg);
-    let configured_effective_codec = effective_codec_for_desktop_config(&cfg);
+    let configured_router = build_server_config(&cfg)
+        .ok()
+        .map(|server_cfg| DataPlaneRouter::from_config(&server_cfg));
+    let configured_active_data_plane = configured_router
+        .as_ref()
+        .map(|router| router.active_path())
+        .unwrap_or_else(|| match selected_data_plane {
+            DataPlaneFormat::LegacyLas1 => DataPlanePath::LegacyLas1,
+            DataPlaneFormat::V2Header => DataPlanePath::V2Header,
+        });
+    let configured_active_codec = configured_router
+        .as_ref()
+        .map(|router| router.active_codec())
+        .unwrap_or_else(|| effective_codec_for_desktop_config(&cfg));
+    let rollback_available = service
+        .as_ref()
+        .map(|svc| svc.data_plane_status().rollback_available)
+        .or_else(|| {
+            configured_router
+                .as_ref()
+                .map(|router| router.rollback_available())
+        })
+        .unwrap_or(true);
+    let active_data_plane = service
+        .as_ref()
+        .map(|svc| svc.data_plane_status().active_path)
+        .unwrap_or(configured_active_data_plane);
     let protocol_path = if metrics.active_sessions > 0 && !metrics.negotiated_data_plane.is_empty()
     {
         metrics.negotiated_data_plane.clone()
@@ -215,8 +245,18 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
     let effective_codec = if metrics.active_sessions > 0 && !metrics.negotiated_codec.is_empty() {
         metrics.negotiated_codec.clone()
     } else {
-        configured_effective_codec.as_str().to_string()
+        configured_active_codec.as_str().to_string()
     };
+    let service_snapshot = build_service_snapshot(
+        &cfg,
+        &metrics,
+        &status,
+        current_audio_mode,
+        &selected_data_plane,
+        active_data_plane,
+        rollback_available,
+        &effective_codec,
+    );
 
     let local_ip = detect_local_ip();
     let connect_host = match cfg.transport_mode {
@@ -254,6 +294,7 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
     DesktopSnapshot {
         service_status: status,
         error_message: last_error,
+        service_snapshot,
         audio_source: cfg.audio_source.as_str().to_string(),
         data_plane_format: cfg.data_plane_format.as_str().to_string(),
         protocol_path,
@@ -314,7 +355,10 @@ fn enable_usb_mode(state: State<'_, AppState>, serial: String) -> Result<Desktop
         guard.config.transport_mode = TransportMode::Usb {
             serial: serial.clone(),
         };
-        matches!(guard.status, ServiceStatus::Running | ServiceStatus::Starting)
+        matches!(
+            guard.status,
+            ServiceStatus::Running | ServiceStatus::Starting
+        )
     };
     push_log(&state.logs, format!("usb mode enabled serial={serial}"));
     if restart_needed {
@@ -329,7 +373,10 @@ fn disable_usb_mode(state: State<'_, AppState>) -> Result<DesktopSnapshot, Strin
     let restart_needed = {
         let mut guard = state.inner.lock().expect("state lock");
         guard.config.transport_mode = TransportMode::WiFi;
-        matches!(guard.status, ServiceStatus::Running | ServiceStatus::Starting)
+        matches!(
+            guard.status,
+            ServiceStatus::Running | ServiceStatus::Starting
+        )
     };
     push_log(&state.logs, "usb mode disabled");
     if restart_needed {
@@ -554,6 +601,60 @@ fn effective_codec_for_desktop_config(cfg: &DesktopServiceConfig) -> CodecSelect
     }
 }
 
+fn build_service_snapshot(
+    cfg: &DesktopServiceConfig,
+    metrics: &DesktopMetrics,
+    status: &ServiceStatus,
+    current_audio_mode: AudioMode,
+    selected_data_plane: &DataPlaneFormat,
+    active_data_plane: DataPlanePath,
+    rollback_available: bool,
+    effective_codec: &str,
+) -> ServiceSnapshot {
+    let transport = match cfg.transport_mode {
+        TransportMode::WiFi => TransportType::Wifi,
+        TransportMode::Usb { .. } => TransportType::Usb,
+    };
+    let data_plane = match selected_data_plane {
+        DataPlaneFormat::LegacyLas1 => DataPlanePath::LegacyLas1,
+        DataPlaneFormat::V2Header => DataPlanePath::V2Header,
+    };
+    let requested_codec = match cfg.codec_selection {
+        CodecSelection::Pcm16 => AudioCodecPreference::Pcm16,
+        CodecSelection::Opus => AudioCodecPreference::Opus,
+    };
+    let effective_codec = match effective_codec {
+        "opus" => AudioCodecPreference::Opus,
+        _ => AudioCodecPreference::Pcm16,
+    };
+    let rollback_state = if matches!(data_plane, DataPlanePath::LegacyLas1)
+        && matches!(effective_codec, AudioCodecPreference::Pcm16)
+    {
+        RollbackState::ForcedLegacyLas1Pcm16
+    } else {
+        RollbackState::MainPathActive
+    };
+    let state = match status {
+        ServiceStatus::Starting => ConnectionState::Handshaking,
+        ServiceStatus::Running if metrics.active_sessions > 0 => ConnectionState::Streaming,
+        ServiceStatus::Stopping | ServiceStatus::Error => ConnectionState::Closed,
+        ServiceStatus::NotStarted | ServiceStatus::Running => ConnectionState::Disconnected,
+    };
+
+    ServiceSnapshot {
+        transport,
+        mode: current_audio_mode,
+        data_plane,
+        active_data_plane,
+        rollback_available,
+        codec: requested_codec,
+        effective_codec,
+        state,
+        rollback_state,
+        metrics: ServiceMetricsSnapshot::default(),
+    }
+}
+
 fn parse_bind(host: &str, port: u16) -> Result<SocketAddr, String> {
     format!("{host}:{port}")
         .parse::<SocketAddr>()
@@ -657,8 +758,79 @@ pub fn run() {
             start_service,
             stop_service,
             restart_service,
-            update_service_settings
+            update_service_settings,
+            list_adb_devices,
+            enable_usb_mode,
+            disable_usb_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn service_snapshot_marks_forced_rollback_on_legacy_pcm16() {
+        let cfg = DesktopServiceConfig::default();
+        let metrics = empty_metrics(cfg.audio_source.as_str());
+        let snapshot = build_service_snapshot(
+            &cfg,
+            &metrics,
+            &ServiceStatus::Running,
+            AudioMode::Balanced,
+            &DataPlaneFormat::LegacyLas1,
+            DataPlanePath::LegacyLas1,
+            false,
+            "pcm16",
+        );
+        assert_eq!(
+            snapshot.rollback_state,
+            RollbackState::ForcedLegacyLas1Pcm16
+        );
+        assert_eq!(snapshot.data_plane, DataPlanePath::LegacyLas1);
+        assert_eq!(snapshot.effective_codec, AudioCodecPreference::Pcm16);
+    }
+
+    #[test]
+    fn service_snapshot_serializes_stable_contract() {
+        let cfg = DesktopServiceConfig::default();
+        let metrics = empty_metrics(cfg.audio_source.as_str());
+        let snapshot = build_service_snapshot(
+            &cfg,
+            &metrics,
+            &ServiceStatus::NotStarted,
+            AudioMode::Balanced,
+            &DataPlaneFormat::V2Header,
+            DataPlanePath::UsbDirect,
+            true,
+            "opus",
+        );
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            json!({
+                "transport": "wifi",
+                "mode": "balanced",
+                "data_plane": "v2_header",
+                "active_data_plane": "usb_direct",
+                "rollback_available": true,
+                "codec": "opus",
+                "effective_codec": "opus",
+                "state": "disconnected",
+                "rollback_state": "main_path_active",
+                "metrics": {
+                    "buffered_ms": 0,
+                    "underrun": 0,
+                    "late_packets": 0,
+                    "dropped_packets": 0,
+                    "rtt_ms": 0,
+                    "reconnect_count": 0,
+                    "decode_errors": 0,
+                    "sink_write_gap_ms_p95": 0
+                }
+            })
+        );
+    }
 }

@@ -6,9 +6,9 @@ use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
     audio_mode_profile, AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo,
-    ClientJoined, ClientLeft, ClientList, ClientListEntry, ControlMessageV2, ErrorMessage, Hello,
-    HelloAck, ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode,
-    PROTOCOL_VERSION_V2,
+    ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState, ConnectionStateMachine,
+    ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck, ProtocolCapabilities,
+    ServerControlMessage, ServerInfo, SetAudioMode, TransportType, PROTOCOL_VERSION_V2,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::{CodecSelection, DataPlaneFormat, ServerConfig, TransportMode};
+use crate::data_plane::DataPlaneRouter;
 use crate::metrics::Metrics;
 
 pub const MAX_CLIENTS: usize = 8;
@@ -28,6 +29,7 @@ pub struct SessionServer {
     cfg: Arc<ServerConfig>,
     metrics: Arc<Metrics>,
     registry: ClientRegistry,
+    data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
 }
 
 #[derive(Clone)]
@@ -48,9 +50,11 @@ struct ClientHandle {
     client_key: String,
     control_tx: mpsc::UnboundedSender<String>,
     transport: Option<ClientTransportTarget>,
+    prefers_usb_transport: bool,
     data_plane: DataPlaneFormat,
     codec: CodecSelection,
     audio_mode: AudioMode,
+    preferred_sample_rate: u32,
     pending_first_packet: bool,
     pending_mode_sync: bool,
     supports_v2_events: bool,
@@ -75,6 +79,7 @@ pub struct BroadcastClient {
     pub data_plane: DataPlaneFormat,
     pub codec: CodecSelection,
     pub audio_mode: AudioMode,
+    pub preferred_sample_rate: u32,
     pub transport: ClientTransportSnapshot,
     pub first_packet: bool,
     pub mode_changed: bool,
@@ -95,15 +100,22 @@ struct RegisterClientRequest {
     data_plane: DataPlaneFormat,
     codec: CodecSelection,
     audio_mode: AudioMode,
+    preferred_sample_rate: u32,
     supports_v2_events: bool,
 }
 
 impl SessionServer {
-    pub fn new(cfg: Arc<ServerConfig>, metrics: Arc<Metrics>, registry: ClientRegistry) -> Self {
+    pub fn new(
+        cfg: Arc<ServerConfig>,
+        metrics: Arc<Metrics>,
+        registry: ClientRegistry,
+        data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
+    ) -> Self {
         Self {
             cfg,
             metrics,
             registry,
+            data_plane_router,
         }
     }
 
@@ -143,10 +155,22 @@ impl SessionServer {
         let ws_stream = tokio_tungstenite::accept_async(stream).await?;
         let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
+        let mut conn_state = ConnectionStateMachine::default();
+        conn_state
+            .transition(ConnectionState::Handshaking)
+            .expect("disconnected -> handshaking is always valid");
+
         let hello_msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws_rx.next())
             .await
-            .context("hello timeout")?
-            .ok_or_else(|| anyhow!("client disconnected before hello"))??;
+            .map_err(|_| {
+                let _ = conn_state.fail(ConnectionState::Closed, FailureCode::HandshakeTimeout);
+                warn!(peer = %peer, failure_code = ?FailureCode::HandshakeTimeout, "hello timeout");
+                anyhow!("hello timeout")
+            })?
+            .ok_or_else(|| {
+                let _ = conn_state.fail(ConnectionState::Closed, FailureCode::HandshakeTimeout);
+                anyhow!("client disconnected before hello")
+            })??;
         let hello_text = match hello_msg {
             Message::Text(text) => text.to_string(),
             _ => return Err(anyhow!("expected text hello message")),
@@ -200,12 +224,19 @@ impl SessionServer {
                 )
             }
         };
+        let preferred_sample_rate = normalize_preferred_sample_rate(desired_sample_rate);
 
-        let negotiated_path = negotiate_session_path(&self.cfg, v2_session, &client_capabilities);
+        let negotiated_path = {
+            let router = self.data_plane_router.lock().unwrap();
+            negotiate_session_path(&self.cfg, &router, v2_session, &client_capabilities)
+        };
         self.metrics.set_negotiated_session_path(
             negotiated_path.data_plane.as_str(),
             negotiated_path.codec.as_str(),
         );
+        if let Err(e) = conn_state.transition(ConnectionState::Negotiated) {
+            warn!(session = %session_id, error = %e, "state transition to negotiated failed");
+        }
 
         let transport_kind = match &self.cfg.transport_mode {
             TransportMode::WiFi => ClientTransportKind::Wifi(SocketAddr::new(peer.ip(), udp_port)),
@@ -213,14 +244,20 @@ impl SessionServer {
                 serial: serial.clone(),
             },
         };
+        let transport_type = match &self.cfg.transport_mode {
+            TransportMode::WiFi => TransportType::Wifi,
+            TransportMode::Usb { .. } => TransportType::Usb,
+        };
 
         if self.registry.client_count().await >= MAX_CLIENTS {
+            let _ = conn_state.fail(ConnectionState::Closed, FailureCode::NegotiationMismatch);
             if v2_session {
                 let hello_ack = ControlMessageV2::HelloAck(HelloAck {
                     protocol_version: PROTOCOL_VERSION_V2,
                     accepted: false,
                     session_id,
                     current_audio_mode: preferred_audio_mode,
+                    transport_type,
                     mode_profile: audio_mode_profile(preferred_audio_mode),
                     capabilities: default_server_capabilities(),
                     message: "too_many_clients".to_string(),
@@ -262,27 +299,37 @@ impl SessionServer {
                 data_plane: negotiated_path.data_plane,
                 codec: negotiated_path.codec,
                 audio_mode: preferred_audio_mode,
+                preferred_sample_rate,
                 supports_v2_events: v2_session,
             })
             .await;
 
         if let Err(err) = register_result {
+            let _ = conn_state.fail(ConnectionState::Closed, FailureCode::NegotiationMismatch);
+            warn!(
+                session = %session_id,
+                failure_code = ?FailureCode::NegotiationMismatch,
+                error = %err,
+                "client registration failed"
+            );
             if v2_session {
                 let hello_ack = ControlMessageV2::HelloAck(HelloAck {
                     protocol_version: PROTOCOL_VERSION_V2,
                     accepted: false,
                     session_id,
                     current_audio_mode: preferred_audio_mode,
+                    transport_type,
                     mode_profile: audio_mode_profile(preferred_audio_mode),
                     capabilities: default_server_capabilities(),
                     message: err.to_string(),
                 });
                 let _ = control_tx.send(serde_json::to_string(&hello_ack)?);
             } else {
-                let _ = control_tx.send(serde_json::to_string(&ServerControlMessage::ServerError {
-                    code: "register_client_failed".to_string(),
-                    message: err.to_string(),
-                })?);
+                let _ =
+                    control_tx.send(serde_json::to_string(&ServerControlMessage::ServerError {
+                        code: "register_client_failed".to_string(),
+                        message: err.to_string(),
+                    })?);
             }
             drop(control_tx);
             let _ = writer_task.await;
@@ -290,43 +337,54 @@ impl SessionServer {
         }
 
         if v2_session {
-            let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::HelloAck(HelloAck {
-                protocol_version: PROTOCOL_VERSION_V2,
-                accepted: true,
-                session_id,
-                current_audio_mode: preferred_audio_mode,
-                mode_profile: audio_mode_profile(preferred_audio_mode),
-                capabilities: default_server_capabilities(),
-                message: "hello_ack".to_string(),
-            }))?);
-
-            let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::ServerInfo(ServerInfo {
-                server_id: session_id,
-                server_name: self.cfg.server_name.clone(),
-                platform: "windows".to_string(),
-                app_version: env!("CARGO_PKG_VERSION").to_string(),
-                ws_port: self.cfg.ws_bind.port(),
-                udp_port: self.cfg.udp_bind.port(),
-                protocol_version: PROTOCOL_VERSION_V2,
-                current_audio_mode: preferred_audio_mode,
-                mode_profile: audio_mode_profile(preferred_audio_mode),
-                codec: negotiated_path.codec.as_protocol_preference(),
-                data_plane: negotiated_path.data_plane.as_str().to_string(),
-                gray_mode: negotiated_path.data_plane != DataPlaneFormat::LegacyLas1,
-                recommended_connection: match self.cfg.transport_mode {
-                    TransportMode::WiFi => "usb_tethering_or_5ghz_wifi".to_string(),
-                    TransportMode::Usb { .. } => "usb".to_string(),
+            let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::HelloAck(
+                HelloAck {
+                    protocol_version: PROTOCOL_VERSION_V2,
+                    accepted: true,
+                    session_id,
+                    current_audio_mode: preferred_audio_mode,
+                    transport_type,
+                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    capabilities: default_server_capabilities(),
+                    message: "hello_ack".to_string(),
                 },
-            }))?);
+            ))?);
+
+            let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::ServerInfo(
+                ServerInfo {
+                    server_id: session_id,
+                    server_name: self.cfg.server_name.clone(),
+                    platform: "windows".to_string(),
+                    app_version: env!("CARGO_PKG_VERSION").to_string(),
+                    ws_port: self.cfg.ws_bind.port(),
+                    udp_port: self.cfg.udp_bind.port(),
+                    protocol_version: PROTOCOL_VERSION_V2,
+                    current_audio_mode: preferred_audio_mode,
+                    mode_profile: audio_mode_profile(preferred_audio_mode),
+                    codec: negotiated_path.codec.as_protocol_preference(),
+                    data_plane: negotiated_path.data_plane.as_str().to_string(),
+                    gray_mode: negotiated_path.data_plane != DataPlaneFormat::LegacyLas1,
+                    recommended_connection: match self.cfg.transport_mode {
+                        TransportMode::WiFi => "usb_tethering_or_5ghz_wifi".to_string(),
+                        TransportMode::Usb { .. } => "usb".to_string(),
+                    },
+                },
+            ))?);
         }
 
-        let _ = control_tx.send(serde_json::to_string(&ServerControlMessage::ServerWelcome {
-            session_id,
-            codec: negotiated_path.codec.as_str().to_string(),
-            sample_rate: desired_sample_rate.max(8_000),
-            channels,
-            frames_per_packet: self.cfg.frames_per_packet,
-        })?);
+        let _ = control_tx.send(serde_json::to_string(
+            &ServerControlMessage::ServerWelcome {
+                session_id,
+                codec: negotiated_path.codec.as_str().to_string(),
+                sample_rate: preferred_sample_rate,
+                channels,
+                frames_per_packet: self.cfg.frames_per_packet,
+            },
+        )?);
+
+        if let Err(e) = conn_state.transition(ConnectionState::Streaming) {
+            warn!(session = %session_id, error = %e, "state transition to streaming failed");
+        }
 
         info!(
             session = %session_id,
@@ -334,6 +392,7 @@ impl SessionServer {
             client = %client_name,
             client_key = %client_key,
             transport = %self.cfg.transport_mode.as_str(),
+            conn_state = ?conn_state.state(),
             "session established"
         );
 
@@ -362,8 +421,12 @@ impl SessionServer {
 
                             if v2_session {
                                 match serde_json::from_str::<ControlMessageV2>(&text) {
-                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason })) => {
-                                        self.registry.set_client_mode(session_id, mode).await;
+                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate })) => {
+                                        let normalized_preferred_sample_rate =
+                                            preferred_sample_rate.map(normalize_preferred_sample_rate);
+                                        self.registry
+                                            .set_client_mode(session_id, mode, normalized_preferred_sample_rate)
+                                            .await;
                                         let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::AudioModeChanged(
                                             AudioModeChanged {
                                                 mode,
@@ -372,7 +435,12 @@ impl SessionServer {
                                                 mode_profile: audio_mode_profile(mode),
                                             }
                                         ))?);
-                                        info!(session = %session_id, mode = ?mode, "audio mode updated by client");
+                                        info!(
+                                            session = %session_id,
+                                            mode = ?mode,
+                                            preferred_sample_rate = normalized_preferred_sample_rate.unwrap_or(preferred_sample_rate_default()),
+                                            "audio mode updated by client"
+                                        );
                                     }
                                     Ok(ControlMessageV2::ClientInfo(ClientInfo { client_name, platform, app_version, udp_port })) => {
                                         info!(
@@ -397,6 +465,7 @@ impl SessionServer {
                                                 code: "bad_control_message".to_string(),
                                                 message: format!("invalid v2 message: {err}"),
                                                 recoverable: true,
+                                                failure_code: None,
                                             }
                                         ))?);
                                     }
@@ -412,9 +481,10 @@ impl SessionServer {
         }
 
         self.registry.remove_client(session_id).await;
+        let _ = conn_state.transition(ConnectionState::Closed);
         drop(control_tx);
         let _ = writer_task.await;
-        info!(session = %session_id, "session closed");
+        info!(session = %session_id, conn_state = ?conn_state.state(), "session closed");
         Ok(())
     }
 }
@@ -467,9 +537,11 @@ impl ClientRegistry {
                 client_key: request.client_key,
                 control_tx: request.control_tx.clone(),
                 transport: None,
+                prefers_usb_transport: false,
                 data_plane: request.data_plane,
                 codec: request.codec,
                 audio_mode: request.audio_mode,
+                preferred_sample_rate: request.preferred_sample_rate,
                 pending_first_packet: true,
                 pending_mode_sync: false,
                 supports_v2_events: request.supports_v2_events,
@@ -479,6 +551,7 @@ impl ClientRegistry {
                     client.transport = Some(ClientTransportTarget::Wifi(target));
                 }
                 ClientTransportKind::Usb { serial } => {
+                    client.prefers_usb_transport = true;
                     if let Some(stream) = guard.pending_usb_streams.pop_front() {
                         client.transport = Some(ClientTransportTarget::Usb(stream));
                     } else {
@@ -537,7 +610,12 @@ impl ClientRegistry {
         Some(removed.name)
     }
 
-    pub async fn set_client_mode(&self, client_id: Uuid, mode: AudioMode) {
+    pub async fn set_client_mode(
+        &self,
+        client_id: Uuid,
+        mode: AudioMode,
+        preferred_sample_rate: Option<u32>,
+    ) {
         let mut broadcasts: Vec<(mpsc::UnboundedSender<String>, String)> = Vec::new();
         {
             let mut guard = self.inner.lock().await;
@@ -545,6 +623,9 @@ impl ClientRegistry {
                 return;
             };
             client.audio_mode = mode;
+            if let Some(sample_rate) = preferred_sample_rate {
+                client.preferred_sample_rate = sample_rate;
+            }
             client.pending_mode_sync = true;
             let Some(json) = build_client_list_json(&guard.clients) else {
                 return;
@@ -571,6 +652,13 @@ impl ClientRegistry {
                 } else {
                     None
                 }
+            } else if let Some((_, client)) = guard
+                .clients
+                .iter_mut()
+                .find(|(_, client)| client.prefers_usb_transport && client.transport.is_none())
+            {
+                client.transport = Some(ClientTransportTarget::Usb(Arc::clone(&stream)));
+                Some(client.name.clone())
             } else {
                 guard.pending_usb_streams.push_back(stream);
                 None
@@ -581,6 +669,22 @@ impl ClientRegistry {
         } else {
             info!("queued forwarded tcp stream while waiting for usb websocket hello");
         }
+    }
+
+    pub async fn mark_usb_transport_lost(&self, client_id: Uuid) -> Option<String> {
+        let mut guard = self.inner.lock().await;
+        let (name, prefers_usb_transport) = {
+            let client = guard.clients.get_mut(&client_id)?;
+            client.transport = None;
+            (client.name.clone(), client.prefers_usb_transport)
+        };
+        if !prefers_usb_transport {
+            return None;
+        }
+        if !guard.pending_usb_clients.iter().any(|id| *id == client_id) {
+            guard.pending_usb_clients.push_back(client_id);
+        }
+        Some(name)
     }
 
     pub async fn take_broadcast_clients(&self) -> Vec<BroadcastClient> {
@@ -600,6 +704,7 @@ impl ClientRegistry {
                 data_plane: client.data_plane,
                 codec: client.codec,
                 audio_mode: client.audio_mode,
+                preferred_sample_rate: client.preferred_sample_rate,
                 transport,
                 first_packet: client.pending_first_packet,
                 mode_changed: client.pending_mode_sync,
@@ -629,6 +734,17 @@ impl ClientRegistry {
 fn remove_client_locked(guard: &mut ClientRegistryInner, client_id: Uuid) -> Option<ClientHandle> {
     guard.pending_usb_clients.retain(|id| *id != client_id);
     guard.clients.remove(&client_id)
+}
+
+fn preferred_sample_rate_default() -> u32 {
+    48_000
+}
+
+fn normalize_preferred_sample_rate(sample_rate: u32) -> u32 {
+    match sample_rate {
+        8_000 | 12_000 | 16_000 | 24_000 | 48_000 => sample_rate,
+        _ => preferred_sample_rate_default(),
+    }
 }
 
 fn build_client_list_json(clients: &HashMap<Uuid, ClientHandle>) -> Option<String> {
@@ -680,7 +796,8 @@ struct NegotiatedSessionPath {
 }
 
 fn negotiate_session_path(
-    cfg: &ServerConfig,
+    _cfg: &ServerConfig,
+    router: &DataPlaneRouter,
     v2_session: bool,
     client_capabilities: &ProtocolCapabilities,
 ) -> NegotiatedSessionPath {
@@ -691,8 +808,8 @@ fn negotiate_session_path(
         };
     }
 
-    let data_plane = cfg.selected_data_plane_format();
-    let codec = match (cfg.codec_selection, data_plane) {
+    let data_plane = router.active_format();
+    let codec = match (router.active_codec(), data_plane) {
         (CodecSelection::Opus, DataPlaneFormat::V2Header)
             if client_capabilities.supports_opus
                 || client_capabilities.supports_opus_experimental =>
@@ -799,7 +916,12 @@ pub async fn write_length_prefixed_frame(
 mod tests {
     use super::*;
     use crate::config::AudioSourceKind;
-    use lan_audio_protocol::{AudioMode, ControlMessageV2, Hello, PROTOCOL_VERSION_V2};
+    use crate::data_plane::DataPlaneRouter;
+    use lan_audio_protocol::{
+        AudioMode, ControlMessageV2, DataPlanePath, Hello, ServiceMetricsSnapshot, ServiceSnapshot,
+        TransportType, PROTOCOL_VERSION_V2,
+    };
+    use serde_json::json;
 
     #[test]
     fn parse_session_hello_accepts_legacy_hello() {
@@ -880,7 +1002,9 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let negotiated = negotiate_session_path(&cfg, false, &default_server_capabilities());
+        let router = DataPlaneRouter::from_config(&cfg);
+        let negotiated =
+            negotiate_session_path(&cfg, &router, false, &default_server_capabilities());
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::LegacyLas1);
         assert_eq!(negotiated.codec, CodecSelection::Pcm16);
@@ -898,7 +1022,8 @@ mod tests {
         caps.supports_opus = false;
         caps.supports_opus_experimental = false;
 
-        let negotiated = negotiate_session_path(&cfg, true, &caps);
+        let router = DataPlaneRouter::from_config(&cfg);
+        let negotiated = negotiate_session_path(&cfg, &router, true, &caps);
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Pcm16);
@@ -913,7 +1038,9 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let negotiated = negotiate_session_path(&cfg, true, &default_server_capabilities());
+        let router = DataPlaneRouter::from_config(&cfg);
+        let negotiated =
+            negotiate_session_path(&cfg, &router, true, &default_server_capabilities());
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Opus);
@@ -929,9 +1056,103 @@ mod tests {
             ..ServerConfig::default()
         };
 
-        let negotiated = negotiate_session_path(&cfg, true, &default_server_capabilities());
+        let router = DataPlaneRouter::from_config(&cfg);
+        let negotiated =
+            negotiate_session_path(&cfg, &router, true, &default_server_capabilities());
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Opus);
+    }
+
+    #[test]
+    fn connection_state_machine_tracks_session_lifecycle() {
+        let mut csm = ConnectionStateMachine::default();
+        assert_eq!(csm.state(), ConnectionState::Disconnected);
+
+        csm.transition(ConnectionState::Handshaking).unwrap();
+        assert_eq!(csm.state(), ConnectionState::Handshaking);
+
+        csm.transition(ConnectionState::Negotiated).unwrap();
+        assert_eq!(csm.state(), ConnectionState::Negotiated);
+
+        csm.transition(ConnectionState::Streaming).unwrap();
+        assert_eq!(csm.state(), ConnectionState::Streaming);
+
+        csm.transition(ConnectionState::Closed).unwrap();
+        assert_eq!(csm.state(), ConnectionState::Closed);
+        assert!(csm.failure_code().is_none());
+    }
+
+    #[test]
+    fn connection_state_machine_records_failure_code_on_fail() {
+        let mut csm = ConnectionStateMachine::default();
+        csm.transition(ConnectionState::Handshaking).unwrap();
+
+        csm.fail(ConnectionState::Closed, FailureCode::HandshakeTimeout)
+            .unwrap();
+        assert_eq!(csm.state(), ConnectionState::Closed);
+        assert_eq!(csm.failure_code(), Some(FailureCode::HandshakeTimeout));
+    }
+
+    #[test]
+    fn error_message_serializes_failure_code_when_present() {
+        let msg = ErrorMessage {
+            code: "test".to_string(),
+            message: "test error".to_string(),
+            recoverable: true,
+            failure_code: Some(FailureCode::NegotiationMismatch),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("NEGOTIATION_MISMATCH"));
+
+        let msg_none = ErrorMessage {
+            code: "test".to_string(),
+            message: "test error".to_string(),
+            recoverable: true,
+            failure_code: None,
+        };
+        let json_none = serde_json::to_string(&msg_none).unwrap();
+        assert!(!json_none.contains("failure_code"));
+    }
+
+    #[test]
+    fn snapshot_includes_active_data_plane() {
+        let snapshot = ServiceSnapshot {
+            transport: TransportType::Usb,
+            mode: AudioMode::Balanced,
+            data_plane: DataPlanePath::V2Header,
+            active_data_plane: DataPlanePath::UsbDirect,
+            rollback_available: true,
+            codec: lan_audio_protocol::AudioCodecPreference::Opus,
+            effective_codec: lan_audio_protocol::AudioCodecPreference::Opus,
+            state: ConnectionState::Streaming,
+            rollback_state: lan_audio_protocol::RollbackState::MainPathActive,
+            metrics: ServiceMetricsSnapshot::default(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            json!({
+                "transport": "usb",
+                "mode": "balanced",
+                "data_plane": "v2_header",
+                "active_data_plane": "usb_direct",
+                "rollback_available": true,
+                "codec": "opus",
+                "effective_codec": "opus",
+                "state": "streaming",
+                "rollback_state": "main_path_active",
+                "metrics": {
+                    "buffered_ms": 0,
+                    "underrun": 0,
+                    "late_packets": 0,
+                    "dropped_packets": 0,
+                    "rtt_ms": 0,
+                    "reconnect_count": 0,
+                    "decode_errors": 0,
+                    "sink_write_gap_ms_p95": 0
+                }
+            })
+        );
     }
 }

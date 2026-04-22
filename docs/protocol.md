@@ -1,5 +1,13 @@
 ﻿# Protocol v2 Draft
 
+## Phase 0 / Phase 1 Freeze Update (`2026-04-22`)
+
+- Release decision is currently `continue_fixing`, sourced from `artifacts/release/acceptance_gate.json`.
+- Shared mode contracts, connection state machine, rollback state, failure taxonomy, service snapshot, and release gate schema now live in `crates/lan_audio_domain`.
+- Protocol messages still preserve v1/v2 compatibility, but shared contract types are now imported from the domain layer instead of being duplicated ad hoc.
+- The maintained main-path target remains `windows_loopback + v2_header + opus`; the maintained rollback path remains `legacy_las1 + pcm16`.
+- Phase 3 server-side data plane abstraction is underway: `legacy_las1`, `v2_header`, and `usb_direct` now have an explicit shared routing layer while release remains frozen.
+
 ## 1. 协议目标
 
 Protocol v2 的目标不是立即替换全部运行流量，而是为低延迟产品化升级建立稳定工程接口：
@@ -20,7 +28,17 @@ V2 的产品原则：
 ## 2. 协议分层
 
 - 控制面：WebSocket（JSON，低频状态和协商）。
-- 数据面：UDP（二进制音频帧）。
+- 数据面：
+  - Wi-Fi：UDP（二进制音频帧）
+  - USB（adb reverse）：TCP（二进制音频帧，`4-byte big-endian length + frame payload`）
+
+### 2.1 Runtime Snapshot Contract
+
+稳定运行时 snapshot 现在同时暴露“配置的数据面格式”和“当前实际运行路径”：
+
+- `data_plane`：配置/协商后的包格式（`legacy_las1` 或 `v2_header`）
+- `active_data_plane`：实际运行路径（`legacy_las1`、`v2_header`、`usb_direct`）
+- `rollback_available`：当前是否仍可显式回滚到 `legacy_las1 + pcm16`
 
 ## 3. 版本策略
 
@@ -73,6 +91,7 @@ V2 的产品原则：
   "accepted": true,
   "session_id": "c3f3e2a6-12ab-4f3c-9c27-7f7c93f6d0d2",
   "current_audio_mode": "balanced",
+  "transport_type": "wifi",
   "mode_profile": {
     "mode": "balanced",
     "start_buffer_ms": 60,
@@ -138,6 +157,11 @@ V2 的产品原则：
   "recommended_connection": "usb_tethering_or_5ghz_wifi"
 }
 ```
+
+`hello_ack.transport_type`:
+
+- `wifi`: Wi-Fi/LAN path
+- `usb`: adb reverse + localhost TCP path
 
 ### 4.4 client_info
 
@@ -229,6 +253,45 @@ V2 的产品原则：
   "reason": "network_jitter_spike"
 }
 ```
+
+### 4.11 client_list
+
+```json
+{
+  "type": "client_list",
+  "clients": [
+    { "id": "c3f3e2a6-12ab-4f3c-9c27-7f7c93f6d0d2", "name": "Pixel 8", "mode": "balanced" }
+  ]
+}
+```
+
+说明：
+
+- 服务端可在客户端列表变化或 mode 变化后推送。
+- Android 可只展示数量（例如“当前共 N 台设备连接中”）。
+
+### 4.12 client_joined / client_left
+
+```json
+{
+  "type": "client_joined",
+  "id": "c3f3e2a6-12ab-4f3c-9c27-7f7c93f6d0d2",
+  "name": "Pixel 8"
+}
+```
+
+```json
+{
+  "type": "client_left",
+  "id": "c3f3e2a6-12ab-4f3c-9c27-7f7c93f6d0d2",
+  "name": "Pixel 8"
+}
+```
+
+说明：
+
+- 服务端广播给所有 v2 客户端。
+- 客户端可据此维护当前连接设备数。
 
 ## 5. 数据面包头定义（UDP Binary v2）
 

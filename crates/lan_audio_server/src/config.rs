@@ -56,7 +56,8 @@ impl TransportMode {
         match input {
             "wifi" => Ok(Self::WiFi),
             "usb" => Ok(Self::Usb {
-                serial: adb_serial.ok_or_else(|| anyhow!("--transport usb requires --adb-serial"))?,
+                serial: adb_serial
+                    .ok_or_else(|| anyhow!("--transport usb requires --adb-serial"))?,
             }),
             other => Err(anyhow!("unsupported transport mode: {other}")),
         }
@@ -148,6 +149,7 @@ pub struct ServerConfig {
     pub data_plane_format: DataPlaneFormat,
     pub allow_loopback_v2_header_gray: bool,
     pub transport_mode: TransportMode,
+    pub force_rollback: bool,
 }
 
 impl Default for ServerConfig {
@@ -176,6 +178,7 @@ impl Default for ServerConfig {
             data_plane_format: DataPlaneFormat::V2Header,
             allow_loopback_v2_header_gray: false,
             transport_mode: TransportMode::WiFi,
+            force_rollback: false,
         }
     }
 }
@@ -284,6 +287,9 @@ impl ServerConfig {
                         iter.next()
                             .ok_or_else(|| anyhow!("missing value for --adb-serial"))?,
                     );
+                }
+                "--force-rollback" => {
+                    self.force_rollback = true;
                 }
                 _ => {}
             }
@@ -429,5 +435,25 @@ mod tests {
                 serial: "device-123".to_string()
             }
         );
+    }
+
+    #[test]
+    fn rollback_path_remains_forceable_via_cli_contract() {
+        let mut cfg = ServerConfig::default();
+        cfg.apply_args(vec![
+            "--audio-source".to_string(),
+            "windows_loopback".to_string(),
+            "--data-plane".to_string(),
+            "legacy_las1".to_string(),
+            "--codec".to_string(),
+            "pcm16".to_string(),
+        ])
+        .expect("apply rollback args");
+
+        assert_eq!(
+            cfg.selected_data_plane_format(),
+            DataPlaneFormat::LegacyLas1
+        );
+        assert_eq!(cfg.effective_codec_selection(), CodecSelection::Pcm16);
     }
 }

@@ -15,12 +15,13 @@ data class JitterStats(
     var underrunCount: Int = 0,
     var droppedFrames: Int = 0,
     var lateFrames: Int = 0,
+    var floorHoldCount: Int = 0,
 )
 
 class PlaybackJitterBuffer(
-    private val startBufferMs: Int,
-    private val maxBufferMs: Int,
-    private val dropThresholdMs: Int = maxBufferMs,
+    private var startBufferMs: Int,
+    private var maxBufferMs: Int,
+    private var dropThresholdMs: Int = maxBufferMs,
 ) {
     private val frames = TreeMap<Int, PcmFrame>(::compareSeq)
     private var playoutStarted = false
@@ -39,6 +40,17 @@ class PlaybackJitterBuffer(
         stats.underrunCount = 0
         stats.droppedFrames = 0
         stats.lateFrames = 0
+        stats.floorHoldCount = 0
+    }
+
+    @Synchronized
+    fun reconfigure(startBufferMs: Int, maxBufferMs: Int, dropThresholdMs: Int = maxBufferMs) {
+        this.startBufferMs = startBufferMs.coerceAtLeast(1)
+        this.maxBufferMs = maxBufferMs.coerceAtLeast(this.startBufferMs)
+        this.dropThresholdMs = dropThresholdMs.coerceAtLeast(this.startBufferMs)
+        trimIfNeeded()
+        trimLatencyTailIfNeeded()
+        stats.bufferedFrames = frames.size
     }
 
     @Synchronized
@@ -69,7 +81,7 @@ class PlaybackJitterBuffer(
     }
 
     @Synchronized
-    fun pop(): PcmFrame? {
+    fun pop(usbLowLatencyHardFloor: Boolean = false): PcmFrame? {
         if (!playoutStarted) {
             val startFrames = kotlin.math.ceil(startBufferMs / frameDurationMs.toDouble()).toInt()
             if (frames.size < startFrames) {
@@ -78,6 +90,12 @@ class PlaybackJitterBuffer(
             }
             playoutStarted = true
             expectedSequence = frames.firstKey()
+        }
+
+        if (usbLowLatencyHardFloor && bufferedMs() <= HARD_FLOOR_MS) {
+            stats.floorHoldCount += 1
+            stats.bufferedFrames = frames.size
+            return null
         }
 
         val expected = expectedSequence ?: return null
@@ -199,5 +217,9 @@ class PlaybackJitterBuffer(
 
     private fun nextSeq(seq: Int): Int {
         return ((seq.toLong() + 1L) and 0xFFFFFFFFL).toInt()
+    }
+
+    private companion object {
+        private const val HARD_FLOOR_MS = 8
     }
 }

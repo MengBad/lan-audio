@@ -45,8 +45,12 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         Log.i(logTag, "onCreate action=${intent?.action} extras=${intent?.extras?.keySet()?.joinToString(",") ?: ""}")
         logLifecycle("onCreate")
-        handleDebugCommand(intent)
-        PlaybackForegroundService.restoreLastPlayback(applicationContext, "app_open_restore")
+        val handledDebug = handleDebugCommand(intent)
+        if (!handledDebug) {
+            PlaybackForegroundService.restoreLastPlayback(applicationContext, "app_open_restore")
+        } else {
+            Log.i(logTag, "skip app_open_restore because debug_command handled")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -134,23 +138,25 @@ class MainActivity : FlutterActivity() {
             })
     }
 
-    private fun handleDebugCommand(intent: Intent?) {
-        val incoming = intent ?: return
+    private fun handleDebugCommand(intent: Intent?): Boolean {
+        val incoming = intent ?: return false
         val command = incoming.getStringExtra("debug_command")?.trim().orEmpty()
         if (command.isBlank()) {
-            return
+            return false
         }
         when (command) {
             "start_playback" -> {
                 val host = incoming.getStringExtra(PlaybackActions.EXTRA_HOST).orEmpty()
                 if (host.isBlank()) {
                     Log.w(logTag, "debug start_playback ignored: empty host")
-                    return
+                    return true
                 }
                 val wsPort = incoming.getIntExtra(PlaybackActions.EXTRA_WS_PORT, 39991)
                 val udpPort = incoming.getIntExtra(PlaybackActions.EXTRA_UDP_PORT, 39992)
                 val serverName =
                     incoming.getStringExtra(PlaybackActions.EXTRA_SERVER_NAME) ?: "manual:$host"
+                val transportMode =
+                    incoming.getStringExtra(PlaybackActions.EXTRA_TRANSPORT_MODE) ?: "wifi"
                 Log.i(logTag, "debug start_playback host=$host ws=$wsPort udp=$udpPort")
                 PlaybackForegroundService.startPlayback(
                     applicationContext,
@@ -159,6 +165,7 @@ class MainActivity : FlutterActivity() {
                         wsPort = wsPort,
                         udpPort = udpPort,
                         serverName = serverName,
+                        transportMode = transportMode,
                     ),
                 )
             }
@@ -181,6 +188,7 @@ class MainActivity : FlutterActivity() {
                 PlaybackForegroundService.dumpMetrics(applicationContext, reason)
             }
         }
+        return true
     }
 
     private fun preferences() =
@@ -190,7 +198,7 @@ class MainActivity : FlutterActivity() {
         val snapshot = PlaybackEventBus.snapshotMap()
         Log.i(
             logTag,
-            "$name serviceState=${snapshot["serviceState"]} connectionState=${snapshot["connectionState"]} playbackState=${snapshot["playbackState"]}"
+            "$name state=${snapshot["state"]} transport=${snapshot["transport"]} data_plane=${snapshot["data_plane"]}"
         )
     }
 
@@ -202,13 +210,14 @@ class MainActivity : FlutterActivity() {
                 val wsPort = (args["wsPort"] as? Number)?.toInt() ?: 39991
                 val udpPort = (args["udpPort"] as? Number)?.toInt() ?: 39992
                 val serverName = args["serverName"] as? String ?: "manual:$host"
+                val transportMode = args["transportMode"] as? String ?: "wifi"
                 if (host.isBlank()) {
                     result.error("invalid_args", "host is required", null)
                     return
                 }
                 Log.i(
                     logTag,
-                    "MethodChannel startPlayback received host=$host ws=$wsPort udp=$udpPort server=$serverName"
+                    "MethodChannel startPlayback received host=$host ws=$wsPort udp=$udpPort server=$serverName transport=$transportMode"
                 )
                 PlaybackForegroundService.startPlayback(
                     applicationContext,
@@ -217,6 +226,7 @@ class MainActivity : FlutterActivity() {
                         wsPort = wsPort,
                         udpPort = udpPort,
                         serverName = serverName,
+                        transportMode = transportMode,
                     ),
                 )
                 result.success(null)

@@ -1,5 +1,12 @@
 ﻿# Protocol v2 Migration Strategy
 
+## Phase 0 / Phase 1 Freeze Update (`2026-04-22`)
+
+- Release remains frozen. `scripts/package_release.ps1`, `scripts/release.ps1`, and `.github/workflows/release.yml` are now gated by `artifacts/release/acceptance_gate.json`.
+- `crates/lan_audio_domain` is now the single source of truth for mode contracts, explicit connection states, rollback state, failure taxonomy, service snapshot, and release-gate schema.
+- Current migration status is still `continue_fixing`; the repo is not at release sign-off.
+- Phase 3 has started on the server side: the transport layer is being wrapped behind `DataPlane` implementations for `legacy_las1`, `v2_header`, and `usb_direct`.
+
 ## 当前状态
 
 - 运行主路径：`windows_loopback + v2_header + opus`
@@ -57,12 +64,14 @@
   - 当数据面回退到 `legacy_las1` 时，effective codec 仍会回退 PCM16。
 - USB 已进入 V2 路线：
   - 当前推荐 USB tethering 作为低延迟连接方式。
+  - 已接入 USB localhost 传输模式（`adb reverse` + TCP length-prefixed 数据面）用于 Phase 2 灰度。
   - USB direct 只作为 `supports_usb_direct_future` 预留，不在当前主路径启用。
 - 产品诊断入口：
   - Android 增加连接帮助折叠区，覆盖同网段、访客网络/AP isolation、扫描/手动地址、USB、后台电池优化。
   - Windows 桌面端展示协议路径、模式策略、codec、灰度状态和推荐连接方式。
 - 数据面双栈：
   - 服务端支持配置 `legacy_las1` / `v2_header` 发送格式（桌面默认 `v2_header`）。
+  - 服务端发送层已开始通过 `DataPlane` trait 抽象三条路径；`DataPlaneRouter` 会根据 `ServerConfig` 选择 active path，并在 `--force-rollback` 下强制切回 `legacy_las1 + pcm16`。
   - 客户端接收侧支持 `LAS1/LAV2` 双栈识别。
   - `config_changed/discontinuity` 已有最小重同步逻辑（清 jitter、重建 AudioTrack）。
   - 推荐默认：`windows_loopback + v2_header + opus` 已直接启用，不再要求显式灰度开关。

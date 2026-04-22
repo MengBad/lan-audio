@@ -1,5 +1,6 @@
 ﻿pub mod audio_capture;
 pub mod config;
+pub mod data_plane;
 pub mod discovery;
 pub mod metrics;
 pub mod service;

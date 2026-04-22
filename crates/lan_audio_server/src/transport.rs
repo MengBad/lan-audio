@@ -5,10 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context};
 use lan_audio_protocol::{
-    detect_data_plane_packet_kind, AudioMode, DataPlanePacketKind, UdpAudioCodecV2,
-    UdpAudioHeaderV2, UdpAudioPacket, UdpAudioPacketV2, PROTOCOL_VERSION_V2,
-    UDP_AUDIO_HEADER_V2_LEN, UDP_AUDIO_MAGIC_V2, UDP_FLAG_V2_CONFIG_CHANGED,
-    UDP_FLAG_V2_DISCONTINUITY, UDP_FLAG_V2_SILENCE,
+    detect_data_plane_packet_kind, AudioMode, DataPlanePacketKind, UdpAudioCodecV2, UdpAudioPacket,
+    UDP_FLAG_V2_CONFIG_CHANGED, UDP_FLAG_V2_DISCONTINUITY, UDP_FLAG_V2_SILENCE,
 };
 use opus::{
     Application as LibOpusApplication, Bitrate as LibOpusBitrate, Channels as LibOpusChannels,
@@ -27,10 +25,12 @@ use crate::config::{
     AudioSourceKind, CodecSelection, DataPlaneFormat, ServerConfig, SyntheticSignalKind,
     TransportMode,
 };
-use crate::metrics::Metrics;
-use crate::session::{
-    write_length_prefixed_frame, BroadcastClient, ClientRegistry, ClientTransportSnapshot,
+use crate::data_plane::{
+    encode_packet_by_data_plane, DataPlane, DataPlaneRouter, EncodedFrame as DataPlaneEncodedFrame,
+    LegacyLas1DataPlane, UsbDirectDataPlane, V2HeaderDataPlane,
 };
+use crate::metrics::Metrics;
+use crate::session::{BroadcastClient, ClientRegistry, ClientTransportSnapshot};
 
 #[derive(Clone)]
 pub struct UdpTransport {
@@ -223,6 +223,7 @@ impl BroadcastTransport {
         cfg: Arc<ServerConfig>,
         metrics: Arc<Metrics>,
         registry: ClientRegistry,
+        _data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
     ) -> anyhow::Result<Self> {
         let socket = UdpSocket::bind(cfg.udp_bind)
             .await
@@ -285,7 +286,8 @@ impl BroadcastTransport {
         let (mut source, source_name) = self.capture_helper.build_capture_source()?;
         self.metrics.inc_capture_start_attempts();
         self.metrics.set_current_audio_source(source_name.clone());
-        self.metrics.set_capture_source_state(source.state().as_str());
+        self.metrics
+            .set_capture_source_state(source.state().as_str());
         self.metrics
             .set_capture_device_name(source.device_name().unwrap_or_else(|| "n/a".to_string()));
 
@@ -299,7 +301,8 @@ impl BroadcastTransport {
         let active_format = source.format();
         self.metrics
             .set_capture_format(active_format.sample_rate_hz, active_format.channels);
-        self.metrics.set_capture_source_state(source.state().as_str());
+        self.metrics
+            .set_capture_source_state(source.state().as_str());
         self.metrics
             .set_capture_device_name(source.device_name().unwrap_or_else(|| "n/a".to_string()));
 
@@ -361,7 +364,8 @@ impl BroadcastTransport {
             }
         });
 
-        let mut encoders: HashMap<(CodecSelection, AudioMode), AudioFrameEncoder> = HashMap::new();
+        let mut encoders: HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder> =
+            HashMap::new();
         let mut sequence: u32 = 0;
         let mut tx_stats = TxStats::new();
 
@@ -398,23 +402,26 @@ impl BroadcastTransport {
         &self,
         frame: AudioFrame,
         clients: &[BroadcastClient],
-        encoders: &mut HashMap<(CodecSelection, AudioMode), AudioFrameEncoder>,
+        encoders: &mut HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder>,
         sequence: &mut u32,
         tx_stats: &mut TxStats,
     ) {
-        let mut grouped: HashMap<(CodecSelection, AudioMode), Vec<BroadcastClient>> = HashMap::new();
+        let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
+            HashMap::new();
         for client in clients.iter().cloned() {
+            let preferred_sample_rate = normalize_encoder_sample_rate(client.preferred_sample_rate);
             grouped
-                .entry((client.codec, client.audio_mode))
+                .entry((client.codec, client.audio_mode, preferred_sample_rate))
                 .or_default()
                 .push(client);
         }
 
-        let mut failed_clients = Vec::new();
-        for ((codec, mode), recipients) in grouped {
+        let mut failed_wifi_clients = Vec::new();
+        let mut failed_usb_clients = Vec::new();
+        for ((codec, mode, preferred_sample_rate), recipients) in grouped {
             let encoded_frames = encoders
-                .entry((codec, mode))
-                .or_insert_with(|| AudioFrameEncoder::new(codec, mode))
+                .entry((codec, mode, preferred_sample_rate))
+                .or_insert_with(|| AudioFrameEncoder::new(codec, mode, preferred_sample_rate))
                 .encode(frame.clone(), mode);
             for encoded in encoded_frames {
                 let packet = UdpAudioPacket {
@@ -430,31 +437,24 @@ impl BroadcastTransport {
                 *sequence = (*sequence).wrapping_add(1);
 
                 for client in &recipients {
-                    let v2_flags = v2_flags_for_frame(&packet, client.mode_changed, client.first_packet);
-                    let bytes = encode_packet_by_data_plane(
+                    let v2_flags =
+                        v2_flags_for_frame(&packet, client.mode_changed, client.first_packet);
+                    let wire_frame = DataPlaneEncodedFrame::new(encode_packet_by_data_plane(
                         &packet,
                         client.data_plane,
                         v2_flags,
                         encoded.codec,
-                    );
-                    let send_result = match &client.transport {
-                        ClientTransportSnapshot::Wifi(addr) => self
-                            .socket
-                            .send_to(&bytes, addr)
-                            .await
-                            .map(|_| ())
-                            .map_err(anyhow::Error::from),
-                        ClientTransportSnapshot::Usb(writer) => write_length_prefixed_frame(writer, &bytes).await,
-                    };
-                    match send_result {
+                    ));
+                    let plane = self.sender_for_client(client);
+                    match plane.send_frame(&wire_frame).await {
                         Ok(()) => {
-                            self.metrics.inc_packets(bytes.len());
+                            self.metrics.inc_packets(wire_frame.len());
                             tx_stats.observe(
                                 &packet,
-                                bytes.len(),
+                                wire_frame.len(),
                                 Duration::from_millis(0),
                                 client.data_plane,
-                                detect_data_plane_packet_kind(&bytes),
+                                detect_data_plane_packet_kind(wire_frame.bytes()),
                                 v2_flags,
                                 client.mode_changed,
                                 encoded.codec,
@@ -463,8 +463,20 @@ impl BroadcastTransport {
                             );
                         }
                         Err(err) => {
-                            warn!(client = %client.name, error = %err, "broadcast send failed");
-                            failed_clients.push(client.id);
+                            warn!(
+                                client = %client.name,
+                                data_plane = plane.path_name(),
+                                error = %err,
+                                "broadcast send failed"
+                            );
+                            match &client.transport {
+                                ClientTransportSnapshot::Wifi(_) => {
+                                    failed_wifi_clients.push(client.id)
+                                }
+                                ClientTransportSnapshot::Usb(_) => {
+                                    failed_usb_clients.push(client.id)
+                                }
+                            }
                         }
                     }
                 }
@@ -472,10 +484,36 @@ impl BroadcastTransport {
             }
         }
 
-        failed_clients.sort_unstable();
-        failed_clients.dedup();
-        for client_id in failed_clients {
+        failed_wifi_clients.sort_unstable();
+        failed_wifi_clients.dedup();
+        for client_id in failed_wifi_clients {
             let _ = self.registry.remove_client(client_id).await;
+        }
+
+        failed_usb_clients.sort_unstable();
+        failed_usb_clients.dedup();
+        for client_id in failed_usb_clients {
+            if let Some(name) = self.registry.mark_usb_transport_lost(client_id).await {
+                info!(client = %name, "usb transport lost, waiting for forwarded tcp stream reattach");
+            }
+        }
+    }
+
+    fn sender_for_client(&self, client: &BroadcastClient) -> Arc<dyn DataPlane> {
+        match &client.transport {
+            ClientTransportSnapshot::Wifi(addr) => match client.data_plane {
+                DataPlaneFormat::LegacyLas1 => Arc::new(LegacyLas1DataPlane::with_udp_target(
+                    Arc::clone(&self.socket),
+                    *addr,
+                )),
+                DataPlaneFormat::V2Header => Arc::new(V2HeaderDataPlane::with_udp_target(
+                    Arc::clone(&self.socket),
+                    *addr,
+                )),
+            },
+            ClientTransportSnapshot::Usb(writer) => {
+                Arc::new(UsbDirectDataPlane::with_writer(Arc::clone(writer)))
+            }
         }
     }
 }
@@ -633,11 +671,13 @@ impl UdpTransport {
             let encode_metrics = Arc::clone(&metrics);
             let mut encode_shutdown = shutdown.resubscribe();
             let encode_audio_mode = Arc::clone(&current_audio_mode);
+            let encoder_sample_rate = normalize_encoder_sample_rate(active_format.sample_rate_hz);
             let encode_handle = tokio::spawn(async move {
                 let mut packet_build_stats = PacketBuildStatsWindow::new();
                 let mut frame_encoder = AudioFrameEncoder::new(
                     effective_codec,
                     read_current_audio_mode(&encode_audio_mode),
+                    encoder_sample_rate,
                 );
                 loop {
                     tokio::select! {
@@ -989,14 +1029,16 @@ impl TxStats {
 
 struct AudioFrameEncoder {
     codec: CodecSelection,
+    output_sample_rate: u32,
     opus: Option<ExperimentalOpusEncoder>,
     opus_frame_buffer: Option<OpusFrameBuffer>,
 }
 
 impl AudioFrameEncoder {
-    fn new(codec: CodecSelection, initial_mode: AudioMode) -> Self {
+    fn new(codec: CodecSelection, initial_mode: AudioMode, output_sample_rate: u32) -> Self {
+        let output_sample_rate = normalize_encoder_sample_rate(output_sample_rate);
         let opus = if codec == CodecSelection::Opus {
-            match ExperimentalOpusEncoder::new(initial_mode) {
+            match ExperimentalOpusEncoder::new(initial_mode, output_sample_rate) {
                 Ok(encoder) => Some(encoder),
                 Err(err) => {
                     warn!(error = %err, "opus encoder init failed; falling back to pcm16");
@@ -1007,19 +1049,20 @@ impl AudioFrameEncoder {
             None
         };
         let opus_frame_buffer = if codec == CodecSelection::Opus {
-            Some(OpusFrameBuffer::default())
+            Some(OpusFrameBuffer::new(output_sample_rate))
         } else {
             None
         };
         Self {
             codec,
+            output_sample_rate,
             opus,
             opus_frame_buffer,
         }
     }
 
     fn encode(&mut self, frame: AudioFrame, mode: AudioMode) -> Vec<EncodedFrame> {
-        let samples = to_fixed_48k_stereo_10ms(&frame);
+        let samples = to_fixed_stereo_10ms(&frame, self.output_sample_rate);
         if self.codec == CodecSelection::Opus {
             if let (Some(opus), Some(buffer)) =
                 (self.opus.as_mut(), self.opus_frame_buffer.as_mut())
@@ -1037,23 +1080,27 @@ impl AudioFrameEncoder {
                         Ok(encoded) => encoded_frames.push(encoded),
                         Err(err) => {
                             warn!(error = %err, "opus encode failed for one aligned frame; falling back to pcm16");
-                            return vec![encode_pcm16_from_samples(&frame, &samples)];
+                            return vec![encode_pcm16_from_samples(
+                                &frame,
+                                &samples,
+                                self.output_sample_rate,
+                            )];
                         }
                     }
                 }
                 return encoded_frames;
             }
         }
-        vec![encode_pcm16_from_samples(&frame, &samples)]
+        vec![encode_pcm16_from_samples(
+            &frame,
+            &samples,
+            self.output_sample_rate,
+        )]
     }
 }
 
-const FIXED_OUTPUT_SAMPLE_RATE: u32 = 48_000;
+const DEFAULT_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const FIXED_OUTPUT_CHANNELS: usize = 2;
-const PCM_FRAME_SAMPLES_PER_CHANNEL_10MS: usize = 480;
-const OPUS_FRAME_SAMPLES_PER_CHANNEL_20MS: usize = 960;
-const OPUS_FRAME_TOTAL_SAMPLES_20MS: usize =
-    OPUS_FRAME_SAMPLES_PER_CHANNEL_20MS * FIXED_OUTPUT_CHANNELS;
 
 #[derive(Debug, Clone)]
 struct OpusInputFrame {
@@ -1064,8 +1111,9 @@ struct OpusInputFrame {
     source_rms: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct OpusFrameBuffer {
+    samples_per_20ms_total: usize,
     samples: VecDeque<f32>,
     pending_pts_ms: Option<u64>,
     pending_is_silence: bool,
@@ -1075,6 +1123,19 @@ struct OpusFrameBuffer {
 }
 
 impl OpusFrameBuffer {
+    fn new(sample_rate: u32) -> Self {
+        let samples_per_20ms_total = (((sample_rate as usize) / 50).max(1)) * FIXED_OUTPUT_CHANNELS;
+        Self {
+            samples_per_20ms_total,
+            samples: VecDeque::new(),
+            pending_pts_ms: None,
+            pending_is_silence: true,
+            pending_peak: 0.0,
+            pending_rms_sum_sq: 0.0,
+            pending_rms_frames: 0,
+        }
+    }
+
     fn push_10ms(
         &mut self,
         pts_ms: u64,
@@ -1099,12 +1160,12 @@ impl OpusFrameBuffer {
     }
 
     fn pop_20ms(&mut self) -> Option<OpusInputFrame> {
-        if self.samples.len() < OPUS_FRAME_TOTAL_SAMPLES_20MS {
+        if self.samples.len() < self.samples_per_20ms_total {
             return None;
         }
         let pts_ms = self.pending_pts_ms.take()?;
-        let mut out = Vec::with_capacity(OPUS_FRAME_TOTAL_SAMPLES_20MS);
-        for _ in 0..OPUS_FRAME_TOTAL_SAMPLES_20MS {
+        let mut out = Vec::with_capacity(self.samples_per_20ms_total);
+        for _ in 0..self.samples_per_20ms_total {
             out.push(self.samples.pop_front().unwrap_or(0.0));
         }
         let is_silence = self.pending_is_silence;
@@ -1136,18 +1197,21 @@ impl OpusFrameBuffer {
 struct ExperimentalOpusEncoder {
     inner: LibOpusEncoder,
     mode: AudioMode,
+    sample_rate: u32,
 }
 
 impl ExperimentalOpusEncoder {
-    fn new(mode: AudioMode) -> anyhow::Result<Self> {
-        let mut inner = LibOpusEncoder::new(
-            FIXED_OUTPUT_SAMPLE_RATE,
-            LibOpusChannels::Stereo,
-            opus_application(mode),
-        )
-        .map_err(|err| anyhow!("opus init: {err}"))?;
+    fn new(mode: AudioMode, sample_rate: u32) -> anyhow::Result<Self> {
+        let sample_rate = normalize_encoder_sample_rate(sample_rate);
+        let mut inner =
+            LibOpusEncoder::new(sample_rate, LibOpusChannels::Stereo, opus_application(mode))
+                .map_err(|err| anyhow!("opus init: {err}"))?;
         apply_opus_mode_settings(&mut inner, mode);
-        Ok(Self { inner, mode })
+        Ok(Self {
+            inner,
+            mode,
+            sample_rate,
+        })
     }
 
     fn encode(&mut self, frame: &OpusInputFrame, mode: AudioMode) -> anyhow::Result<EncodedFrame> {
@@ -1166,9 +1230,9 @@ impl ExperimentalOpusEncoder {
 
         Ok(EncodedFrame {
             pts_ms: frame.pts_ms,
-            sample_rate: FIXED_OUTPUT_SAMPLE_RATE,
+            sample_rate: self.sample_rate,
             channels: 2,
-            frames_per_packet: OPUS_FRAME_SAMPLES_PER_CHANNEL_20MS as u16,
+            frames_per_packet: (self.sample_rate / 50).max(1) as u16,
             codec: UdpAudioCodecV2::Opus,
             is_silence: frame.is_silence,
             source_peak: frame.source_peak,
@@ -1232,7 +1296,8 @@ pub fn run_opus_encoder_stress(
     total_input_frames: usize,
     mode: AudioMode,
 ) -> anyhow::Result<OpusStressStats> {
-    let mut encoder = AudioFrameEncoder::new(CodecSelection::Opus, mode);
+    let mut encoder =
+        AudioFrameEncoder::new(CodecSelection::Opus, mode, DEFAULT_OUTPUT_SAMPLE_RATE);
     let mut encode_durations_us = Vec::with_capacity(total_input_frames / 2);
     let mut encoded_packets = 0usize;
     let channel_full_drops = 0usize;
@@ -1304,12 +1369,15 @@ pub fn run_opus_encoder_stress(
 
 #[cfg(test)]
 fn encode_passthrough(frame: AudioFrame) -> EncodedFrame {
-    let samples = to_fixed_48k_stereo_10ms(&frame);
-    encode_pcm16_from_samples(&frame, &samples)
+    let samples = to_fixed_stereo_10ms(&frame, DEFAULT_OUTPUT_SAMPLE_RATE);
+    encode_pcm16_from_samples(&frame, &samples, DEFAULT_OUTPUT_SAMPLE_RATE)
 }
 
-fn encode_pcm16_from_samples(frame: &AudioFrame, samples: &[f32]) -> EncodedFrame {
-    // v1/default path remains fixed for Android diagnostics: 48kHz stereo PCM16 LE, 10ms.
+fn encode_pcm16_from_samples(
+    frame: &AudioFrame,
+    samples: &[f32],
+    output_sample_rate: u32,
+) -> EncodedFrame {
     let mut payload = Vec::with_capacity(samples.len() * 2);
     for sample in samples {
         let v = sample.clamp(-1.0, 1.0);
@@ -1318,9 +1386,9 @@ fn encode_pcm16_from_samples(frame: &AudioFrame, samples: &[f32]) -> EncodedFram
     }
     EncodedFrame {
         pts_ms: frame.pts_ms,
-        sample_rate: FIXED_OUTPUT_SAMPLE_RATE,
+        sample_rate: output_sample_rate,
         channels: 2,
-        frames_per_packet: PCM_FRAME_SAMPLES_PER_CHANNEL_10MS as u16,
+        frames_per_packet: ((output_sample_rate / 100).max(1)) as u16,
         codec: UdpAudioCodecV2::Pcm16,
         is_silence: frame.is_silence,
         source_peak: frame.peak,
@@ -1343,31 +1411,6 @@ fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {
     (flags & 0xFF) as u8
 }
 
-fn build_v2_header_preview(
-    packet: &UdpAudioPacket,
-    flags: u16,
-    codec: UdpAudioCodecV2,
-) -> UdpAudioHeaderV2 {
-    UdpAudioHeaderV2 {
-        magic: UDP_AUDIO_MAGIC_V2,
-        protocol_version: PROTOCOL_VERSION_V2,
-        header_size: UDP_AUDIO_HEADER_V2_LEN as u16,
-        flags,
-        sequence: packet.sequence,
-        timestamp_ms: packet.timestamp_ms,
-        codec,
-        channels: packet.channels,
-        sample_rate: packet.sample_rate,
-        frame_duration_ms: if packet.sample_rate == 0 {
-            0
-        } else {
-            (u32::from(packet.frames_per_packet) * 1000 / packet.sample_rate) as u16
-        },
-        payload_size: packet.payload.len() as u16,
-        reserved: 0,
-    }
-}
-
 fn v2_flags_for_frame(packet: &UdpAudioPacket, mode_changed: bool, first_packet: bool) -> u16 {
     let mut flags: u16 = 0;
     if packet.flags & 0x01 != 0 {
@@ -1379,24 +1422,6 @@ fn v2_flags_for_frame(packet: &UdpAudioPacket, mode_changed: bool, first_packet:
         flags |= UDP_FLAG_V2_DISCONTINUITY;
     }
     flags
-}
-
-fn encode_packet_by_data_plane(
-    packet: &UdpAudioPacket,
-    data_plane: DataPlaneFormat,
-    v2_flags: u16,
-    codec: UdpAudioCodecV2,
-) -> Vec<u8> {
-    match data_plane {
-        DataPlaneFormat::LegacyLas1 => packet.encode(),
-        DataPlaneFormat::V2Header => {
-            let v2 = UdpAudioPacketV2 {
-                header: build_v2_header_preview(packet, v2_flags, codec),
-                payload: packet.payload.clone(),
-            };
-            v2.encode()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1419,21 +1444,21 @@ fn read_current_audio_mode(mode: &Arc<StdMutex<AudioMode>>) -> AudioMode {
     *mode.lock().expect("current_audio_mode lock")
 }
 
-fn to_fixed_48k_stereo_10ms(frame: &AudioFrame) -> Vec<f32> {
-    const OUT_RATE: u32 = FIXED_OUTPUT_SAMPLE_RATE;
+fn to_fixed_stereo_10ms(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
+    let out_rate = normalize_encoder_sample_rate(out_rate);
     const OUT_CHANNELS: usize = FIXED_OUTPUT_CHANNELS;
-    const OUT_FRAMES: usize = PCM_FRAME_SAMPLES_PER_CHANNEL_10MS;
+    let out_frames: usize = (out_rate as usize / 100).max(1);
 
     let in_rate = frame.format.sample_rate_hz.max(1);
     let in_channels = usize::from(frame.format.channels.max(1));
     let in_frames = frame.samples_f32.len() / in_channels;
     if in_frames == 0 {
-        return vec![0.0; OUT_FRAMES * OUT_CHANNELS];
+        return vec![0.0; out_frames * OUT_CHANNELS];
     }
 
-    let mut out = Vec::with_capacity(OUT_FRAMES * OUT_CHANNELS);
-    for out_frame in 0..OUT_FRAMES {
-        let src_frame = ((out_frame as u64 * in_rate as u64) / OUT_RATE as u64)
+    let mut out = Vec::with_capacity(out_frames * OUT_CHANNELS);
+    for out_frame in 0..out_frames {
+        let src_frame = ((out_frame as u64 * in_rate as u64) / out_rate as u64)
             .min((in_frames - 1) as u64) as usize;
         let base = src_frame * in_channels;
         let left = frame.samples_f32.get(base).copied().unwrap_or(0.0);
@@ -1448,6 +1473,13 @@ fn to_fixed_48k_stereo_10ms(frame: &AudioFrame) -> Vec<f32> {
     out
 }
 
+fn normalize_encoder_sample_rate(sample_rate: u32) -> u32 {
+    match sample_rate {
+        8_000 | 12_000 | 16_000 | 24_000 | 48_000 => sample_rate,
+        _ => DEFAULT_OUTPUT_SAMPLE_RATE,
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1459,6 +1491,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::audio_capture::SampleFormat;
+    use lan_audio_protocol::UdpAudioPacketV2;
 
     #[test]
     fn encode_passthrough_outputs_fixed_android_pcm_shape() {
@@ -1503,7 +1536,11 @@ mod tests {
             rms: 0.1,
             source_buffer_frames: None,
         };
-        let mut encoder = AudioFrameEncoder::new(CodecSelection::Opus, AudioMode::Balanced);
+        let mut encoder = AudioFrameEncoder::new(
+            CodecSelection::Opus,
+            AudioMode::Balanced,
+            DEFAULT_OUTPUT_SAMPLE_RATE,
+        );
 
         let first = encoder.encode(frame_a, AudioMode::Balanced);
         assert!(
@@ -1560,7 +1597,11 @@ mod tests {
             rms: 0.14,
             source_buffer_frames: None,
         };
-        let mut encoder = AudioFrameEncoder::new(CodecSelection::Opus, AudioMode::Balanced);
+        let mut encoder = AudioFrameEncoder::new(
+            CodecSelection::Opus,
+            AudioMode::Balanced,
+            DEFAULT_OUTPUT_SAMPLE_RATE,
+        );
         assert!(encoder
             .encode(build_frame(123), AudioMode::Balanced)
             .is_empty());

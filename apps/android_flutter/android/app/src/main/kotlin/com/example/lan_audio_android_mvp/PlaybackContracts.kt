@@ -18,6 +18,7 @@ object PlaybackActions {
     const val EXTRA_PING_INTERVAL_MS = "ping_interval_ms"
     const val EXTRA_AUDIO_MODE = "audio_mode"
     const val EXTRA_REASON = "reason"
+    const val EXTRA_TRANSPORT_MODE = "transport_mode"
 }
 
 object PlaybackChannels {
@@ -30,6 +31,7 @@ data class PlaybackTarget(
     val wsPort: Int,
     val udpPort: Int,
     val serverName: String,
+    val transportMode: String = "wifi",
 )
 
 data class PlaybackOptions(
@@ -46,13 +48,21 @@ data class PlaybackOptions(
     val preferStableAudioTrack: Boolean = true,
     val preferredCodec: String = "pcm16",
     val preferredSampleFormat: String = "pcm16",
+    val lowLatencyBufferMultiplier: Int = 2,
+    val lowLatencyFallbackBufferMultiplier: Int = 4,
     val frameDurationMs: Int = 10,
     val resetBufferOnSwitch: Boolean = true,
     val pingIntervalMs: Int = 1000,
 )
 
+enum class TransportHint {
+    Wifi,
+    Usb,
+}
+
 data class PlaybackModeProfile(
     val mode: String,
+    val transportHint: TransportHint,
     val startBufferMs: Int,
     val maxBufferMs: Int,
     val batchFrames: Int,
@@ -65,6 +75,8 @@ data class PlaybackModeProfile(
     val preferStableAudioTrack: Boolean,
     val preferredCodec: String,
     val preferredSampleFormat: String,
+    val lowLatencyBufferMultiplier: Int,
+    val lowLatencyFallbackBufferMultiplier: Int,
     val frameDurationMs: Int,
     val resetBufferOnSwitch: Boolean,
 ) {
@@ -82,6 +94,8 @@ data class PlaybackModeProfile(
             preferStableAudioTrack = preferStableAudioTrack,
             preferredCodec = preferredCodec,
             preferredSampleFormat = preferredSampleFormat,
+            lowLatencyBufferMultiplier = lowLatencyBufferMultiplier,
+            lowLatencyFallbackBufferMultiplier = lowLatencyFallbackBufferMultiplier,
             frameDurationMs = frameDurationMs,
             resetBufferOnSwitch = resetBufferOnSwitch,
             pingIntervalMs = pingIntervalMs,
@@ -90,10 +104,12 @@ data class PlaybackModeProfile(
 }
 
 object PlaybackModeProfiles {
-    fun forMode(mode: String): PlaybackModeProfile {
-        return when (normalize(mode)) {
+    fun forMode(mode: String, transportHint: TransportHint = TransportHint.Wifi): PlaybackModeProfile {
+        val normalized = normalize(mode)
+        val base = when (normalized) {
             "low_latency" -> PlaybackModeProfile(
                 mode = "low_latency",
+                transportHint = transportHint,
                 startBufferMs = 40,
                 maxBufferMs = 180,
                 batchFrames = 1,
@@ -106,11 +122,14 @@ object PlaybackModeProfiles {
                 preferStableAudioTrack = false,
                 preferredCodec = "pcm16",
                 preferredSampleFormat = "pcm16",
+                lowLatencyBufferMultiplier = 2,
+                lowLatencyFallbackBufferMultiplier = 4,
                 frameDurationMs = 10,
                 resetBufferOnSwitch = true,
             )
             "high_quality" -> PlaybackModeProfile(
                 mode = "high_quality",
+                transportHint = transportHint,
                 startBufferMs = 120,
                 maxBufferMs = 500,
                 batchFrames = 3,
@@ -123,11 +142,14 @@ object PlaybackModeProfiles {
                 preferStableAudioTrack = true,
                 preferredCodec = "pcm16",
                 preferredSampleFormat = "pcm16",
+                lowLatencyBufferMultiplier = 2,
+                lowLatencyFallbackBufferMultiplier = 4,
                 frameDurationMs = 10,
                 resetBufferOnSwitch = false,
             )
             else -> PlaybackModeProfile(
                 mode = "balanced",
+                transportHint = transportHint,
                 startBufferMs = 60,
                 maxBufferMs = 300,
                 batchFrames = 2,
@@ -140,9 +162,45 @@ object PlaybackModeProfiles {
                 preferStableAudioTrack = true,
                 preferredCodec = "pcm16",
                 preferredSampleFormat = "pcm16",
+                lowLatencyBufferMultiplier = 2,
+                lowLatencyFallbackBufferMultiplier = 4,
                 frameDurationMs = 10,
                 resetBufferOnSwitch = true,
             )
+        }
+        return applyTransportOverrides(base)
+    }
+
+    private fun applyTransportOverrides(base: PlaybackModeProfile): PlaybackModeProfile {
+        return when (base.transportHint) {
+            TransportHint.Usb -> when (base.mode) {
+                "low_latency" -> base.copy(
+                    startBufferMs = 100,
+                    maxBufferMs = 200,
+                    batchFrames = 1,
+                    dropThresholdMs = 180,
+                    targetTotalLatencyMs = 140,
+                    maxTotalLatencyMs = 200,
+                )
+                "balanced" -> base.copy(
+                    startBufferMs = 160,
+                    maxBufferMs = 320,
+                    batchFrames = 1,
+                    dropThresholdMs = 280,
+                    targetTotalLatencyMs = 220,
+                    maxTotalLatencyMs = 320,
+                )
+                else -> base
+            }
+            TransportHint.Wifi -> when (base.mode) {
+                "low_latency" -> base.copy(
+                    startBufferMs = 20,
+                    maxBufferMs = 50,
+                    batchFrames = 1,
+                    dropThresholdMs = 35,
+                )
+                else -> base
+            }
         }
     }
 
@@ -158,7 +216,9 @@ object PlaybackModeProfiles {
 data class PlaybackMetrics(
     val sampleRate: Int = 48000,
     val channels: Int = 2,
-    val bufferedMs: Int = 0,
+    val totalBufferedMs: Int = 0,
+    val jitterBufferedMs: Int = 0,
+    val audioTrackQueuedMs: Int = 0,
     val audioTrackLatencyMs: Int? = null,
     val jitterUnderrun: Int = 0,
     val jitterDropped: Int = 0,
@@ -175,6 +235,13 @@ data class PlaybackMetrics(
     val audioTrackWriteFramesPerSec: Double = 0.0,
     val cfgChangedCount: Int = 0,
     val discontinuityCount: Int = 0,
+    val tcpRoundTripMs: Int? = null,
+    val tcpRoundTripMedianMs: Int? = null,
+    val jitterP95Ms: Int? = null,
+    val floorHoldCount: Int = 0,
+    val reconnectCount: Int = 0,
+    val decodeErrors: Int = 0,
+    val sinkWriteGapMsP95: Int = 0,
 )
 
 data class PlaybackSnapshot(
@@ -186,9 +253,11 @@ data class PlaybackSnapshot(
     val protocolVersion: Int? = null,
     val currentAudioMode: String = "balanced",
     val negotiatedCapabilities: Map<String, Boolean> = emptyMap(),
-    val modeProfile: PlaybackModeProfile = PlaybackModeProfiles.forMode(currentAudioMode),
+    val modeProfile: PlaybackModeProfile = PlaybackModeProfiles.forMode(currentAudioMode, TransportHint.Wifi),
     val connectionPath: String = "lan_ip_wifi_or_usb",
+    val transportMode: String = "wifi",
     val playbackBackend: String = "audiotrack_stable",
+    val connectedClientCount: Int = 0,
     val protocolPath: String = "legacy_or_v2_auto",
     val experimentalPath: Boolean = false,
     val effectiveCodec: String = "pcm16",
@@ -212,6 +281,7 @@ data class PlaybackSnapshot(
             "negotiatedCapabilities" to negotiatedCapabilities,
             "modeProfile" to mapOf(
                 "mode" to modeProfile.mode,
+                "transportHint" to modeProfile.transportHint.name.lowercase(),
                 "startBufferMs" to modeProfile.startBufferMs,
                 "maxBufferMs" to modeProfile.maxBufferMs,
                 "batchFrames" to modeProfile.batchFrames,
@@ -224,11 +294,15 @@ data class PlaybackSnapshot(
                 "preferStableAudioTrack" to modeProfile.preferStableAudioTrack,
                 "preferredCodec" to modeProfile.preferredCodec,
                 "preferredSampleFormat" to modeProfile.preferredSampleFormat,
+                "lowLatencyBufferMultiplier" to modeProfile.lowLatencyBufferMultiplier,
+                "lowLatencyFallbackBufferMultiplier" to modeProfile.lowLatencyFallbackBufferMultiplier,
                 "frameDurationMs" to modeProfile.frameDurationMs,
                 "resetBufferOnSwitch" to modeProfile.resetBufferOnSwitch,
             ),
             "connectionPath" to connectionPath,
+            "transportMode" to transportMode,
             "playbackBackend" to playbackBackend,
+            "connectedClientCount" to connectedClientCount,
             "protocolPath" to protocolPath,
             "experimentalPath" to experimentalPath,
             "effectiveCodec" to effectiveCodec,
@@ -239,7 +313,11 @@ data class PlaybackSnapshot(
             "metrics" to mapOf(
                 "sampleRate" to metrics.sampleRate,
                 "channels" to metrics.channels,
-                "bufferedMs" to metrics.bufferedMs,
+                "totalBufferedMs" to metrics.totalBufferedMs,
+                "jitterBufferedMs" to metrics.jitterBufferedMs,
+                "audioTrackQueuedMs" to metrics.audioTrackQueuedMs,
+                // Backward-compatible key for old UI readers.
+                "bufferedMs" to metrics.totalBufferedMs,
                 "audioTrackLatencyMs" to metrics.audioTrackLatencyMs,
                 "jitterUnderrun" to metrics.jitterUnderrun,
                 "jitterDropped" to metrics.jitterDropped,
@@ -256,9 +334,116 @@ data class PlaybackSnapshot(
                 "audioTrackWriteFramesPerSec" to metrics.audioTrackWriteFramesPerSec,
                 "cfgChangedCount" to metrics.cfgChangedCount,
                 "discontinuityCount" to metrics.discontinuityCount,
+                "tcpRoundTripMs" to metrics.tcpRoundTripMs,
+                "tcpRoundTripMedianMs" to metrics.tcpRoundTripMedianMs,
+                "jitterP95Ms" to metrics.jitterP95Ms,
+                "floorHoldCount" to metrics.floorHoldCount,
+                "reconnectCount" to metrics.reconnectCount,
+                "decodeErrors" to metrics.decodeErrors,
+                "sinkWriteGapMsP95" to metrics.sinkWriteGapMsP95,
             ),
             "recentLog" to recentLog,
             "error" to error,
         )
     }
+}
+
+data class StableServiceMetrics(
+    val bufferedMs: Int = 0,
+    val underrun: Int = 0,
+    val latePackets: Int = 0,
+    val droppedPackets: Int = 0,
+    val rttMs: Int = 0,
+    val reconnectCount: Int = 0,
+    val decodeErrors: Int = 0,
+    val sinkWriteGapMsP95: Int = 0,
+)
+
+data class StableServiceSnapshot(
+    val transport: String = "wifi",
+    val mode: String = "balanced",
+    val dataPlane: String = "legacy_las1",
+    val activeDataPlane: String = "legacy_las1",
+    val rollbackAvailable: Boolean = true,
+    val codec: String = "pcm16",
+    val effectiveCodec: String = "pcm16",
+    val state: String = "disconnected",
+    val rollbackState: String = "main_path_active",
+    val metrics: StableServiceMetrics = StableServiceMetrics(),
+) {
+    fun toMap(): Map<String, Any?> {
+        return mapOf(
+            "transport" to transport,
+            "mode" to mode,
+            "data_plane" to dataPlane,
+            "active_data_plane" to activeDataPlane,
+            "rollback_available" to rollbackAvailable,
+            "codec" to codec,
+            "effective_codec" to effectiveCodec,
+            "state" to state,
+            "rollback_state" to rollbackState,
+            "metrics" to mapOf(
+                "buffered_ms" to metrics.bufferedMs,
+                "underrun" to metrics.underrun,
+                "late_packets" to metrics.latePackets,
+                "dropped_packets" to metrics.droppedPackets,
+                "rtt_ms" to metrics.rttMs,
+                "reconnect_count" to metrics.reconnectCount,
+                "decode_errors" to metrics.decodeErrors,
+                "sink_write_gap_ms_p95" to metrics.sinkWriteGapMsP95,
+            ),
+        )
+    }
+}
+
+fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
+    val dataPlane = when (protocolPath.lowercase()) {
+        "v2_header" -> "v2_header"
+        else -> "legacy_las1"
+    }
+    val activeDataPlane = when {
+        transportMode == "usb" && dataPlane == "v2_header" -> "usb_direct"
+        else -> dataPlane
+    }
+    val requestedCodec = modeProfile.preferredCodec.ifBlank { effectiveCodec.ifBlank { "pcm16" } }
+    val normalizedEffectiveCodec = effectiveCodec.ifBlank { "pcm16" }
+    val state = when {
+        connectionState == "reconnecting" -> "recovering"
+        recentLog.startsWith("set_audio_mode:") ||
+            recentLog.startsWith("set_audio_mode_pending:") ||
+            recentLog.startsWith("audio_mode_changed:") ||
+            recentLog.startsWith("v2_audio_mode_changed:") -> "reconfiguring"
+        playbackState == "playing" -> "streaming"
+        connectionState == "connected" -> "negotiated"
+        connectionState == "connecting" -> "handshaking"
+        serviceState == "stopping" || serviceState == "error" || connectionState == "error" -> "closed"
+        else -> "disconnected"
+    }
+    val rollbackState = if (dataPlane == "legacy_las1" && normalizedEffectiveCodec == "pcm16") {
+        "forced_legacy_las1_pcm16"
+    } else {
+        "main_path_active"
+    }
+
+    return StableServiceSnapshot(
+        transport = if (transportMode == "usb") "usb" else "wifi",
+        mode = PlaybackModeProfiles.normalize(currentAudioMode),
+        dataPlane = dataPlane,
+        activeDataPlane = activeDataPlane,
+        rollbackAvailable = true,
+        codec = requestedCodec,
+        effectiveCodec = normalizedEffectiveCodec,
+        state = state,
+        rollbackState = rollbackState,
+        metrics = StableServiceMetrics(
+            bufferedMs = metrics.totalBufferedMs,
+            underrun = metrics.jitterUnderrun,
+            latePackets = metrics.jitterLate,
+            droppedPackets = metrics.jitterDropped,
+            rttMs = metrics.tcpRoundTripMs ?: 0,
+            reconnectCount = metrics.reconnectCount,
+            decodeErrors = metrics.decodeErrors,
+            sinkWriteGapMsP95 = metrics.sinkWriteGapMsP95,
+        ),
+    )
 }

@@ -2,14 +2,22 @@
 
 Windows-to-Android LAN audio streaming. Use a Windows PC as the sender and an Android phone as a speaker on the same local network.
 
-Current release: `1.1`
-Mainline target: `1.2`
+Current release train: `1.3`
+Mainline target: `1.4`
 
-> Status: usable MVP. The mainline recommended path is now `windows_loopback + v2_header + opus`, and `legacy_las1 + pcm16` remains the maintained rollback path.
+> Status: Phase 0 / Phase 1 rewrite is in progress. Release is frozen behind `artifacts/release/acceptance_gate.json`, the current main-path target remains `windows_loopback + v2_header + opus`, and `legacy_las1 + pcm16` remains the maintained rollback path.
+
+## Phase 0 / Phase 3 Freeze
+
+- Release is blocked until `acceptance_gate.json` explicitly allows packaging and release.
+- Domain-owned contracts now live in `crates/lan_audio_domain`.
+- Desktop and Android runtime status consume the shared `service snapshot` contract, including `active_data_plane` and `rollback_available`.
+- Current conclusion is `continue_fixing`; do not run `scripts/package_release.ps1` or `scripts/release.ps1` expecting a publishable build yet.
 
 ## What It Does
 
 - Streams audio from Windows to Android over LAN.
+- Supports USB mode via `adb reverse` (Android localhost WebSocket + Android localhost TCP data stream).
 - Supports Windows system audio capture (`windows_loopback`) and a built-in test tone (`synthetic`).
 - Provides an Android client with discovery, manual connection, recent servers, background playback, and bilingual UI.
 - Provides a Windows desktop client plus `desktop_headless` for debugging.
@@ -17,7 +25,7 @@ Mainline target: `1.2`
 
 ## Current Release Focus
 
-Release `1.1` is the last safe-path release. Current mainline work for `1.2` is focused on:
+Release `1.3` closes Phase 1/2 acceptance execution. Current mainline work for `1.4` is focused on:
 
 - Android app size reduction with release shrink and split-per-ABI APKs.
 - Android background playback and controlled auto reconnect.
@@ -27,7 +35,7 @@ Release `1.1` is the last safe-path release. Current mainline work for `1.2` is 
 
 ## Current Stability
 
-Current conclusion: **the recommended V2 + Opus path is code-complete and synthetic-stress validated, but Android real-device latency revalidation is still pending before release**.
+Current conclusion: **the recommended V2 + Opus path remains available, but v1.3 acceptance metrics did not meet the strict latency/underrun targets yet**.
 
 Validated so far:
 
@@ -45,6 +53,25 @@ Still pending for release sign-off:
 - balanced-mode end-to-end latency confirmation on device
 - long-duration, multi-device stability
 - USB low-latency validation
+
+v1.3 acceptance execution (`2026-04-21`, device `5391d451 / Xiaomi 24129PN74C`):
+
+- Scenario A (Wi-Fi, `cargo run -p lan_audio_server --bin desktop_headless`):
+  - `balanced` 10min marker: `buffered_ms=80` at t0, `buffered_ms=220` at t10m; `jitter_underrun` rose `0 -> 3`; `silence_fill_count=0`; `audio_track_reported_latency_ms=289`.
+  - `low_latency` 5min marker: `buffered_ms=120` at t0 and t5m; `jitter_underrun` rose `3 -> 21`; `silence_fill_count=0`; `audio_track_reported_latency_ms=289`.
+  - Criteria check: `underrun=0` not met, `low_latency buffered_ms < 40ms` not met.
+- Scenario B (USB, `--transport usb --adb-serial 5391d451`):
+  - marker t0: `tcp_rtt_ms=1`, `buffered_ms=180`, `jitter_underrun=0`, `silence_fill_count=0`.
+  - marker t5m: `tcp_rtt_ms=3`, `buffered_ms=140`, `jitter_underrun=7`, `silence_fill_count=0`.
+  - periodic range: `tcp_rtt_ms min/max = 1/65`, `buffered_ms min/max = 0/220`.
+  - Criteria check: `RTT < 5ms` and `buffered_ms < 20ms` not consistently met; no disconnect error line observed.
+- Scenario C (multi-device): skipped by release instruction for this round.
+
+Latest implementation status (`2026-04-21`):
+
+- Phase 2 (USB transport): implemented in code (`transport_mode=usb`, adb device listing, reverse setup/teardown, Android USB entry, TCP length-prefixed data path).
+- Phase 4 (multi-client broadcast): implemented in code (`MAX_CLIENTS=8`, client registry, per-client mode state, `client_list/client_joined/client_left`).
+- Local CI-equivalent validation is green; Android real-device USB and multi-device end-to-end listening remain in unified acceptance scope.
 
 ## Architecture
 
@@ -82,11 +109,14 @@ Additional validation paths:
 Protocol v2 currently provides:
 
 - `hello / hello_ack`
+- `hello_ack.transport_type` (`wifi` / `usb`) for transport-aware playback tuning
 - capabilities negotiation
 - `set_audio_mode / audio_mode_changed`
 - mode profile synchronization
 - `config_changed / discontinuity` handling points
 - `LAS1 / LAV2` packet recognition on the client side
+- server-side `DataPlane` abstraction for `legacy_las1`, `v2_header`, and `usb_direct`
+- runtime snapshot visibility for configured `data_plane` vs active `active_data_plane`
 
 ## Audio Modes
 
@@ -120,9 +150,9 @@ Real-device validation on `2026-04-21`:
 
 ## Build Artifacts
 
-GitHub Release `v1.1` is expected to contain:
+GitHub Release `v1.3` is expected to contain:
 
-- Windows: `lan-audio-desktop-v1.1.exe`
+- Windows: `lan-audio-desktop-v1.3.exe`
 - Android release APKs split by ABI:
   - `arm64-v8a`
   - `armeabi-v7a`
@@ -147,6 +177,12 @@ Recommended system audio capture:
 
 ```powershell
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
+```
+
+USB transport mode (adb reverse, Android localhost control/data):
+
+```powershell
+cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-serial <serial> --audio-source windows_loopback
 ```
 
 Rollback-safe legacy path:
@@ -204,6 +240,8 @@ Outputs:
 - `dist/release/SHA256SUMS.txt`
 
 ## Release Process
+
+Release is currently frozen for the rewrite track. The local and CI release entries now fail fast unless `artifacts/release/acceptance_gate.json` says `allow_release`.
 
 Version source: `VERSION`
 

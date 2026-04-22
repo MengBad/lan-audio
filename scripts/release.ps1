@@ -26,6 +26,8 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $repoRoot
 
 try {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
+
     if (-not $AllowDirty) {
         $dirty = git status --porcelain
         if ($dirty) {

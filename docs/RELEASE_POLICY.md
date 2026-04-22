@@ -1,31 +1,32 @@
-# Release Policy
+﻿# Release Policy
 
-## 当前版本
+## Rewrite Freeze (`2026-04-22`)
 
-- 当前版本（短版本）：`1.1`
-- 版本唯一来源：仓库根目录 `VERSION`
+- Release is frozen until `artifacts/release/acceptance_gate.json` changes from `continue_fixing` to `allow_release`.
+- `scripts/package_release.ps1`, `scripts/release.ps1`, and `.github/workflows/release.yml` now fail fast on any missing field or failed threshold in that gate file.
+- `scripts/package_release.ps1` may build artifacts once all non-artifact gate fields pass, and it is responsible for flipping the local artifact presence flags plus `release_decision` after a successful package run.
+- The maintained main-path target remains `windows_loopback + v2_header + opus`.
+- The maintained rollback path remains `legacy_las1 + pcm16`.
+- `rollback_verified` now depends on `desktop_headless --force-rollback` producing `artifacts/validate/rollback_evidence.json` with `active_data_plane=legacy_las1` and `codec=pcm16`.
+- Current repo decision is `continue_fixing`, not release-ready.
 
-说明：
+## 褰撳墠鐗堟湰
 
-- `VERSION` 使用 `major.minor`（如 `1.0`、`1.1`）。
-- 需要写入需要语义化版本号的工程文件时，映射为 `major.minor.0`（如 `1.1.0`）。
-- Android `versionCode` 使用 `2000 + major * 100 + minor`，例如 `1.1 -> 2101`。该规则用于兼容早期真机测试包 `2100`，避免正式 APK 被系统判定为 downgrade。
+- 褰撳墠鐗堟湰锛堢煭鐗堟湰锛夛細`1.3`
+- 鐗堟湰鍞竴鏉ユ簮锛氫粨搴撴牴鐩綍 `VERSION`
 
-## 发布前提
+璇存槑锛?
+- `VERSION` 浣跨敤 `major.minor`锛堝 `1.0`銆乣1.1`锛夈€?- 闇€瑕佸啓鍏ラ渶瑕佽涔夊寲鐗堟湰鍙风殑宸ョ▼鏂囦欢鏃讹紝鏄犲皠涓?`major.minor.0`锛堝 `1.1.0`锛夈€?- Android `versionCode` 浣跨敤 `2000 + major * 100 + minor`锛屼緥濡?`1.1 -> 2101`銆傝瑙勫垯鐢ㄤ簬鍏煎鏃╂湡鐪熸満娴嬭瘯鍖?`2100`锛岄伩鍏嶆寮?APK 琚郴缁熷垽瀹氫负 downgrade銆?
+## 鍙戝竷鍓嶆彁
 
-以下条件必须全部满足：
+浠ヤ笅鏉′欢蹇呴』鍏ㄩ儴婊¤冻锛?
+1. 鏈疆鐩爣宸插畬鎴愬埌鍙氦浠樼姸鎬?2. 鏈湴楠岃瘉閫氳繃锛屾垨澶辫触椤瑰凡鏄庣‘涓斾笉褰卞搷鍙戝竷
+3. 褰撳墠鍒嗘敮鏃犳槑鏄鹃樆濉為棶棰?4. 鍏抽敭鏂囨。宸插悓姝ワ紙README銆乼odo銆乸rotocol銆乵igration锛?5. 淇濈暀鍙洖婊氳矾寰?
+## 鏈湴楠岃瘉鏍囧噯
 
-1. 本轮目标已完成到可交付状态
-2. 本地验证通过，或失败项已明确且不影响发布
-3. 当前分支无明显阻塞问题
-4. 关键文档已同步（README、todo、protocol、migration）
-5. 保留可回滚路径
+缁熶竴鎵ц锛歚scripts/validate_local.ps1`
 
-## 本地验证标准
-
-统一执行：`scripts/validate_local.ps1`
-
-该脚本会按顺序执行：
+璇ヨ剼鏈細鎸夐『搴忔墽琛岋細
 
 1. `cargo fmt --all -- --check`
 2. `cargo check`
@@ -35,76 +36,53 @@
 6. `flutter test`
 7. `android/gradlew.bat assembleDebug`
 
-## 版本递增规则
+## 鐗堟湰閫掑瑙勫垯
 
-统一通过 `scripts/bump_version.ps1` 执行，禁止手工多处改版本。
+缁熶竴閫氳繃 `scripts/bump_version.ps1` 鎵ц锛岀姝㈡墜宸ュ澶勬敼鐗堟湰銆?
+榛樿琛屼负锛?
+- 涓嶅甫鍙傛暟鏃讹細minor +1锛坄1.0 -> 1.1`锛?- 鍙樉寮忔寚瀹氾細`-Version 1.2`
 
-默认行为：
-
-- 不带参数时：minor +1（`1.0 -> 1.1`）
-- 可显式指定：`-Version 1.2`
-
-同步目标：
-
+鍚屾鐩爣锛?
 - `VERSION`
-- `Cargo.toml`（workspace.version）
-- `apps/desktop/src-tauri/Cargo.toml`
+- `Cargo.toml`锛坵orkspace.version锛?- `apps/desktop/src-tauri/Cargo.toml`
 - `apps/desktop/src-tauri/tauri.conf.json`
 - `apps/android_flutter/pubspec.yaml`
 - `apps/android_flutter/android/local.properties`
-- `README.md`（自动化版本段）
-- `docs/todo.md`（自动化版本段）
-- `docs/RELEASE_POLICY.md`（当前版本段）
+- `README.md`锛堣嚜鍔ㄥ寲鐗堟湰娈碉級
+- `docs/todo.md`锛堣嚜鍔ㄥ寲鐗堟湰娈碉級
+- `docs/RELEASE_POLICY.md`锛堝綋鍓嶇増鏈锛?
+## 鍙戝竷娴佺▼锛堢粺涓€鍏ュ彛锛?
+鎺ㄨ崘鍏ュ彛锛歚scripts/release.ps1`
 
-## 发布流程（统一入口）
+娴佺▼锛?
+1. 妫€鏌?Git 宸ヤ綔鍖虹姸鎬侊紙榛樿涓嶅厑璁歌剰宸ヤ綔鍖猴級
+2. 鎵ц鏈湴楠岃瘉锛堥粯璁ゆ墽琛岋級
+3. 鎵ц鐗堟湰閫掑骞跺悓姝?4. 鎵ц `scripts/package_release.ps1` 鐢熸垚鏈湴 release 浜х墿
+5. 鐢熸垚 release commit锛坄chore(release): vX.Y`锛?6. 鍒涘缓 tag锛坄vX.Y`锛?7. 鎺ㄩ€佸垎鏀笌 tag
+8. 鐢?GitHub Actions 瀹屾垚 CI 涓?Release 宸ヤ綔娴?
+鏈湴鎵撳寘鍏ュ彛锛歚scripts/package_release.ps1`
 
-推荐入口：`scripts/release.ps1`
+榛樿浜х墿锛?
+- Android锛歚dist/release/android/`锛屾寜 ABI 鎷嗗垎鐨?release APK锛岀敤浜庨檷浣庡崟鍖呬綋绉?- Windows锛歚dist/release/windows/lan-audio-desktop-<version>.exe`
+- 鏍￠獙锛歚dist/release/SHA256SUMS.txt`
 
-流程：
+## GitHub Actions 绛栫暐
 
-1. 检查 Git 工作区状态（默认不允许脏工作区）
-2. 执行本地验证（默认执行）
-3. 执行版本递增并同步
-4. 执行 `scripts/package_release.ps1` 生成本地 release 产物
-5. 生成 release commit（`chore(release): vX.Y`）
-6. 创建 tag（`vX.Y`）
-7. 推送分支与 tag
-8. 由 GitHub Actions 完成 CI 与 Release 工作流
+- `ci.yml`锛氱粺涓€ CI锛圧ust + Flutter + Android锛?- `build-android.yml`锛氭瀯寤?debug APK 涓?split-per-ABI release APK
+- `build-windows-client.yml`锛氬彧鏋勫缓 Windows release exe锛屼笉鍐嶆瀯寤?MSI/NSIS
+- `release.yml`锛氬熀浜?tag锛坄v*`锛夋瀯寤?release APK / Windows exe锛屽苟鍒涘缓 GitHub Release 鑽夌
 
-本地打包入口：`scripts/package_release.ps1`
+鍙戝竷鍘熷垯锛?
+- 涓嶅厑璁歌烦杩?CI 鐩存帴鍙戝竷銆?- 鑻?CI 澶辫触锛孯elease 缁存寔鑽夌鎴栦笉鍙戝竷锛岄渶鍏堜慨澶嶃€?
+## 鍥炴粴绛栫暐
 
-默认产物：
+鍙戝竷鍚庡彂鐜板紓甯告椂锛屼紭鍏堟寜浠ヤ笅璺緞鍥炴粴锛?
+1. 鏁版嵁闈㈠洖婊氬埌 `legacy_las1`
+2. 淇濈暀 `synthetic + v2_header` 浣滀负蹇€熼獙璇佽矾寰?3. 蹇呰鏃跺洖閫€鍒颁笂涓€涓?tag 鐗堟湰
 
-- Android：`dist/release/android/`，按 ABI 拆分的 release APK，用于降低单包体积
-- Windows：`dist/release/windows/lan-audio-desktop-<version>.exe`
-- 校验：`dist/release/SHA256SUMS.txt`
+## 鍙戝竷璁板綍瑕佹眰
 
-## GitHub Actions 策略
+Release notes 鑷冲皯鍖呭惈锛?
+- Protocol v2 褰撳墠闃舵
+- 榛樿涓昏矾寰?- 宸查獙璇佽寖鍥?/ 鏈獙璇佽寖鍥?- 涓昏椋庨櫓涓庡凡鐭ラ檺鍒?- 鍥炴粴鏂瑰紡
 
-- `ci.yml`：统一 CI（Rust + Flutter + Android）
-- `build-android.yml`：构建 debug APK 与 split-per-ABI release APK
-- `build-windows-client.yml`：只构建 Windows release exe，不再构建 MSI/NSIS
-- `release.yml`：基于 tag（`v*`）构建 release APK / Windows exe，并创建 GitHub Release 草稿
-
-发布原则：
-
-- 不允许跳过 CI 直接发布。
-- 若 CI 失败，Release 维持草稿或不发布，需先修复。
-
-## 回滚策略
-
-发布后发现异常时，优先按以下路径回滚：
-
-1. 数据面回滚到 `legacy_las1`
-2. 保留 `synthetic + v2_header` 作为快速验证路径
-3. 必要时回退到上一个 tag 版本
-
-## 发布记录要求
-
-Release notes 至少包含：
-
-- Protocol v2 当前阶段
-- 默认主路径
-- 已验证范围 / 未验证范围
-- 主要风险与已知限制
-- 回滚方式

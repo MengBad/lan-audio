@@ -34,11 +34,138 @@ function Copy-Artifact {
     Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
+function Get-ReleaseGate {
+    param(
+        [Parameter(Mandatory = $true)][string]$GatePath
+    )
+
+    if (-not (Test-Path $GatePath)) {
+        throw "Release gate missing: $GatePath"
+    }
+
+    return Get-Content -Raw $GatePath | ConvertFrom-Json
+}
+
+function Assert-PackagingGate {
+    param(
+        [Parameter(Mandatory = $true)][string]$GatePath
+    )
+
+    $gate = Get-ReleaseGate -GatePath $GatePath
+    $requiredFields = @(
+        'contract_version',
+        'release_decision',
+        'current_main_path',
+        'rollback_path',
+        'validate_local_passed',
+        'rewrite_validate_passed',
+        'device_acceptance_passed',
+        'acceptance_json_present',
+        'rollback_verified',
+        'android_release_apk_present',
+        'windows_exe_present',
+        'known_blockers',
+        'critical_bugs',
+        'blocking_failure_codes'
+    )
+
+    foreach ($field in $requiredFields) {
+        if ($null -eq $gate.$field) {
+            throw "Release gate missing required field: $field"
+        }
+    }
+
+    foreach ($pathField in @('current_main_path', 'rollback_path')) {
+        $pathValue = $gate.$pathField
+        if ($null -eq $pathValue) {
+            throw "Release gate missing required object: $pathField"
+        }
+        foreach ($nested in @('transport', 'mode', 'data_plane', 'codec', 'effective_codec', 'rollback_state')) {
+            if ($null -eq $pathValue.$nested) {
+                throw "Release gate missing required field: $pathField.$nested"
+            }
+        }
+    }
+
+    $blockingReasons = New-Object System.Collections.Generic.List[string]
+    foreach ($field in @(
+        'validate_local_passed',
+        'rewrite_validate_passed',
+        'device_acceptance_passed',
+        'acceptance_json_present',
+        'rollback_verified'
+    )) {
+        if (-not [bool]$gate.$field) {
+            $blockingReasons.Add("$field=false")
+        }
+    }
+    if ([int]$gate.known_blockers -gt 0) {
+        $blockingReasons.Add("known_blockers=$($gate.known_blockers)")
+    }
+    if ([int]$gate.critical_bugs -gt 0) {
+        $blockingReasons.Add("critical_bugs=$($gate.critical_bugs)")
+    }
+
+    $nonReleaseFailureCodes = @($gate.blocking_failure_codes | Where-Object { $_ -ne 'RELEASE_GATE_BLOCKED' })
+    if ($nonReleaseFailureCodes.Count -gt 0) {
+        $blockingReasons.Add("blocking_failure_codes=$($nonReleaseFailureCodes -join ',')")
+    }
+
+    if ($blockingReasons.Count -gt 0) {
+        throw "Packaging gate blocked: $($blockingReasons -join '; ')"
+    }
+}
+
+function Update-ReleaseGateForArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$GatePath,
+        [Parameter(Mandatory = $true)][string]$AndroidDist,
+        [Parameter(Mandatory = $true)][string]$WindowsDist
+    )
+
+    $gate = Get-ReleaseGate -GatePath $GatePath
+
+    $androidArtifacts = @(Get-ChildItem -LiteralPath $AndroidDist -Filter '*.apk' -File -ErrorAction SilentlyContinue)
+    $windowsArtifacts = @(Get-ChildItem -LiteralPath $WindowsDist -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+
+    $gate.android_release_apk_present = $androidArtifacts.Count -gt 0
+    $gate.windows_exe_present = $windowsArtifacts.Count -gt 0
+
+    $blockingCodes = @($gate.blocking_failure_codes | Where-Object { $_ -ne 'RELEASE_GATE_BLOCKED' })
+    if (-not $gate.android_release_apk_present -or -not $gate.windows_exe_present) {
+        $blockingCodes += 'RELEASE_GATE_BLOCKED'
+    }
+
+    $gate.blocking_failure_codes = @($blockingCodes | Select-Object -Unique)
+    if (
+        [bool]$gate.validate_local_passed -and
+        [bool]$gate.rewrite_validate_passed -and
+        [bool]$gate.device_acceptance_passed -and
+        [bool]$gate.acceptance_json_present -and
+        [bool]$gate.rollback_verified -and
+        [bool]$gate.android_release_apk_present -and
+        [bool]$gate.windows_exe_present -and
+        ([int]$gate.known_blockers -eq 0) -and
+        ([int]$gate.critical_bugs -eq 0) -and
+        ($gate.blocking_failure_codes.Count -eq 0)
+    ) {
+        $gate.release_decision = 'allow_release'
+    } else {
+        $gate.release_decision = 'continue_fixing'
+    }
+
+    $gateJson = $gate | ConvertTo-Json -Depth 8
+    Set-Content -LiteralPath $GatePath -Value $gateJson -Encoding utf8
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
 if ($version -notmatch '^\d+\.\d+$') {
     throw "Unexpected VERSION value: $version"
 }
+
+$gatePath = Join-Path $repoRoot 'artifacts/release/acceptance_gate.json'
+Assert-PackagingGate -GatePath $gatePath
 
 $distRoot = Join-Path $repoRoot 'dist/release'
 $androidDist = Join-Path $distRoot 'android'
@@ -113,6 +240,8 @@ try {
         $exeTarget = Join-Path $windowsDist "lan-audio-desktop-$version.exe"
         Copy-Artifact -Source $exeSource -Destination $exeTarget
     }
+
+    Update-ReleaseGateForArtifacts -GatePath $gatePath -AndroidDist $androidDist -WindowsDist $windowsDist
 
     $checksumsPath = Join-Path $distRoot 'SHA256SUMS.txt'
     Get-ChildItem -LiteralPath $distRoot -Recurse -File |

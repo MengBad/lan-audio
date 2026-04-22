@@ -58,6 +58,8 @@ class PlaybackForegroundService : MediaSessionService() {
                 val udpPort = intent.getIntExtra(PlaybackActions.EXTRA_UDP_PORT, 39992)
                 val serverName =
                     intent.getStringExtra(PlaybackActions.EXTRA_SERVER_NAME) ?: "manual:$host"
+                val transportMode =
+                    intent.getStringExtra(PlaybackActions.EXTRA_TRANSPORT_MODE) ?: "wifi"
                 if (host.isBlank()) {
                     Log.w(logTag, "startPlayback rejected: empty host")
                     stateStore.update {
@@ -71,15 +73,16 @@ class PlaybackForegroundService : MediaSessionService() {
                     }
                 } else {
                     explicitStopRequested = false
-                    persistTarget(host, wsPort, udpPort, serverName)
+                    persistTarget(host, wsPort, udpPort, serverName, transportMode)
                     acquirePlaybackLocks()
-                    Log.i(logTag, "startPlayback target=$serverName host=$host ws=$wsPort udp=$udpPort")
+                    Log.i(logTag, "startPlayback target=$serverName host=$host ws=$wsPort udp=$udpPort transport=$transportMode")
                     sessionController.startPlayback(
                         PlaybackTarget(
                             host = host,
                             wsPort = wsPort,
                             udpPort = udpPort,
                             serverName = serverName,
+                            transportMode = transportMode,
                         ),
                     )
                 }
@@ -328,13 +331,20 @@ class PlaybackForegroundService : MediaSessionService() {
         Log.i(logTag, "playback locks released")
     }
 
-    private fun persistTarget(host: String, wsPort: Int, udpPort: Int, serverName: String) {
+    private fun persistTarget(
+        host: String,
+        wsPort: Int,
+        udpPort: Int,
+        serverName: String,
+        transportMode: String,
+    ) {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_HOST, host)
             .putInt(KEY_WS_PORT, wsPort)
             .putInt(KEY_UDP_PORT, udpPort)
             .putString(KEY_SERVER_NAME, serverName)
+            .putString(KEY_TRANSPORT_MODE, transportMode)
             .putBoolean(KEY_AUTO_RESTORE, true)
             .apply()
     }
@@ -364,6 +374,7 @@ class PlaybackForegroundService : MediaSessionService() {
             wsPort = prefs.getInt(KEY_WS_PORT, 39991),
             udpPort = prefs.getInt(KEY_UDP_PORT, 39992),
             serverName = prefs.getString(KEY_SERVER_NAME, null) ?: "manual:$host",
+            transportMode = prefs.getString(KEY_TRANSPORT_MODE, "wifi") ?: "wifi",
         )
         Log.i(logTag, "restore persisted playback reason=$reason target=${target.serverName} host=${target.host}")
         sessionController.startPlayback(target)
@@ -421,6 +432,7 @@ class PlaybackForegroundService : MediaSessionService() {
         private const val KEY_WS_PORT = "ws_port"
         private const val KEY_UDP_PORT = "udp_port"
         private const val KEY_SERVER_NAME = "server_name"
+        private const val KEY_TRANSPORT_MODE = "transport_mode"
         private const val KEY_AUTO_RESTORE = "auto_restore"
 
         fun startPlayback(context: Context, target: PlaybackTarget) {
@@ -430,6 +442,7 @@ class PlaybackForegroundService : MediaSessionService() {
                 .putExtra(PlaybackActions.EXTRA_WS_PORT, target.wsPort)
                 .putExtra(PlaybackActions.EXTRA_UDP_PORT, target.udpPort)
                 .putExtra(PlaybackActions.EXTRA_SERVER_NAME, target.serverName)
+                .putExtra(PlaybackActions.EXTRA_TRANSPORT_MODE, target.transportMode)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {

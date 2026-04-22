@@ -180,6 +180,7 @@ async fn main() -> anyhow::Result<()> {
                         serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::LowLatency,
                             reason: "mock_validation".to_string(),
+                            preferred_sample_rate: Some(48_000),
                         }))?
                         .into(),
                     ))
@@ -191,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
                         serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::HighQuality,
                             reason: "mock_validation".to_string(),
+                            preferred_sample_rate: Some(48_000),
                         }))?
                         .into(),
                     ))
@@ -202,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
                         serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::Balanced,
                             reason: "mock_validation".to_string(),
+                            preferred_sample_rate: Some(48_000),
                         }))?
                         .into(),
                     ))

@@ -6,6 +6,22 @@ Windows desktop is the primary user entry for starting and controlling the LAN a
 
 The desktop app should feel like an audio streaming console, not a developer panel.
 
+Phase 0 / Phase 1 update:
+
+- Runtime status panels should consume the shared `service snapshot` contract only.
+- The runtime snapshot field set is now:
+  - `transport`
+  - `mode`
+  - `data_plane`
+  - `active_data_plane`
+  - `rollback_available`
+  - `codec`
+  - `effective_codec`
+  - `state`
+  - `rollback_state`
+  - `metrics.{buffered_ms, underrun, late_packets, dropped_packets, rtt_ms, reconnect_count, decode_errors, sink_write_gap_ms_p95}`
+- Service controls, local address, adb device listing, and similar management data stay outside the runtime snapshot contract.
+
 ## First Screen
 
 The first screen keeps four pieces of information visible:
@@ -46,7 +62,8 @@ Restart and debug actions must stay secondary.
 - Local address: runtime IPv4 detection
 - Audio mode: Protocol v2 `current_audio_mode`, synchronized through `set_audio_mode/audio_mode_changed`
 - Mode strategy: `AudioModeProfile` summary, including start/max buffer and batch size
-- Data plane: `legacy_las1` or `v2_header`
+- Data plane: configured packet format (`legacy_las1` or `v2_header`)
+- Active data plane: actual runtime path (`legacy_las1`, `v2_header`, or `usb_direct`)
 - Codec: requested codec and effective codec; Opus is the recommended default on `v2_header`, with PCM16 as rollback
 - Rollback state: recommended path vs safe rollback path must stay explicit and visible
 - Recommended connection: Wi-Fi by default, USB tethering for lower latency testing
