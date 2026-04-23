@@ -154,6 +154,7 @@ class _DebugPageState extends State<DebugPage> {
   String _playbackBackend = 'audiotrack_stable';
   String _effectiveCodec = 'pcm16';
   bool _experimentalPath = false;
+  bool _updateCheckRunning = false;
 
   @override
   void initState() {
@@ -179,6 +180,7 @@ class _DebugPageState extends State<DebugPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowFirstUseHint();
     });
+    _scheduleSilentUpdateCheck();
   }
 
   bool get _isZh => _lang == AppLang.zh;
@@ -215,6 +217,64 @@ class _DebugPageState extends State<DebugPage> {
         return tr('高音质', 'High Quality');
       case AudioModePreference.balanced:
         return tr('平衡', 'Balanced');
+    }
+  }
+
+  void _scheduleSilentUpdateCheck() {
+    _checkForUpdate(silentDelayMs: 5000, showNoUpdateHint: false);
+  }
+
+  Future<void> _checkForUpdate({
+    required int silentDelayMs,
+    required bool showNoUpdateHint,
+  }) async {
+    if (_updateCheckRunning) return;
+    _updateCheckRunning = true;
+    try {
+      final update =
+          await _platformChannel.invokeMapMethod<String, dynamic>(
+        'checkForAppUpdate',
+        {'delayMs': silentDelayMs},
+      );
+      if (!mounted) return;
+      if (update == null) {
+        if (showNoUpdateHint) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(tr('当前已是最新版本', 'Already up to date'))),
+          );
+        }
+        return;
+      }
+      final version = (update['latestVersion'] as String?) ?? '';
+      final releaseUrl = (update['releaseUrl'] as String?) ?? '';
+      if (version.isEmpty || releaseUrl.isEmpty) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr('发现新版本 v$version', 'New version v$version is available'),
+          ),
+          action: SnackBarAction(
+            label: tr('前往下载', 'Open'),
+            onPressed: () {
+              _openExternalUrl(releaseUrl);
+            },
+          ),
+        ),
+      );
+    } catch (_) {
+      // silent ignore
+    } finally {
+      _updateCheckRunning = false;
+    }
+  }
+
+  Future<void> _openExternalUrl(String url) async {
+    try {
+      await _platformChannel.invokeMethod('openExternalUrl', {'url': url});
+    } catch (_) {
+      // silent ignore
     }
   }
 
@@ -1546,6 +1606,44 @@ class _DebugPageState extends State<DebugPage> {
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          tr('设置', 'Settings'),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          tr('应用更新', 'App update'),
+                          style: const TextStyle(color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  OutlinedButton(
+                    onPressed: _updateCheckRunning
+                        ? null
+                        : () => _checkForUpdate(
+                              silentDelayMs: 0,
+                              showNoUpdateHint: true,
+                            ),
+                    child: Text(tr('检查更新', 'Check Update')),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 10),

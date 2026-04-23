@@ -16,8 +16,9 @@ anyhow = "1"
 lan_audio_protocol = { path = "../../../crates/lan_audio_protocol" }
 lan_audio_server = { path = "../../../crates/lan_audio_server" }
 serde = { version = "1", features = ["derive"] }
-tauri = { version = "2", features = [] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
-
-[dev-dependencies]
 serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = "1"
+open = "5"

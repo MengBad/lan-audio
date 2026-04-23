@@ -1,5 +1,6 @@
 package com.example.lan_audio_android_mvp
 
+import android.os.SystemClock
 import java.util.TreeMap
 
 data class PcmFrame(
@@ -27,6 +28,7 @@ class PlaybackJitterBuffer(
     private var playoutStarted = false
     private var expectedSequence: Int? = null
     private var frameDurationMs = 10
+    private var overflowSinceMs: Long = 0
 
     val stats = JitterStats()
 
@@ -36,6 +38,7 @@ class PlaybackJitterBuffer(
         playoutStarted = false
         expectedSequence = null
         frameDurationMs = 10
+        overflowSinceMs = 0
         stats.bufferedFrames = 0
         stats.underrunCount = 0
         stats.droppedFrames = 0
@@ -191,17 +194,33 @@ class PlaybackJitterBuffer(
     private fun trimLatencyTailIfNeeded() {
         val thresholdFrames = kotlin.math.ceil(dropThresholdMs / frameDurationMs.toDouble()).toInt()
             .coerceAtLeast(1)
-        val targetFrames = kotlin.math.ceil(startBufferMs / frameDurationMs.toDouble()).toInt()
-            .coerceAtLeast(1)
         if (frames.size <= thresholdFrames) {
+            overflowSinceMs = 0
             return
         }
-        while (frames.size > targetFrames) {
+        val now = SystemClock.elapsedRealtime()
+        if (overflowSinceMs == 0L) {
+            overflowSinceMs = now
+            return
+        }
+        if (now - overflowSinceMs < TRIM_OBSERVE_WINDOW_MS) {
+            return
+        }
+        while (frames.size > thresholdFrames) {
             frames.pollFirstEntry()
             stats.droppedFrames += 1
         }
-        playoutStarted = false
-        expectedSequence = frames.firstEntry()?.key
+        overflowSinceMs = 0
+        val oldest = frames.firstEntry()?.key
+        val expected = expectedSequence
+        if (oldest == null) {
+            playoutStarted = false
+            expectedSequence = null
+            return
+        }
+        if (expected == null || isOlder(expected, oldest)) {
+            expectedSequence = oldest
+        }
     }
 
     private fun compareSeq(a: Int, b: Int): Int {
@@ -221,5 +240,6 @@ class PlaybackJitterBuffer(
 
     private companion object {
         private const val HARD_FLOOR_MS = 8
+        private const val TRIM_OBSERVE_WINDOW_MS = 250L
     }
 }

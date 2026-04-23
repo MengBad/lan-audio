@@ -2,6 +2,7 @@ package com.example.lan_audio_android_mvp
 
 object PlaybackActions {
     const val ACTION_START = "lan_audio.action.START"
+    const val ACTION_PLAY_PAUSE = "lan_audio.action.PLAY_PAUSE"
     const val ACTION_STOP = "lan_audio.action.STOP"
     const val ACTION_RECONNECT = "lan_audio.action.RECONNECT"
     const val ACTION_RESTORE_LAST = "lan_audio.action.RESTORE_LAST"
@@ -35,15 +36,15 @@ data class PlaybackTarget(
 )
 
 data class PlaybackOptions(
-    val startBufferMs: Int = 60,
-    val maxBufferMs: Int = 300,
+    val startBufferMs: Int = 80,
+    val maxBufferMs: Int = 180,
     val batchFrames: Int = 2,
-    val dropThresholdMs: Int = 220,
+    val dropThresholdMs: Int = 160,
     // Total latency budget across jitter buffer + AudioTrack queue.
-    val targetTotalLatencyMs: Int = 140,
-    val maxTotalLatencyMs: Int = 220,
-    val audioQueueSoftCapMs: Int = 100,
-    val bufferingEnterDelayMs: Int = 220,
+    val targetTotalLatencyMs: Int = 120,
+    val maxTotalLatencyMs: Int = 150,
+    val audioQueueSoftCapMs: Int = 90,
+    val bufferingEnterDelayMs: Int = 180,
     val preferLowLatencyPath: Boolean = false,
     val preferStableAudioTrack: Boolean = true,
     val preferredCodec: String = "pcm16",
@@ -150,14 +151,14 @@ object PlaybackModeProfiles {
             else -> PlaybackModeProfile(
                 mode = "balanced",
                 transportHint = transportHint,
-                startBufferMs = 60,
-                maxBufferMs = 300,
+                startBufferMs = 80,
+                maxBufferMs = 180,
                 batchFrames = 2,
-                dropThresholdMs = 220,
-                targetTotalLatencyMs = 220,
-                maxTotalLatencyMs = 300,
-                audioQueueSoftCapMs = 120,
-                bufferingEnterDelayMs = 280,
+                dropThresholdMs = 160,
+                targetTotalLatencyMs = 120,
+                maxTotalLatencyMs = 150,
+                audioQueueSoftCapMs = 90,
+                bufferingEnterDelayMs = 180,
                 preferLowLatencyPath = false,
                 preferStableAudioTrack = true,
                 preferredCodec = "pcm16",
@@ -231,6 +232,7 @@ data class PlaybackMetrics(
     val audioTrackWriteFrames: Long = 0,
     val audioTrackShortWriteCount: Long = 0,
     val silenceFillCount: Int = 0,
+    val startupSilenceFillCount: Int = 0,
     val rxFramesPerSec: Double = 0.0,
     val audioTrackWriteFramesPerSec: Double = 0.0,
     val cfgChangedCount: Int = 0,
@@ -330,6 +332,7 @@ data class PlaybackSnapshot(
                 "audioTrackWriteFrames" to metrics.audioTrackWriteFrames,
                 "audioTrackShortWriteCount" to metrics.audioTrackShortWriteCount,
                 "silenceFillCount" to metrics.silenceFillCount,
+                "startupSilenceFillCount" to metrics.startupSilenceFillCount,
                 "rxFramesPerSec" to metrics.rxFramesPerSec,
                 "audioTrackWriteFramesPerSec" to metrics.audioTrackWriteFramesPerSec,
                 "cfgChangedCount" to metrics.cfgChangedCount,
@@ -366,6 +369,7 @@ data class StableServiceMetrics(
     val udpBytes: Int = 0,
     val lossEstimate: Int = 0,
     val lastSeq: Long? = null,
+    val startupSilenceFillCount: Int = 0,
     val jitterP95Ms: Int? = null,
     val floorHoldCount: Int = 0,
 )
@@ -427,6 +431,7 @@ data class StableServiceSnapshot(
                 "udp_bytes" to metrics.udpBytes,
                 "loss_estimate" to metrics.lossEstimate,
                 "last_seq" to metrics.lastSeq,
+                "startup_silence_fill_count" to metrics.startupSilenceFillCount,
                 "jitter_p95_ms" to metrics.jitterP95Ms,
                 "floor_hold_count" to metrics.floorHoldCount,
             ),
@@ -516,6 +521,7 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             udpBytes = metrics.udpBytes,
             lossEstimate = metrics.lossEstimate,
             lastSeq = metrics.lastSeq,
+            startupSilenceFillCount = metrics.startupSilenceFillCount,
             jitterP95Ms = metrics.jitterP95Ms,
             floorHoldCount = metrics.floorHoldCount,
         ),

@@ -1,7 +1,13 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod update_checker;
 
 use lan_audio_protocol::{
     audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeProfile, ConnectionState,
@@ -17,9 +23,12 @@ use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use lan_audio_server::usb_transport::adb_devices;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::menu::MenuBuilder;
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
+use update_checker::UpdateInfo;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -120,6 +129,7 @@ struct DesktopSnapshot {
     usb_serial: Option<String>,
     metrics: DesktopMetrics,
     logs: Vec<String>,
+    update_banner: Option<UpdateBanner>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +192,24 @@ struct AppState {
     runtime: Arc<Runtime>,
     inner: Arc<Mutex<AppStateInner>>,
     logs: Arc<Mutex<VecDeque<String>>>,
+    update_state: Arc<Mutex<UpdateState>>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticsReport {
+    exported_at_unix_seconds: u64,
+    snapshot: DesktopSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UpdateBanner {
+    latest_version: String,
+    release_url: String,
+}
+
+#[derive(Debug, Default)]
+struct UpdateState {
+    available: Option<UpdateInfo>,
 }
 
 #[tauri::command]
@@ -290,6 +318,16 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .iter()
         .cloned()
         .collect::<Vec<_>>();
+    let update_banner = state
+        .update_state
+        .lock()
+        .expect("update lock")
+        .available
+        .as_ref()
+        .map(|info| UpdateBanner {
+            latest_version: info.latest_version.clone(),
+            release_url: info.release_url.clone(),
+        });
 
     DesktopSnapshot {
         service_status: status,
@@ -322,6 +360,7 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         usb_serial: cfg.transport_mode.adb_serial().map(ToOwned::to_owned),
         metrics,
         logs,
+        update_banner,
     }
 }
 
@@ -384,6 +423,47 @@ fn disable_usb_mode(state: State<'_, AppState>) -> Result<DesktopSnapshot, Strin
         start_service_impl(&state)?;
     }
     Ok(get_desktop_snapshot(state))
+}
+
+#[tauri::command]
+fn export_diagnostics_report(state: State<'_, AppState>) -> Result<String, String> {
+    let exported_at_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let snapshot = get_desktop_snapshot(state);
+    let report = DiagnosticsReport {
+        exported_at_unix_seconds,
+        snapshot,
+    };
+    let content = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+
+    let mut output_dir = PathBuf::from("dist");
+    output_dir.push("diagnostics");
+    fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+
+    let file_name = format!("desktop-diagnostics-{exported_at_unix_seconds}.json");
+    output_dir.push(file_name);
+    fs::write(&output_dir, content).map_err(|e| e.to_string())?;
+    Ok(output_dir.display().to_string())
+}
+
+#[tauri::command]
+fn check_for_updates(state: State<'_, AppState>) {
+    run_update_check(Arc::clone(&state.update_state));
+}
+
+#[tauri::command]
+fn open_release_page(state: State<'_, AppState>) -> Result<(), String> {
+    let url = state
+        .update_state
+        .lock()
+        .expect("update lock")
+        .available
+        .as_ref()
+        .map(|it| it.release_url.clone())
+        .ok_or_else(|| "no update release url".to_string())?;
+    open::that_detached(url).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -734,9 +814,45 @@ fn push_log(logs: &Arc<Mutex<VecDeque<String>>>, message: impl Into<String>) {
     }
 }
 
+fn run_update_check(update_state: Arc<Mutex<UpdateState>>) {
+    if let Some(info) = update_checker::check_update(env!("CARGO_PKG_VERSION")) {
+        let mut guard = update_state.lock().expect("update lock");
+        guard.available = Some(info);
+    }
+}
+
+fn spawn_silent_startup_update_check(app: &AppHandle, update_state: Arc<Mutex<UpdateState>>) {
+    let handle = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(5));
+        run_update_check(Arc::clone(&update_state));
+        let _ = handle.emit("update-check-finished", ());
+    });
+}
+
+fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
+    let menu = MenuBuilder::new(app)
+        .text("check_updates", "检查更新")
+        .build()?;
+
+    TrayIconBuilder::new()
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "check_updates" {
+                if let Some(state) = app.try_state::<AppState>() {
+                    run_update_check(Arc::clone(&state.update_state));
+                    let _ = app.emit("update-check-finished", ());
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 pub fn run() {
     let runtime = Arc::new(Runtime::new().expect("tokio runtime"));
     let logs = Arc::new(Mutex::new(VecDeque::new()));
+    let update_state = Arc::new(Mutex::new(UpdateState::default()));
     let inner = Arc::new(Mutex::new(AppStateInner {
         status: ServiceStatus::NotStarted,
         last_error: None,
@@ -752,6 +868,13 @@ pub fn run() {
             runtime,
             inner,
             logs,
+            update_state,
+        })
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            spawn_silent_startup_update_check(app.handle(), Arc::clone(&state.update_state));
+            setup_tray_menu(app)?;
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_desktop_snapshot,
@@ -761,7 +884,10 @@ pub fn run() {
             update_service_settings,
             list_adb_devices,
             enable_usb_mode,
-            disable_usb_mode
+            disable_usb_mode,
+            export_diagnostics_report,
+            check_for_updates,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

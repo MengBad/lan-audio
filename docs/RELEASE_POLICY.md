@@ -76,6 +76,16 @@ The release flow:
 7. pushes branch and tag
 8. lets GitHub Actions publish the GitHub Release
 
+`.github/workflows/release.yml` is intentionally tag-driven:
+
+- `push.tags` is the normal publish path after `scripts/release.ps1`
+- `workflow_dispatch` only accepts an existing tag and is meant for rebuild/re-publish scenarios
+- manual dispatch can add release-note sections for:
+  - fix summary
+  - verified scope
+  - known limitations
+- the workflow must verify `VERSION` matches the requested tag before it publishes artifacts
+
 ## Conditions To Release
 
 A release is allowed only when all of the following are true:

@@ -20,6 +20,9 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 - Switch between `low_latency`, `balanced`, and `high_quality` playback strategies
 - Keep Protocol v2 on the main path while preserving a stable legacy rollback route
 - Inspect runtime state from desktop and Android through a shared snapshot contract
+- Export desktop diagnostics snapshots as JSON for troubleshooting (`dist/diagnostics/`)
+- Desktop app can silently check GitHub Releases and show an in-window update banner (manual open only)
+- Android foreground playback notification now uses MediaStyle with MediaSession state/metadata and manual update check entry
 
 ## Current Status
 
@@ -181,6 +184,13 @@ The release pipeline is contract-gated by:
 
 - `artifacts/release/acceptance_gate.json`
 - `artifacts/release/device_acceptance.json`
+
+GitHub Actions release behavior:
+
+- `scripts/release.ps1` remains the source of version bumping and tag creation
+- `.github/workflows/release.yml` publishes builds for an existing `v<major.minor>` tag
+- manual `workflow_dispatch` is for rebuilding/publishing an existing tag with an optional fix summary, verified scope, and known limitations in the release notes
+- the workflow validates that the checked-out `VERSION` matches the requested tag before publishing
 
 GitHub Release artifacts include:
 

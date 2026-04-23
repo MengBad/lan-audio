@@ -76,6 +76,11 @@ class DebugPlaybackReceiver : BroadcastReceiver() {
                     EXTRA_DEBUG_HOST,
                 ).orEmpty()
                 if (host.isNotBlank()) {
+                    val playbackState = PlaybackEventBus.snapshotMap()["state"] as? String
+                    if (playbackState in ACTIVE_PLAYBACK_STATES) {
+                        Log.i(logTag, "debug set mode skipped auto-start because playback is already active state=$playbackState")
+                        return
+                    }
                     val wsPort = intent.intExtraOrFallback(
                         PlaybackActions.EXTRA_WS_PORT,
                         EXTRA_DEBUG_WS_PORT,
@@ -136,6 +141,13 @@ class DebugPlaybackReceiver : BroadcastReceiver() {
 
     companion object {
         private const val logTag = "lan_audio_debug"
+        private val ACTIVE_PLAYBACK_STATES = setOf(
+            "handshaking",
+            "negotiated",
+            "streaming",
+            "recovering",
+            "reconfiguring",
+        )
         const val ACTION_START_PLAYBACK = "lan_audio.debug.START_PLAYBACK"
         const val ACTION_STOP_PLAYBACK = "lan_audio.debug.STOP_PLAYBACK"
         const val ACTION_SET_AUDIO_MODE = "lan_audio.debug.SET_AUDIO_MODE"

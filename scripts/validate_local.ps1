@@ -72,7 +72,7 @@ try {
         Push-Location (Join-Path $repoRoot 'apps/android_flutter/android')
         try {
             Invoke-Step -Name 'gradlew.bat assembleDebug' -Action {
-                .\gradlew.bat assembleDebug
+                cmd /c gradlew.bat assembleDebug
             }
         }
         finally {

@@ -29,6 +29,8 @@ tmp_*.log
 _tmp_usb_server*.log
 tmp/
 tmp_retest/
+tmp_test/
+tmp_lan_audio_home.png
 
 # Generated validation artifacts
 artifacts/baseline/

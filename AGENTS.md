@@ -2,7 +2,7 @@
 
 ## 目标
 
-本仓库目标是交付一个“Windows 电脑在局域网向 Android 手机实时传音频，手机充当音响”的双端产品。
+本仓库目标是交付一个"Windows 电脑在局域网向 Android 手机实时传音频，手机充当音响"的双端产品。
 
 当前长期主线：
 
@@ -12,57 +12,61 @@
 4. Protocol v2 演进
 5. 产品化 UI 与桌面端交付
 
+当前版本目标：**v1.4**（见 `docs/roadmap-v1.4.md`）
+
 ## Codex 默认执行路径
 
 每次接到任务，默认必须按下列顺序执行，不允许只做其中一段：
 
 1. 读取规则与上下文文档
-   - `README.md`
-   - `docs/todo.md`
-   - `docs/protocol.md`
-   - `docs/protocol_v2_migration.md`
-   - `docs/desktop_ui.md`
-   - `docs/RELEASE_POLICY.md`（如存在）
+   * `README.md`
+   * `docs/todo.md`
+   * `docs/roadmap-v1.4.md`
+   * `docs/protocol.md`
+   * `docs/protocol_v2_migration.md`
+   * `docs/desktop_ui.md`
+   * `docs/RELEASE_POLICY.md`（如存在）
 2. 判断任务归属主线
-   - 稳定性 / 延迟优化 / 模式策略 / 协议演进 / UI 产品化 / 发布管理
+   * 稳定性 / 延迟优化 / 模式策略 / 协议演进 / UI 产品化 / 发布管理 / MediaSession / 更新检测
 3. 执行实现与验证
-   - 改代码
-   - 补或修测试
-   - 更新文档
-   - 运行本地检查
+   * 改代码
+   * 补或修测试
+   * 更新文档
+   * 运行本地检查
 4. 判断是否满足发布条件
-   - 若满足，按发布流程执行
-   - 若不满足，明确停在“继续灰度/继续修复”
+   * 若满足，按发布流程执行
+   * 若不满足，明确停在"继续灰度/继续修复"
 5. 需要发版时，先通过 `scripts/package_release.ps1` 生成 Android release APK 与 Windows exe
 6. 按固定格式汇报
 
 ## 当前运行与迁移原则
 
-1. 默认主路径保持安全
-   - 当前默认数据面主路径必须保持稳定路径（目前为 `legacy_las1`）
-   - 不能在证据不足时强切主路径
+1. 默认主路径保持稳定
+   * 当前默认数据面主路径：`windows_loopback + v2_header + opus`
+   * 回滚路径必须始终保留：`legacy_las1 + pcm16`
+   * 不能在证据不足时改变主路径
 2. 必须保留回滚路径
-   - `legacy_las1`
-   - `synthetic + v2_header`
-   - 协议灰度开关路径
+   * `legacy_las1 + pcm16`
+   * `synthetic + v2_header`
+   * 协议灰度开关路径
 3. Protocol v2 目标
-   - 支撑模式同步
-   - 支撑能力协商与参数重同步
-   - 为后续 Opus / 智能模式预留
-   - 以灰度替代一次性硬切
+   * 支撑模式同步
+   * 支撑能力协商与参数重同步
+   * 为后续智能模式预留
+   * 以灰度替代一次性硬切
 
 ## 每次任务必须执行的本地检查
 
 能运行就必须运行（可使用 `scripts/validate_local.ps1` 一键执行）：
 
-- `cargo fmt --all -- --check`
-- `cargo check`
-- `cargo test -p lan_audio_protocol -p lan_audio_server`
-- `cargo check -p lan_audio_desktop`
-- `flutter analyze`
-- `flutter test`
-- `android/gradlew.bat assembleDebug`
-- 发版前额外执行：`scripts/package_release.ps1`
+* `cargo fmt --all -- --check`
+* `cargo check`
+* `cargo test -p lan_audio_protocol -p lan_audio_server`
+* `cargo check -p lan_audio_desktop`
+* `flutter analyze`
+* `flutter test`
+* `android/gradlew.bat assembleDebug`
+* 发版前额外执行：`scripts/package_release.ps1`
 
 命令失败时：
 
@@ -74,20 +78,22 @@
 
 以下内容发生变化时，必须同步更新文档：
 
-- 协议状态 / 主路径 / 灰度范围
-- 默认模式或开关行为
-- 版本号
-- 回滚路径
-- 验收结论
-- 发布规则
+* 协议状态 / 主路径 / 灰度范围
+* 默认模式或开关行为
+* 版本号
+* 回滚路径
+* 验收结论
+* 发布规则
+* 新功能状态（MediaSession / 更新检测）
 
 至少同步这些文件：
 
-- `README.md`
-- `docs/todo.md`
-- `docs/protocol.md`
-- `docs/protocol_v2_migration.md`
-- `docs/RELEASE_POLICY.md`（涉及发布时）
+* `README.md`
+* `docs/todo.md`
+* `docs/roadmap-v1.4.md`（v1.4 周期内）
+* `docs/protocol.md`
+* `docs/protocol_v2_migration.md`
+* `docs/RELEASE_POLICY.md`（涉及发布时）
 
 ## 发布触发条件
 
@@ -113,31 +119,36 @@
 
 Release 说明必须包含：
 
-- 当前 Protocol v2 状态
-- 默认主路径
-- codec 状态
-- 已验证与未验证范围
-- 回滚方式
+* 当前 Protocol v2 状态
+* 默认主路径
+* codec 状态
+* 已验证与未验证范围
+* 新功能状态（MediaSession / 更新检测）
+* 回滚方式
 
 ## 版本号规则
 
-- 统一版本源：仓库根目录 `VERSION`（短版本，格式 `major.minor`，例如 `1.0`）
-- 默认递增：`1.0 -> 1.1 -> 1.2 -> ...`
-- 同步目标：
-  - Git tag / GitHub Release（`v<major.minor>`）
-  - Windows 桌面版本（Cargo / Tauri）
-  - Android 版本（pubspec + local.properties）
-  - 文档中的当前版本信息
-- Android `versionCode` 采用 `2000 + major * 100 + minor`（例如 `1.1 -> 2101`），避免低于历史测试包导致安装 downgrade。
+* 统一版本源：仓库根目录 `VERSION`（短版本，格式 `major.minor`，例如 `1.0`）
+* 支持三段 patch 版本：`1.3.1`、`1.4.1` 等（patch 用于 hotfix，不递增 minor）
+* 默认递增：`1.3 -> 1.4 -> 1.5 -> ...`
+* 同步目标：
+  + Git tag / GitHub Release（`v<major.minor>` 或 `v<major.minor.patch>`）
+  + Windows 桌面版本（Cargo / Tauri）
+  + Android 版本（pubspec + local.properties）
+  + 文档中的当前版本信息
+* Android `versionCode` 采用 `2000 + major * 100 + minor`（例如 `1.4 -> 2104`），避免低于历史测试包导致安装 downgrade。
 
 ## 禁止事项
 
-- 不要只写计划不落地
-- 不要只改文档不改脚本/流程
-- 不要只改代码不更新文档
-- 不要删除回滚路径
-- 不要把“未验证”写成“已稳定”
-- 不要绕过 CI 直接发布
+* 不要只写计划不落地
+* 不要只改文档不改脚本/流程
+* 不要只改代码不更新文档
+* 不要删除回滚路径
+* 不要把"未验证"写成"已稳定"
+* 不要绕过 CI 直接发布
+* MediaSession 集成不能影响 AudioTrack / Oboe 播放路径
+* 更新检测必须是静默后台请求，不能阻塞启动流程
+* 更新检测不做自动下载安装，只引导用户跳转 GitHub Release 页面
 
 ## 最终汇报格式
 
