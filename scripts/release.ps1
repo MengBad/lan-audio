@@ -47,7 +47,7 @@ try {
         }
     }
     else {
-        Invoke-Step -Name 'Bump version (minor +1)' -Action {
+        Invoke-Step -Name 'Bump version (next release number)' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/bump_version.ps1')
         }
     }

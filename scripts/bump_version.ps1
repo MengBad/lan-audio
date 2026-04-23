@@ -25,37 +25,37 @@ function Parse-ShortVersion {
     return [pscustomobject]@{
         Major = [int]$Matches[1]
         Minor = [int]$Matches[2]
-        Patch = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
-        HasPatch = -not [string]::IsNullOrWhiteSpace($Matches[3])
+        Patch = if ($Matches[3]) { [int]$Matches[3] } else { $null }
     }
 }
 
 function Get-NextShortVersion {
     param([Parameter(Mandatory = $true)][string]$Current)
     $parsed = Parse-ShortVersion -InputVersion $Current
+    if ($null -ne $parsed.Patch) {
+        return "{0}.{1}.{2}" -f $parsed.Major, $parsed.Minor, ($parsed.Patch + 1)
+    }
     return "{0}.{1}" -f $parsed.Major, ($parsed.Minor + 1)
 }
 
-function Get-ShortVersionString {
+function Get-SemverFromShortVersion {
     param([Parameter(Mandatory = $true)]$ParsedVersion)
 
-    if ($ParsedVersion.HasPatch) {
+    if ($null -ne $ParsedVersion.Patch) {
         return "{0}.{1}.{2}" -f $ParsedVersion.Major, $ParsedVersion.Minor, $ParsedVersion.Patch
     }
 
-    return "{0}.{1}" -f $ParsedVersion.Major, $ParsedVersion.Minor
-}
-
-function Get-SemverString {
-    param([Parameter(Mandatory = $true)]$ParsedVersion)
-
-    return "{0}.{1}.{2}" -f $ParsedVersion.Major, $ParsedVersion.Minor, $ParsedVersion.Patch
+    return "{0}.{1}.0" -f $ParsedVersion.Major, $ParsedVersion.Minor
 }
 
 function Get-AndroidVersionCode {
     param([Parameter(Mandatory = $true)]$ParsedVersion)
 
-    return 2000 + ($ParsedVersion.Major * 1000) + ($ParsedVersion.Minor * 10) + $ParsedVersion.Patch
+    if ($null -ne $ParsedVersion.Patch) {
+        return 2000000 + ($ParsedVersion.Major * 10000) + ($ParsedVersion.Minor * 100) + $ParsedVersion.Patch
+    }
+
+    return 2000000 + ($ParsedVersion.Major * 10000) + ($ParsedVersion.Minor * 100)
 }
 
 function Update-TomlVersionInSection {
@@ -143,8 +143,7 @@ if ([string]::IsNullOrWhiteSpace($currentShort)) {
 
 $targetShort = if ($Version) { $Version.Trim() } else { Get-NextShortVersion -Current $currentShort }
 $parsed = Parse-ShortVersion -InputVersion $targetShort
-$targetShort = Get-ShortVersionString -ParsedVersion $parsed
-$semver = Get-SemverString -ParsedVersion $parsed
+$semver = Get-SemverFromShortVersion -ParsedVersion $parsed
 $androidCode = Get-AndroidVersionCode -ParsedVersion $parsed
 
 Write-Host "Bumping version: $currentShort -> $targetShort" -ForegroundColor Cyan
@@ -159,7 +158,7 @@ $tauriJson = Get-Content -Raw $tauriPath | ConvertFrom-Json
 $tauriJson.version = $semver
 Write-Utf8NoBom -Path $tauriPath -Content ($tauriJson | ConvertTo-Json -Depth 20)
 
-Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/pubspec.yaml') -Pattern '^version:\s*\d+\.\d+\.\d+\+\d+$' -Replacement ("version: $semver+$androidCode")
+Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/pubspec.yaml') -Pattern '^version:\s*\d+\.\d+\.\d+(?:\+\d+)?\s*$' -Replacement ("version: $semver+$androidCode")
 
 $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
 $localProps = Get-Content -Raw $localPropsPath

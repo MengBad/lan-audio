@@ -2,7 +2,7 @@
 
 ## Release Update (`2026-04-22`)
 
-- `v1.3` has shipped. `scripts/package_release.ps1`, `scripts/release.ps1`, and `.github/workflows/release.yml` remain gated by `artifacts/release/acceptance_gate.json`.
+- `v1.3.1` has shipped. `scripts/package_release.ps1`, `scripts/release.ps1`, and `.github/workflows/release.yml` remain gated by `artifacts/release/acceptance_gate.json`.
 - `crates/lan_audio_domain` is now the single source of truth for mode contracts, explicit connection states, rollback state, failure taxonomy, service snapshot, and release-gate schema.
 - Current migration status after `v1.3` is post-release follow-up, not release freeze.
 - Phase 3 has started on the server side: the transport layer is being wrapped behind `DataPlane` implementations for `legacy_las1`, `v2_header`, and `usb_direct`.

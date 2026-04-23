@@ -6,7 +6,7 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 
 ## Overview
 
-- Latest release: `v1.3`
+- Latest release: `v1.3.1`
 - Primary path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Transport modes: `wifi`, `usb`
@@ -26,7 +26,7 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 
 ## Current Status
 
-`v1.3` has been released.
+`v1.3.1` has been released.
 
 Current validated release facts:
 
@@ -39,7 +39,7 @@ Current validated release facts:
   - `USB + synthetic`
   - `WiFi + windows_loopback`
 
-Current mainline work after `v1.3` is focused on Android runtime and desktop refactor follow-up, not on changing the default path again.
+Current mainline work after `v1.3.1` is focused on Android runtime and desktop refactor follow-up, not on changing the default path again.
 
 ## Architecture
 
@@ -177,7 +177,7 @@ Version source:
 Release entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3.1
 ```
 
 The release pipeline is contract-gated by:
