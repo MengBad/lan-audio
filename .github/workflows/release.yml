@@ -216,7 +216,7 @@ jobs:
           force_override="$(python - <<'PY'
           import json
           from pathlib import Path
-          gate = json.loads(Path("artifacts/release/acceptance_gate.json").read_text(encoding="utf-8"))
+          gate = json.loads(Path("artifacts/release/acceptance_gate.json").read_text(encoding="utf-8-sig"))
           print("true" if gate.get("force_release_override") else "false")
           PY
           )"
