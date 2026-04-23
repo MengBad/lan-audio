@@ -160,7 +160,7 @@ function Update-ReleaseGateForArtifacts {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
-if ($version -notmatch '^\d+\.\d+$') {
+if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
     throw "Unexpected VERSION value: $version"
 }
 

@@ -18,10 +18,10 @@ The single version source is the repository root `VERSION` file.
 
 Rules:
 
-- short version: `major.minor`
-- git tag: `v<major.minor>`
-- Rust/Tauri semver: `<major.minor>.0`
-- Android `versionCode`: `2000 + major * 100 + minor`
+- short version: `major.minor` or `major.minor.patch`
+- git tag: `v<major.minor>` or `v<major.minor.patch>`
+- Rust/Tauri semver: `<major.minor>.0` or `<major.minor.patch>`
+- Android `versionCode`: `2000 + major * 1000 + minor * 10 + patch` (`patch` defaults to `0`)
 
 ## Required Local Validation
 
@@ -62,7 +62,7 @@ Outputs:
 Use:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version <major.minor>
+ powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version <major.minor-or-patch>
 ```
 
 The release flow:

@@ -18,13 +18,15 @@ function Write-Utf8NoBom {
 function Parse-ShortVersion {
     param([Parameter(Mandatory = $true)][string]$InputVersion)
 
-    if ($InputVersion -notmatch '^(\d+)\.(\d+)$') {
-        throw "Invalid version '$InputVersion'. Expected format: major.minor (e.g. 1.2)"
+    if ($InputVersion -notmatch '^(\d+)\.(\d+)(?:\.(\d+))?$') {
+        throw "Invalid version '$InputVersion'. Expected format: major.minor or major.minor.patch (e.g. 1.2 or 1.2.3)"
     }
 
     return [pscustomobject]@{
         Major = [int]$Matches[1]
         Minor = [int]$Matches[2]
+        Patch = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
+        HasPatch = -not [string]::IsNullOrWhiteSpace($Matches[3])
     }
 }
 
@@ -32,6 +34,28 @@ function Get-NextShortVersion {
     param([Parameter(Mandatory = $true)][string]$Current)
     $parsed = Parse-ShortVersion -InputVersion $Current
     return "{0}.{1}" -f $parsed.Major, ($parsed.Minor + 1)
+}
+
+function Get-ShortVersionString {
+    param([Parameter(Mandatory = $true)]$ParsedVersion)
+
+    if ($ParsedVersion.HasPatch) {
+        return "{0}.{1}.{2}" -f $ParsedVersion.Major, $ParsedVersion.Minor, $ParsedVersion.Patch
+    }
+
+    return "{0}.{1}" -f $ParsedVersion.Major, $ParsedVersion.Minor
+}
+
+function Get-SemverString {
+    param([Parameter(Mandatory = $true)]$ParsedVersion)
+
+    return "{0}.{1}.{2}" -f $ParsedVersion.Major, $ParsedVersion.Minor, $ParsedVersion.Patch
+}
+
+function Get-AndroidVersionCode {
+    param([Parameter(Mandatory = $true)]$ParsedVersion)
+
+    return 2000 + ($ParsedVersion.Major * 1000) + ($ParsedVersion.Minor * 10) + $ParsedVersion.Patch
 }
 
 function Update-TomlVersionInSection {
@@ -119,8 +143,9 @@ if ([string]::IsNullOrWhiteSpace($currentShort)) {
 
 $targetShort = if ($Version) { $Version.Trim() } else { Get-NextShortVersion -Current $currentShort }
 $parsed = Parse-ShortVersion -InputVersion $targetShort
-$semver = "{0}.{1}.0" -f $parsed.Major, $parsed.Minor
-$androidCode = 2000 + ($parsed.Major * 100) + $parsed.Minor
+$targetShort = Get-ShortVersionString -ParsedVersion $parsed
+$semver = Get-SemverString -ParsedVersion $parsed
+$androidCode = Get-AndroidVersionCode -ParsedVersion $parsed
 
 Write-Host "Bumping version: $currentShort -> $targetShort" -ForegroundColor Cyan
 

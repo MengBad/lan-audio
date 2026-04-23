@@ -1,7 +1,7 @@
 name: lan_audio_android_mvp
 description: LAN Audio Android debug client MVP.
 publish_to: "none"
-version: 1.3.0+2103
+version: 1.3.5+3035
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

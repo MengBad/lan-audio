@@ -188,7 +188,7 @@ The release pipeline is contract-gated by:
 GitHub Actions release behavior:
 
 - `scripts/release.ps1` remains the source of version bumping and tag creation
-- `.github/workflows/release.yml` publishes builds for an existing `v<major.minor>` tag
+- `.github/workflows/release.yml` publishes builds for an existing `v<major.minor>` or `v<major.minor.patch>` tag
 - manual `workflow_dispatch` is for rebuilding/publishing an existing tag with an optional fix summary, verified scope, and known limitations in the release notes
 - the workflow validates that the checked-out `VERSION` matches the requested tag before publishing
 

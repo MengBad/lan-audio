@@ -1,6 +1,6 @@
 [package]
 name = "lan_audio_desktop"
-version = "1.3.0"
+version = "1.3.5"
 edition = "2021"
 license = "MIT"
 

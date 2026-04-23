@@ -53,7 +53,7 @@ try {
     }
 
     $newVersion = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
-    if ($newVersion -notmatch '^\d+\.\d+$') {
+    if ($newVersion -notmatch '^\d+\.\d+(?:\.\d+)?$') {
         throw "Unexpected VERSION value after bump: $newVersion"
     }
 
