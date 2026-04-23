@@ -6,7 +6,7 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 
 ## Overview
 
-- Latest release: `v1.3.1`
+- Latest release: `v1.3.6`
 - Primary path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Transport modes: `wifi`, `usb`
@@ -21,12 +21,14 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 - Keep Protocol v2 on the main path while preserving a stable legacy rollback route
 - Inspect runtime state from desktop and Android through a shared snapshot contract
 - Export desktop diagnostics snapshots as JSON for troubleshooting (`dist/diagnostics/`)
-- Desktop app can silently check GitHub Releases and show an in-window update banner (manual open only)
-- Android foreground playback notification now uses MediaStyle with MediaSession state/metadata and manual update check entry
+- Android foreground playback notification uses MediaStyle with MediaSession metadata/state without affecting the AudioTrack/Oboe playback path
+- Android and Windows can silently check GitHub Releases and redirect users to the release page manually
+- Android `balanced` buffering strategy optimization
+- Mode-switch concurrency race fix
 
 ## Current Status
 
-`v1.3.1` has been released.
+`v1.3.6` has been released (FORCE_RELEASE=true, with manual verification override).
 
 Current validated release facts:
 
@@ -39,7 +41,7 @@ Current validated release facts:
   - `USB + synthetic`
   - `WiFi + windows_loopback`
 
-Current mainline work after `v1.3.1` is focused on Android runtime and desktop refactor follow-up, not on changing the default path again.
+Current mainline work after `v1.3.6` continues around stability and diagnostics hardening while preserving the same default/rollback paths.
 
 ## Architecture
 
@@ -177,7 +179,7 @@ Version source:
 Release entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3.1
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3.6
 ```
 
 The release pipeline is contract-gated by:

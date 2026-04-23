@@ -2,7 +2,7 @@
 
 ## Release State
 
-- Latest release: `v1.3.1`
+- Latest release: `v1.3.6`
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -158,7 +158,7 @@
   - Regression baseline conclusion: all three post-switch 5s windows keep steady-state `silence_fill < 10`; this probe is the current low_latency/high_quality mode-switch baseline.
 ## v1.4 Release Gate
 
-- [ ] TASK-V14-001 `v1.3.1` acceptance evidence recorded
+- [ ] TASK-V14-001 `v1.3.6` acceptance evidence recorded
 - [ ] TASK-V14-002 main-path `windows_loopback + v2_header + opus` 30+ minute long-run passes
 - [ ] TASK-V14-003 USB validation recorded
 - [x] TASK-V14-010 MediaSession verified on `5391d451`
@@ -217,6 +217,21 @@
 - [ ] Richer session history
 - [ ] More guided USB help
 - [ ] Firewall guidance UX
-- [x] Structured support bundle export锛堝綋鍓嶅厛鎻愪緵 desktop diagnostics snapshot锛屽悗缁ˉ鍏?Android 渚э級
+- [x] Structured support bundle export（当前先提供 desktop diagnostics snapshot，后续补充 Android 侧）
 
 - Mode-switch no-audio follow-up (2026-04-23): sink reinit now serializes stats/stop/release and no longer reproduces persistent audio_track_write_frames_per_sec=0 after balanced -> low_latency -> high_quality -> balanced in mode_switch_probe_fix_lock_fg3_20260423_111741_logcat.txt; however switch2_5s still showed transient silence_fill=98, so gate status remains continue_fix.
+
+## v1.3.6 FORCE_RELEASE Notes
+
+- Release mode: `FORCE_RELEASE=true`
+- Release target: `v1.3.6`
+- Human-confirmed release content:
+  - [x] Android MediaSession 集成
+  - [x] Android / Windows 双端更新检测
+  - [x] Desktop 诊断快照导出
+  - [x] Android balanced 缓冲策略优化
+  - [x] 模式切换并发竞态修复
+- Release gate checklist (forced override):
+  - [human-override] 真机长稳样本门控
+  - [human-override] 发布门控 checklist 全量复核
+  - [human-override] 发布前人工回归记录补录

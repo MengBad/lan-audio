@@ -2,7 +2,7 @@
 
 ## Current Position
 
-- Latest shipped release: `v1.3.1`
+- Latest shipped release: `v1.3.6`
 - Default runtime path: `windows_loopback + v2_header + opus`
 - Maintained rollback path: `legacy_las1 + pcm16`
 - Supported transports: `wifi`, `usb`
