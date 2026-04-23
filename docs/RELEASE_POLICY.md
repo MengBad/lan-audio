@@ -2,7 +2,7 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.3.1`
+- Latest shipped release: `v1.3.6`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`

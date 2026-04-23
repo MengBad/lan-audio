@@ -2,7 +2,7 @@
 
 ## Release State
 
-- Latest release: `v1.3.1`
+- Latest release: `v1.3.6`
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -57,3 +57,18 @@
 - [ ] More guided USB help
 - [ ] Firewall guidance UX
 - [ ] Structured support bundle export
+
+## v1.3.6 FORCE_RELEASE Notes
+
+- Release mode: `FORCE_RELEASE=true`
+- Release target: `v1.3.6`
+- Human-confirmed release content:
+  - [x] Android MediaSession 集成
+  - [x] Android / Windows 双端更新检测
+  - [x] Desktop 诊断快照导出
+  - [x] Android balanced 缓冲策略优化
+  - [x] 模式切换并发竞态修复
+- Release gate checklist (forced override):
+  - [human-override] 真机长稳样本门控
+  - [human-override] 发布门控 checklist 全量复核
+  - [human-override] 发布前人工回归记录补录
