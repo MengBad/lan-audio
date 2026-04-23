@@ -7,6 +7,8 @@ import android.media.AudioTrack
 import android.net.wifi.WifiManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -17,6 +19,12 @@ import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : FlutterActivity() {
     private companion object {
@@ -40,6 +48,7 @@ class MainActivity : FlutterActivity() {
     private var writerThread: Thread? = null
     @Volatile private var writerStoppedSignal: CountDownLatch? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,6 +87,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         logLifecycle("onDestroy no service stop issued from activity lifecycle")
+        uiScope.coroutineContext.cancel()
         super.onDestroy()
     }
 
@@ -110,6 +120,40 @@ class MainActivity : FlutterActivity() {
                             val consumed =
                                 (call.arguments as? Map<*, *>)?.get("consumed") as? Boolean ?: true
                             preferences().edit().putBoolean(KEY_FIRST_USE_HINT_CONSUMED, consumed).apply()
+                            result.success(null)
+                        }
+                        "checkForAppUpdate" -> {
+                            val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                            val delayMs = (args["delayMs"] as? Number)?.toLong() ?: 0L
+                            uiScope.launch {
+                                if (delayMs > 0) {
+                                    delay(delayMs)
+                                }
+                                val update = UpdateChecker.checkForUpdate(currentVersionName())
+                                if (update == null) {
+                                    result.success(null)
+                                } else {
+                                    result.success(
+                                        mapOf(
+                                            "latestVersion" to update.latestVersion,
+                                            "releaseUrl" to update.releaseUrl,
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                        "openExternalUrl" -> {
+                            val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                            val url = (args["url"] as? String).orEmpty().trim()
+                            if (url.isBlank()) {
+                                result.success(null)
+                                return@setMethodCallHandler
+                            }
+                            try {
+                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            } catch (_: Throwable) {
+                                // silent ignore
+                            }
                             result.success(null)
                         }
                         else -> result.notImplemented()
@@ -193,6 +237,15 @@ class MainActivity : FlutterActivity() {
 
     private fun preferences() =
         applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun currentVersionName(): String {
+        return try {
+            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+            packageInfo.versionName ?: "0.0.0"
+        } catch (_: PackageManager.NameNotFoundException) {
+            "0.0.0"
+        }
+    }
 
     private fun logLifecycle(name: String) {
         val snapshot = PlaybackEventBus.snapshotMap()

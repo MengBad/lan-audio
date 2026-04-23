@@ -2,6 +2,7 @@ package com.example.lan_audio_android_mvp
 
 object PlaybackActions {
     const val ACTION_START = "lan_audio.action.START"
+    const val ACTION_PLAY_PAUSE = "lan_audio.action.PLAY_PAUSE"
     const val ACTION_STOP = "lan_audio.action.STOP"
     const val ACTION_RECONNECT = "lan_audio.action.RECONNECT"
     const val ACTION_RESTORE_LAST = "lan_audio.action.RESTORE_LAST"

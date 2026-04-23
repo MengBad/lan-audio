@@ -7,12 +7,16 @@ import android.app.PendingIntent
 import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -23,6 +27,7 @@ class PlaybackForegroundService : MediaSessionService() {
     private val stateStore = PlaybackStateStore()
     private lateinit var sessionController: PlaybackSessionController
     private var mediaSession: MediaSession? = null
+    private var mediaSessionCompat: MediaSessionCompat? = null
     private var player: ExoPlayer? = null
     private var foregroundStarted = false
     private var wakeLock: PowerManager.WakeLock? = null
@@ -32,6 +37,7 @@ class PlaybackForegroundService : MediaSessionService() {
     private var lastNotificationKey = ""
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
+        updateMediaSession(snapshot)
         updateNotification(snapshot)
     }
 
@@ -45,6 +51,14 @@ class PlaybackForegroundService : MediaSessionService() {
             repeatMode = Player.REPEAT_MODE_OFF
         }
         mediaSession = MediaSession.Builder(this, player!!).build()
+        mediaSessionCompat = MediaSessionCompat(this, "LANAudioPlayback").apply {
+            isActive = true
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() = handlePlayPauseAction()
+                override fun onPause() = handlePlayPauseAction()
+                override fun onStop() = stopFromMediaAction("media_session_stop")
+            })
+        }
         stateStore.addListener(storeListener)
         stateStore.set(PlaybackSnapshot(serviceState = "idle", recentLog = "service_created"))
     }
@@ -90,12 +104,11 @@ class PlaybackForegroundService : MediaSessionService() {
 
             PlaybackActions.ACTION_STOP -> {
                 Log.i(logTag, "stopPlayback from notification/service command")
-                explicitStopRequested = true
-                clearPersistedTarget()
-                sessionController.stopPlayback("notification_stop")
-                releasePlaybackLocks()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopFromMediaAction("notification_stop")
+            }
+
+            PlaybackActions.ACTION_PLAY_PAUSE -> {
+                handlePlayPauseAction()
             }
 
             PlaybackActions.ACTION_RECONNECT -> {
@@ -173,6 +186,8 @@ class PlaybackForegroundService : MediaSessionService() {
         }
         sessionController.destroy()
         releasePlaybackLocks()
+        mediaSessionCompat?.release()
+        mediaSessionCompat = null
         mediaSession?.release()
         mediaSession = null
         player?.release()
@@ -250,23 +265,74 @@ class PlaybackForegroundService : MediaSessionService() {
             Intent(this, PlaybackForegroundService::class.java).setAction(PlaybackActions.ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val reconnectPending = PendingIntent.getService(
+        val playPausePending = PendingIntent.getService(
             this,
             3,
-            Intent(this, PlaybackForegroundService::class.java).setAction(PlaybackActions.ACTION_RECONNECT),
+            Intent(this, PlaybackForegroundService::class.java).setAction(PlaybackActions.ACTION_PLAY_PAUSE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(targetLabel)
+            .setContentTitle("LAN Audio")
             .setContentText(text)
+            .setSubText(targetLabel)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(launchPending)
-            .addAction(android.R.drawable.ic_menu_revert, "Reconnect", reconnectPending)
+            .setStyle(MediaStyle().setMediaSession(mediaSessionCompat?.sessionToken))
+            .addAction(android.R.drawable.ic_media_play, "Play/Pause", playPausePending)
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopPending)
             .build()
+    }
+
+    private fun stopFromMediaAction(reason: String) {
+        explicitStopRequested = true
+        clearPersistedTarget()
+        sessionController.stopPlayback(reason)
+        releasePlaybackLocks()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun handlePlayPauseAction() {
+        val snapshot = stateStore.current()
+        if (snapshot.playbackState == "playing" || snapshot.connectionState == "connected") {
+            stopFromMediaAction("notification_play_pause")
+            return
+        }
+        acquirePlaybackLocks()
+        if (sessionController.hasActiveTarget()) {
+            sessionController.reconnect("notification_play_pause")
+        } else {
+            restorePersistedPlayback("notification_play_pause")
+        }
+    }
+
+    private fun updateMediaSession(snapshot: PlaybackSnapshot) {
+        val compat = mediaSessionCompat ?: return
+        val mappedState = when {
+            snapshot.connectionState == "error" || snapshot.serviceState == "error" -> PlaybackStateCompat.STATE_ERROR
+            snapshot.connectionState == "connecting" || snapshot.connectionState == "reconnecting" -> PlaybackStateCompat.STATE_CONNECTING
+            snapshot.playbackState == "playing" -> PlaybackStateCompat.STATE_PLAYING
+            else -> PlaybackStateCompat.STATE_STOPPED
+        }
+        compat.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP)
+                .setState(mappedState, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+                .build()
+        )
+        compat.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, "LAN Audio")
+                .putString(
+                    MediaMetadataCompat.METADATA_KEY_ARTIST,
+                    snapshot.targetHost ?: snapshot.targetName ?: "unknown",
+                )
+                .build()
+        )
+        compat.isActive = true
     }
 
     private fun ensureNotificationChannel() {
