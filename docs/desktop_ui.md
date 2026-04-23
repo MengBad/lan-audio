@@ -55,6 +55,11 @@ Only one primary button should be visually dominant:
 
 Restart and debug actions must stay secondary.
 
+Service lifecycle actions should remain non-blocking on the window thread:
+
+- Start should return immediately with a visible `starting` state while runtime setup continues in the background.
+- Stop should avoid blocking the desktop window long enough to trigger a Windows "not responding" warning.
+
 ## State Sources
 
 - Service status: desktop lifecycle state (`not_started`, `starting`, `running`, `stopping`, `error`)
@@ -97,6 +102,12 @@ When expanded, group metrics by user-friendly categories:
 - Logs: timestamped scrollable log lines
 
 Raw engineering labels may remain available, but the visible label should be readable. Example: `tx_packets` is displayed as `Sent packets`.
+
+## USB Device Refresh
+
+- ADB device discovery should not interrupt normal streaming UX.
+- The desktop UI may refresh ADB devices on manual demand, and can do a low-frequency background refresh while USB mode is active.
+- Windows GUI builds must launch `adb` without a visible console window.
 
 ## Release Packaging
 

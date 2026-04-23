@@ -755,6 +755,7 @@
         snapshot: null,
         busy: false,
         adbDevices: [],
+        lastAdbRefreshAt: 0,
       };
 
       function t(key) {
@@ -835,11 +836,22 @@
         return t('subStopped');
       }
 
-      async function refreshAdbDevices() {
+      async function refreshAdbDevices(force = false) {
+        const now = Date.now();
+        const shouldRefresh =
+          force ||
+          !state.snapshot ||
+          state.snapshot.transport_mode === 'usb' ||
+          now - state.lastAdbRefreshAt >= 15000;
+        if (!shouldRefresh) {
+          return;
+        }
         try {
           state.adbDevices = await tauriInvoke('list_adb_devices');
+          state.lastAdbRefreshAt = now;
         } catch {
           state.adbDevices = [];
+          state.lastAdbRefreshAt = now;
         }
       }
 
@@ -1223,7 +1235,10 @@
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
         document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);
         document.getElementById('updateBannerBtn').addEventListener('click', openReleasePage);
-        document.getElementById('usbRefreshBtn').addEventListener('click', refresh);
+        document.getElementById('usbRefreshBtn').addEventListener('click', async () => {
+          await refreshAdbDevices(true);
+          await refresh();
+        });
         document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 

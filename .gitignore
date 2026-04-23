@@ -1,8 +1,6 @@
 ﻿# Rust
 /target
 **/*.rs.bk
-Cargo.lock
-
 # Flutter / Dart
 .dart_tool/
 .packages
@@ -36,8 +34,13 @@ tmp_lan_audio_home.png
 artifacts/baseline/
 artifacts/contracts/
 artifacts/reports/
+artifacts/ui_baseline/
 artifacts/validate/
 
 # Android crash dumps
 *.hprof
 apps/android_flutter/android/.gradle/
+apps/android_flutter/android/local.properties
+
+# Local extracted / staging files
+tmp_apk_extract/

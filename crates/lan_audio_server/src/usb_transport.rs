@@ -1,6 +1,9 @@
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use tracing::{info, warn};
@@ -105,8 +108,7 @@ impl Drop for AdbReverseManager {
 }
 
 fn run_adb(args: &[&str]) -> Result<String> {
-    let output = Command::new("adb")
-        .args(args)
+    let output = adb_command(args)
         .output()
         .with_context(|| format!("spawn adb {}", args.join(" ")))?;
     if !output.status.success() {
@@ -120,6 +122,18 @@ fn run_adb(args: &[&str]) -> Result<String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn adb_command(args: &[&str]) -> Command {
+    let mut command = Command::new("adb");
+    command.args(args);
+    #[cfg(windows)]
+    {
+        // Keep adb from spawning a visible console window when invoked by the Tauri GUI app.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 #[cfg(test)]

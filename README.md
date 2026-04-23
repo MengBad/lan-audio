@@ -1,224 +1,111 @@
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 # LAN Audio
+Stream Windows audio to an Android phone over your local network.
 
-LAN Audio turns a Windows PC into an audio sender and an Android phone into a network speaker.
-
-It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is built around a Rust server, a Flutter Android client, and a Tauri desktop app.
+LAN Audio is a Windows-to-Android audio streaming project for turning a phone into a wireless speaker. The repository combines a Rust streaming backend, a Flutter Android client, and a Tauri desktop app, with Protocol v2 and an explicit rollback path tracked side by side.
 
 ## Overview
 
-- Latest release: `v1.3.6`
-- Primary path: `windows_loopback + v2_header + opus`
-- Rollback path: `legacy_las1 + pcm16`
-- Transport modes: `wifi`, `usb`
-- Audio modes: `low_latency`, `balanced`, `high_quality`
-
-## Features
-
-- Stream Windows system audio to Android in real time
-- Use a built-in `synthetic` source for testing and diagnostics
-- Run over normal LAN or USB via `adb reverse`
-- Switch between `low_latency`, `balanced`, and `high_quality` playback strategies
-- Keep Protocol v2 on the main path while preserving a stable legacy rollback route
-- Inspect runtime state from desktop and Android through a shared snapshot contract
-- Export desktop diagnostics snapshots as JSON for troubleshooting (`dist/diagnostics/`)
-- Android foreground playback notification uses MediaStyle with MediaSession metadata/state without affecting the AudioTrack/Oboe playback path
-- Android and Windows can silently check GitHub Releases and redirect users to the release page manually
-- Android `balanced` buffering strategy optimization
-- Mode-switch concurrency race fix
+The goal of this project is straightforward: play audio on a Windows PC, send it over LAN or USB-assisted network transport, and play it back on an Android device. The current repository is still geared more toward development, testing, and controlled release work than toward consumer-ready installation.
 
 ## Current Status
 
-`v1.3.6` has been released (FORCE_RELEASE=true, with manual verification override).
+- The repository contains a Rust LAN server, an Android Flutter client, and a Windows Tauri desktop app.
+- The documented recommended path is `windows_loopback + v2_header + opus`.
+- The maintained rollback path is `legacy_las1 + pcm16`.
+- Local validation, packaging, and release scripts are part of the repository.
+- Current follow-up work is focused on stability, latency tuning, mode strategy, Protocol v2 evolution, and desktop/UI productization.
+- This project is currently a better fit for developers and testers on Windows + Android than for general end users.
 
-Current validated release facts:
+## Quick Start
 
-- Release gate: `allow_release`
-- Main path: `windows_loopback + v2_header + opus`
-- Rollback path: `legacy_las1 + pcm16`
-- Rollback verification: `desktop_headless --force-rollback`
-- Verified device: `5391d451` (`Xiaomi 24129PN74C`)
-- Verified scenarios:
-  - `USB + synthetic`
-  - `WiFi + windows_loopback`
+1. Check the local toolchain:
 
-Current mainline work after `v1.3.6` continues around stability and diagnostics hardening while preserving the same default/rollback paths.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check_env.ps1
+```
 
-## Architecture
+2. Start the Windows sender:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource windows_loopback
+```
+
+For a synthetic test source instead of system audio:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource synthetic
+```
+
+3. Start the Android client:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_android_client.ps1
+```
+
+4. In the Android app, discover or enter the desktop address, connect, and start playback.
+
+For a full local validation pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+```
+
+## How It Works
 
 ```text
-Windows
-  - Tauri desktop app
-  - desktop_headless debug entry
-  - Rust server
-  - Protocol v1/v2 control + audio transport
-
-Android
-  - Flutter UI
-  - Foreground playback service
-  - Oboe / AudioTrack playback runtime
-  - libopus JNI decode path
+Windows audio capture (windows_loopback / synthetic)
+    -> Rust LAN server
+    -> WebSocket control + UDP audio
+       or localhost TCP audio over adb reverse in USB mode
+    -> Android playback service and client UI
+    -> jitter buffer / native playback output
+    -> phone speaker
 ```
 
 ## Repository Layout
 
 ```text
 apps/
-  android_flutter/        Android client (Flutter + native playback bridge)
-  desktop/                Windows desktop app (Tauri)
+  android_flutter/   Android client (Flutter UI + native playback bridge)
+  desktop/           Windows desktop app (Tauri)
 
 crates/
-  lan_audio_domain/       Shared domain contracts and release gate schema
-  lan_audio_protocol/     Protocol types and packet formats
-  lan_audio_server/       Capture, transport, session, and runtime logic
+  lan_audio_domain/   Shared runtime and release contracts
+  lan_audio_protocol/ Protocol messages and packet formats
+  lan_audio_server/   Audio capture, transport, session, and metrics runtime
 
-docs/                     Protocol, UI, release, and roadmap docs
-scripts/                  Local run, validate, package, and release scripts
-artifacts/release/        Tracked release gate and device acceptance evidence
+docs/               Architecture, protocol, setup, UI, roadmap, and release docs
+scripts/            Environment checks, local run helpers, validation, packaging, and release scripts
+artifacts/release/  Tracked release-gate and device-acceptance artifacts
 ```
 
-## Quick Start
+## Development
 
-### 1. Start the Windows sender
-
-Synthetic test source:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic
-```
-
-Windows system audio:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
-```
-
-USB mode:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-serial <serial> --audio-source windows_loopback
-```
-
-Force rollback path:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --force-rollback
-```
-
-### 2. Install the Android app
-
-Download the APK that matches your device ABI from the GitHub release:
-
-- `arm64-v8a`
-- `armeabi-v7a`
-- `x86_64`
-
-### 3. Connect and play
-
-1. Launch the Windows sender.
-2. Open the Android app.
-3. Use discovery, manual address entry, or USB mode.
-4. Start playback.
-5. If playback is unstable, use rollback mode on the desktop side.
-
-## Data Plane And Codec
-
-Recommended runtime path:
-
-- Source: `windows_loopback`
-- Data plane: `v2_header`
-- Codec: `opus`
-
-Maintained fallback path:
-
-- Data plane: `legacy_las1`
-- Codec: `pcm16`
-
-Service snapshots expose both configured and active runtime path state:
-
-- `data_plane`
-- `active_data_plane`
-- `rollback_available`
-- `rollback_state`
-
-## Local Development
-
-Full local validation:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
-```
-
-This runs:
-
-- `cargo fmt --all -- --check`
-- `cargo check`
-- `cargo test -p lan_audio_protocol -p lan_audio_server`
-- `cargo check -p lan_audio_desktop`
-- `flutter analyze`
-- `flutter test`
-- `android/gradlew.bat assembleDebug`
-
-Build local release artifacts:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
-```
-
-Outputs:
-
-- `dist/release/android/`
-- `dist/release/windows/`
-- `dist/release/SHA256SUMS.txt`
-
-## Release
-
-Version source:
-
-- `VERSION`
-
-Release entry:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.3.6
-```
-
-The release pipeline is contract-gated by:
-
-- `artifacts/release/acceptance_gate.json`
-- `artifacts/release/device_acceptance.json`
-
-GitHub Actions release behavior:
-
-- `scripts/release.ps1` remains the source of version bumping and tag creation
-- `.github/workflows/release.yml` publishes builds for an existing `v<major.minor>` or `v<major.minor.patch>` tag
-- manual `workflow_dispatch` is for rebuilding/publishing an existing tag with an optional fix summary, verified scope, and known limitations in the release notes
-- the workflow validates that the checked-out `VERSION` matches the requested tag before publishing
-
-GitHub Release artifacts include:
-
-- Windows desktop `.exe`
-- Android split-per-ABI release APKs
-- `SHA256SUMS.txt`
+This is a multi-component repository: Rust backend crates, a Flutter Android app, and a Tauri desktop frontend. Start with the docs below, then use `scripts/check_env.ps1` and `scripts/validate_local.ps1` to confirm the toolchain before changing runtime behavior, release logic, or UI code.
 
 ## Documentation
 
+- [Architecture](docs/architecture.md)
+- [Development Setup](docs/dev_setup.md)
 - [Protocol](docs/protocol.md)
 - [Protocol v2 Migration](docs/protocol_v2_migration.md)
 - [Desktop UI](docs/desktop_ui.md)
-- [Release Policy](docs/RELEASE_POLICY.md)
+- [Known Issues](docs/known_issues.md)
 - [TODO / Status](docs/todo.md)
 - [Roadmap](docs/roadmap.md)
+- [Release Policy](docs/RELEASE_POLICY.md)
+- [Android Visual Regression](docs/android_visual_regression.md)
 
-## Rollback
+## Roadmap
 
-If the recommended path is unstable, fall back to one of these:
+- Keep improving playback stability on the recommended Windows-to-Android path.
+- Reduce and better control end-to-end latency.
+- Keep `low_latency`, `balanced`, and `high_quality` behavior aligned across desktop and Android.
+- Continue Protocol v2 evolution without removing the explicit rollback path.
+- Productize the desktop and Android experience with clearer onboarding, diagnostics, and update flows.
 
-- `legacy_las1 + pcm16`
-- `windows_loopback + legacy_las1 + pcm16`
-- `synthetic + v2_header + pcm16`
+## License
 
-For explicit rollback verification, use:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --force-rollback
-```
+No root `LICENSE` file is currently present in this repository.

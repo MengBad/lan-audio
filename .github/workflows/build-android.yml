@@ -44,9 +44,9 @@ jobs:
       - name: Prepare Android local.properties
         run: |
           SHORT_VERSION="$(cat ../../VERSION)"
-          MAJOR="${SHORT_VERSION%%.*}"
-          MINOR="${SHORT_VERSION##*.}"
-          VERSION_CODE=$((2000 + MAJOR * 100 + MINOR))
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$SHORT_VERSION"
+          PATCH="${PATCH:-0}"
+          VERSION_CODE=$((2000000 + MAJOR * 10000 + MINOR * 100 + PATCH))
           printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=debug\nflutter.versionName=%s\nflutter.versionCode=%s\n' \
             "$ANDROID_HOME" "$FLUTTER_ROOT" "$SHORT_VERSION" "$VERSION_CODE" > android/local.properties
 
@@ -66,9 +66,9 @@ jobs:
       - name: Flutter Build Release APKs
         run: |
           SHORT_VERSION="$(cat ../../VERSION)"
-          MAJOR="${SHORT_VERSION%%.*}"
-          MINOR="${SHORT_VERSION##*.}"
-          VERSION_CODE=$((2000 + MAJOR * 100 + MINOR))
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$SHORT_VERSION"
+          PATCH="${PATCH:-0}"
+          VERSION_CODE=$((2000000 + MAJOR * 10000 + MINOR * 100 + PATCH))
           printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=release\nflutter.versionName=%s\nflutter.versionCode=%s\n' \
             "$ANDROID_HOME" "$FLUTTER_ROOT" "$SHORT_VERSION" "$VERSION_CODE" > android/local.properties
           flutter build apk --release --split-per-abi

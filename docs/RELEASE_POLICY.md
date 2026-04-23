@@ -2,10 +2,11 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.3.6`
+- Latest shipped release: `v1.4`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
+- Release mode for `v1.4`: `FORCE_RELEASE=true` with human-override notes recorded in release-tracked docs and artifacts
 
 Release decisions are artifact-driven. The source of truth is:
 
@@ -55,7 +56,7 @@ Outputs:
 - `dist/release/windows/`
 - `dist/release/SHA256SUMS.txt`
 
-`package_release.ps1` is allowed to build artifacts only when the non-artifact gate fields already pass. After a successful package run it updates local artifact-presence fields in the tracked gate file.
+`package_release.ps1` normally requires the non-artifact gate fields to pass first. When `FORCE_RELEASE=true`, packaging still runs but gate enforcement is bypassed and the release-tracking artifacts are annotated for human override.
 
 ## Release Entry
 
@@ -76,6 +77,16 @@ The release flow:
 7. pushes branch and tag
 8. lets GitHub Actions publish the GitHub Release
 
+## FORCE_RELEASE Override
+
+When `FORCE_RELEASE=true` is present in the release environment:
+
+- release gate enforcement is bypassed in `scripts/assert_release_gate.ps1`, `scripts/package_release.ps1`, and `scripts/release.ps1`
+- local validation still runs
+- local packaging still runs
+- release artifacts keep a `force_release_override` marker for workflow/release-note visibility
+- incomplete checklist items should be documented as `[human-override]`, not silently treated as fully passed
+
 `.github/workflows/release.yml` is intentionally tag-driven:
 
 - `push.tags` is the normal publish path after `scripts/release.ps1`
@@ -88,7 +99,7 @@ The release flow:
 
 ## Conditions To Release
 
-A release is allowed only when all of the following are true:
+A standard release is allowed only when all of the following are true:
 
 - `release_decision = allow_release`
 - local validation has passed
@@ -99,6 +110,8 @@ A release is allowed only when all of the following are true:
 - Windows release EXE is present
 - there are no critical bugs
 - there are no blocking failure codes
+
+`FORCE_RELEASE=true` is the explicit exception path for an operator-approved release and does not change the requirement to keep the rollback path visible.
 
 ## Rollback Rule
 

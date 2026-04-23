@@ -130,6 +130,30 @@ function Update-DocVersionMarker {
     }
 }
 
+function Ensure-LocalPropertiesFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$LocalPropsPath
+    )
+
+    if (Test-Path $LocalPropsPath) {
+        return
+    }
+
+    $writer = Join-Path $RepoRoot 'scripts/write_local_properties.ps1'
+    if (Test-Path $writer) {
+        try {
+            powershell -ExecutionPolicy Bypass -File $writer | Out-Host
+        } catch {
+            # Fall back to an empty skeleton so version metadata can still be written.
+        }
+    }
+
+    if (-not (Test-Path $LocalPropsPath)) {
+        Write-Utf8NoBom -Path $LocalPropsPath -Content ''
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $versionFile = Join-Path $repoRoot 'VERSION'
 if (-not (Test-Path $versionFile)) {
@@ -161,6 +185,7 @@ Write-Utf8NoBom -Path $tauriPath -Content ($tauriJson | ConvertTo-Json -Depth 20
 Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/pubspec.yaml') -Pattern '^version:\s*\d+\.\d+\.\d+(?:\+\d+)?\s*$' -Replacement ("version: $semver+$androidCode")
 
 $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
+Ensure-LocalPropertiesFile -RepoRoot $repoRoot -LocalPropsPath $localPropsPath
 $localProps = Get-Content -Raw $localPropsPath
 if ($localProps -match '(?m)^flutter\.versionName=') {
     $localProps = [regex]::Replace($localProps, '(?m)^flutter\.versionName=.*$', "flutter.versionName=$targetShort")

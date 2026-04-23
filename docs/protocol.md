@@ -1,7 +1,8 @@
 ﻿# Protocol v2 Draft
 
-## Release Update (`2026-04-22`)
+## Release Update (`2026-04-24`)
 
+- `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.
 - Release decision is currently `allow_release`, sourced from `artifacts/release/acceptance_gate.json`.
 - Shared mode contracts, connection state machine, rollback state, failure taxonomy, service snapshot, and release gate schema now live in `crates/lan_audio_domain`.
 - Protocol messages still preserve v1/v2 compatibility, but shared contract types are now imported from the domain layer instead of being duplicated ad hoc.

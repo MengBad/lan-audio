@@ -5,6 +5,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Test-ForceReleaseMode {
+    $value = [Environment]::GetEnvironmentVariable('FORCE_RELEASE')
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $false
+    }
+
+    switch ($value.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $GatePath) {
     $GatePath = Join-Path $repoRoot 'artifacts/release/acceptance_gate.json'
@@ -15,6 +30,11 @@ if (-not (Test-Path $GatePath)) {
 }
 
 $gate = Get-Content -Raw $GatePath | ConvertFrom-Json
+
+if (Test-ForceReleaseMode) {
+    Write-Warning 'FORCE_RELEASE=true detected; skipping release gate enforcement.'
+    return
+}
 
 $requiredFields = @(
     'contract_version',

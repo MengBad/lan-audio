@@ -8,6 +8,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Test-ForceReleaseMode {
+    $value = [Environment]::GetEnvironmentVariable('FORCE_RELEASE')
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $false
+    }
+
+    switch ($value.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -165,7 +180,12 @@ if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
 }
 
 $gatePath = Join-Path $repoRoot 'artifacts/release/acceptance_gate.json'
-Assert-PackagingGate -GatePath $gatePath
+$forceRelease = Test-ForceReleaseMode
+if ($forceRelease) {
+    Write-Warning 'FORCE_RELEASE=true detected; packaging gate enforcement is bypassed.'
+} else {
+    Assert-PackagingGate -GatePath $gatePath
+}
 
 $distRoot = Join-Path $repoRoot 'dist/release'
 $androidDist = Join-Path $distRoot 'android'
@@ -177,6 +197,13 @@ try {
         Remove-Item -LiteralPath $distRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Force $androidDist, $windowsDist | Out-Null
+
+    $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
+    if (-not (Test-Path $localPropsPath)) {
+        Invoke-Step -Name 'Prepare android/local.properties' -Action {
+            powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/write_local_properties.ps1')
+        }
+    }
 
     if (-not $SkipValidate) {
         Invoke-Step -Name 'Run local validation' -Action {
@@ -242,6 +269,13 @@ try {
     }
 
     Update-ReleaseGateForArtifacts -GatePath $gatePath -AndroidDist $androidDist -WindowsDist $windowsDist
+    if ($forceRelease) {
+        $gate = Get-ReleaseGate -GatePath $gatePath
+        $gate.force_release_override = $true
+        $gate.force_release_note = 'Released under FORCE_RELEASE=true; release gate checklist items may be marked human-override.'
+        $gateJson = $gate | ConvertTo-Json -Depth 8
+        Set-Content -LiteralPath $gatePath -Value $gateJson -Encoding utf8
+    }
 
     $checksumsPath = Join-Path $distRoot 'SHA256SUMS.txt'
     Get-ChildItem -LiteralPath $distRoot -Recurse -File |

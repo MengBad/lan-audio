@@ -69,6 +69,13 @@ try {
     }
 
     if (-not $SkipAndroidBuild) {
+        $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
+        if (-not (Test-Path $localPropsPath)) {
+            Invoke-Step -Name 'Prepare android/local.properties' -Action {
+                powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/write_local_properties.ps1')
+            }
+        }
+
         Push-Location (Join-Path $repoRoot 'apps/android_flutter/android')
         try {
             Invoke-Step -Name 'gradlew.bat assembleDebug' -Action {

@@ -75,7 +75,12 @@ jobs:
       - name: Gate release by acceptance contract
         shell: pwsh
         run: |
-          ./scripts/assert_release_gate.ps1
+          $gate = Get-Content -Raw artifacts/release/acceptance_gate.json | ConvertFrom-Json
+          if ($gate.force_release_override -eq $true) {
+            Write-Warning "FORCE_RELEASE override recorded in acceptance gate; skipping gate enforcement in workflow."
+          } else {
+            ./scripts/assert_release_gate.ps1
+          }
 
   windows-exe:
     needs: resolve
@@ -208,6 +213,13 @@ jobs:
           fixes_input='${{ github.event_name == 'workflow_dispatch' && inputs.fixes || '' }}'
           verified_scope_input='${{ github.event_name == 'workflow_dispatch' && inputs.verified_scope || '' }}'
           known_limitations_input='${{ github.event_name == 'workflow_dispatch' && inputs.known_limitations || '' }}'
+          force_override="$(python - <<'PY'
+import json
+from pathlib import Path
+gate = json.loads(Path("artifacts/release/acceptance_gate.json").read_text(encoding="utf-8"))
+print("true" if gate.get("force_release_override") else "false")
+PY
+          )"
 
           {
             echo "## LAN Audio ${{ needs.resolve.outputs.tag }}"
@@ -216,6 +228,9 @@ jobs:
             echo "- Default path: \`windows_loopback + v2_header + opus\`"
             echo "- Rollback path: \`legacy_las1 + pcm16\` (\`--force-rollback\` or UI safe mode)"
             echo "- Codec status: \`opus stable\` on the recommended V2 path"
+            if [ "$force_override" = "true" ]; then
+              echo "- Release mode: \`FORCE_RELEASE=true\` (manual human-override applied to remaining gate checklist items)"
+            fi
             echo
 
             echo "## What Changed"

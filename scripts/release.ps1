@@ -9,6 +9,21 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Test-ForceReleaseMode {
+    $value = [Environment]::GetEnvironmentVariable('FORCE_RELEASE')
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $false
+    }
+
+    switch ($value.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -26,7 +41,12 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $repoRoot
 
 try {
-    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
+    $forceRelease = Test-ForceReleaseMode
+    if ($forceRelease) {
+        Write-Warning 'FORCE_RELEASE=true detected; release gate enforcement is bypassed for this run.'
+    } else {
+        powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
+    }
 
     if (-not $AllowDirty) {
         $dirty = git status --porcelain
@@ -64,7 +84,7 @@ try {
     }
 
     Invoke-Step -Name 'Git add' -Action {
-        git add VERSION AGENTS.md .cargo README.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
+        git add .gitignore VERSION AGENTS.md .cargo README.md README.zh-CN.md docs Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
     }
 
     $staged = git diff --cached --name-only

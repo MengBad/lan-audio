@@ -553,63 +553,94 @@ fn start_service_impl(state: &State<'_, AppState>) -> Result<(), String> {
         (guard.config.clone(), guard.run_id)
     };
 
-    let server_cfg = build_server_config(&cfg)?;
-    let service = match state.runtime.block_on(LanAudioService::new(server_cfg)) {
-        Ok(s) => Arc::new(s),
-        Err(err) => {
-            let message = err.to_string();
-            let mut guard = state.inner.lock().expect("state lock");
-            guard.status = ServiceStatus::Error;
-            guard.last_error = Some(message.clone());
-            push_log(&state.logs, format!("start failed: {message}"));
-            return Err(message);
-        }
-    };
+    let state_for_start = Arc::clone(&state.inner);
+    let logs_for_start = Arc::clone(&state.logs);
+    state.runtime.spawn(async move {
+        let server_cfg = match build_server_config(&cfg) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                let mut guard = state_for_start.lock().expect("state lock");
+                if guard.run_id == run_id {
+                    guard.status = ServiceStatus::Error;
+                    guard.last_error = Some(err.clone());
+                    push_log(&logs_for_start, format!("start failed: {err}"));
+                }
+                return;
+            }
+        };
 
-    let service_for_task = Arc::clone(&service);
-    let state_for_task = Arc::clone(&state.inner);
-    let logs_for_task = Arc::clone(&state.logs);
-    let task = state.runtime.spawn(async move {
-        let result = service_for_task.run_until_shutdown().await;
-        let mut guard = state_for_task.lock().expect("state lock");
+        let service = match LanAudioService::new(server_cfg).await {
+            Ok(s) => Arc::new(s),
+            Err(err) => {
+                let message = err.to_string();
+                let mut guard = state_for_start.lock().expect("state lock");
+                if guard.run_id == run_id {
+                    guard.status = ServiceStatus::Error;
+                    guard.last_error = Some(message.clone());
+                    push_log(&logs_for_start, format!("start failed: {message}"));
+                }
+                return;
+            }
+        };
+
+        {
+            let mut guard = state_for_start.lock().expect("state lock");
+            if guard.run_id != run_id || !matches!(guard.status, ServiceStatus::Starting) {
+                return;
+            }
+            guard.status = ServiceStatus::Running;
+            guard.last_error = None;
+            guard.running = Some(RunningService {
+                run_id,
+                service: Arc::clone(&service),
+                task: None,
+            });
+        }
+
+        push_log(
+            &logs_for_start,
+            format!(
+                "service started (audio_source={}, data_plane={}, loopback_v2_gray={})",
+                cfg.audio_source.as_str(),
+                cfg.data_plane_format.as_str(),
+                cfg.allow_loopback_v2_header_gray
+            ),
+        );
+
+        let service_for_task = Arc::clone(&service);
+        let state_for_task = Arc::clone(&state_for_start);
+        let logs_for_task = Arc::clone(&logs_for_start);
+        let task = tokio::spawn(async move {
+            let result = service_for_task.run_until_shutdown().await;
+            let mut guard = state_for_task.lock().expect("state lock");
+            if guard.run_id != run_id {
+                return;
+            }
+            guard.running = None;
+            match result {
+                Ok(()) => {
+                    guard.status = ServiceStatus::NotStarted;
+                    push_log(&logs_for_task, "service stopped");
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    guard.status = ServiceStatus::Error;
+                    guard.last_error = Some(message.clone());
+                    push_log(&logs_for_task, format!("service error: {message}"));
+                }
+            }
+        });
+
+        let mut guard = state_for_start.lock().expect("state lock");
         if guard.run_id != run_id {
             return;
         }
-        guard.running = None;
-        match result {
-            Ok(()) => {
-                guard.status = ServiceStatus::NotStarted;
-                push_log(&logs_for_task, "service stopped");
-            }
-            Err(err) => {
-                let message = err.to_string();
-                guard.status = ServiceStatus::Error;
-                guard.last_error = Some(message.clone());
-                push_log(&logs_for_task, format!("service error: {message}"));
-            }
+        if let Some(running) = guard.running.as_mut() {
+            running.task = Some(task);
         }
     });
 
-    {
-        let mut guard = state.inner.lock().expect("state lock");
-        guard.status = ServiceStatus::Running;
-        guard.last_error = None;
-        guard.running = Some(RunningService {
-            run_id,
-            service,
-            task: Some(task),
-        });
-    }
-
-    push_log(
-        &state.logs,
-        format!(
-            "service started (audio_source={}, data_plane={}, loopback_v2_gray={})",
-            cfg.audio_source.as_str(),
-            cfg.data_plane_format.as_str(),
-            cfg.allow_loopback_v2_header_gray
-        ),
-    );
+    push_log(&state.logs, "service startup scheduled");
     Ok(())
 }
 
@@ -617,6 +648,13 @@ fn stop_service_impl(state: &State<'_, AppState>, wait: bool) -> Result<(), Stri
     let (service, task, run_id) = {
         let mut guard = state.inner.lock().expect("state lock");
         if guard.running.is_none() {
+            if matches!(guard.status, ServiceStatus::Starting) {
+                guard.run_id = guard.run_id.saturating_add(1);
+                guard.last_error = None;
+                guard.status = ServiceStatus::NotStarted;
+                push_log(&state.logs, "service startup canceled");
+                return Ok(());
+            }
             guard.status = ServiceStatus::NotStarted;
             return Ok(());
         }
