@@ -271,8 +271,8 @@ try {
     Update-ReleaseGateForArtifacts -GatePath $gatePath -AndroidDist $androidDist -WindowsDist $windowsDist
     if ($forceRelease) {
         $gate = Get-ReleaseGate -GatePath $gatePath
-        $gate.force_release_override = $true
-        $gate.force_release_note = 'Released under FORCE_RELEASE=true; release gate checklist items may be marked human-override.'
+        $gate | Add-Member -NotePropertyName force_release_override -NotePropertyValue $true -Force
+        $gate | Add-Member -NotePropertyName force_release_note -NotePropertyValue 'Released under FORCE_RELEASE=true; release gate checklist items may be marked human-override.' -Force
         $gateJson = $gate | ConvertTo-Json -Depth 8
         Set-Content -LiteralPath $gatePath -Value $gateJson -Encoding utf8
     }
