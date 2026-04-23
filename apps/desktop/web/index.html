@@ -6,15 +6,20 @@
     <title>LAN Audio Desktop Console</title>
     <style>
       :root {
-        --bg: #f3f5f7;
-        --panel: #ffffff;
-        --text: #16202a;
-        --muted: #5f6c7b;
-        --line: #d8e0e9;
-        --accent: #1461d9;
-        --ok: #127948;
-        --warn: #b45309;
-        --error: #b42318;
+        --bg: #0c0f14;
+        --bg2: #131720;
+        --panel: #1e2433;
+        --panel2: #252b3b;
+        --text: #f0f2f7;
+        --muted: #8892a4;
+        --faint: #4a5568;
+        --line: rgba(255,255,255,0.09);
+        --line-strong: rgba(255,255,255,0.14);
+        --accent: #00d4aa;
+        --accent-dim: rgba(0,212,170,0.12);
+        --ok: #00d4aa;
+        --warn: #f59e0b;
+        --error: #ef4444;
       }
 
       * { box-sizing: border-box; }
@@ -22,7 +27,9 @@
       body {
         margin: 0;
         font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-        background: var(--bg);
+        background:
+          radial-gradient(circle at top left, rgba(0,212,170,0.10), transparent 32%),
+          var(--bg);
         color: var(--text);
       }
 
@@ -54,17 +61,18 @@
 
       .lang-toggle {
         border: 1px solid var(--line);
-        border-radius: 10px;
-        background: #fff;
+        border-radius: 8px;
+        background: var(--panel);
         padding: 7px 10px;
         color: var(--text);
       }
 
       .panel {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 16px 42px rgba(0,0,0,0.22);
       }
 
       .status-line {
@@ -81,6 +89,7 @@
         height: 10px;
         border-radius: 50%;
         background: #8a98a8;
+        box-shadow: 0 0 18px currentColor;
       }
 
       .status-dot.running { background: var(--ok); }
@@ -102,17 +111,18 @@
 
       .primary {
         border: 0;
-        border-radius: 11px;
+        border-radius: 8px;
         font-size: 16px;
         font-weight: 700;
         padding: 11px 26px;
         background: var(--accent);
-        color: #fff;
+        color: #07110f;
         cursor: pointer;
       }
 
       .primary.stop {
-        background: #d22f2f;
+        background: var(--error);
+        color: #fff;
       }
 
       .primary:disabled {
@@ -127,7 +137,7 @@
 
       .health-strip {
         margin-top: 12px;
-        border-top: 1px solid #e6ebf2;
+        border-top: 1px solid var(--line);
         padding-top: 10px;
       }
 
@@ -175,16 +185,17 @@
 
       .source-btn {
         border: 1px solid var(--line);
-        background: #fff;
+        background: var(--bg2);
         color: var(--text);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 8px 12px;
         cursor: pointer;
       }
 
       .source-btn.active {
-        border-color: #9dc0fb;
-        color: #0f4db2;
+        border-color: rgba(0,212,170,0.40);
+        background: var(--accent-dim);
+        color: var(--accent);
       }
 
       .toggle {
@@ -224,8 +235,8 @@
 
       .copy-btn {
         border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fff;
+        border-radius: 6px;
+        background: var(--bg2);
         color: var(--text);
         padding: 4px 9px;
         font-size: 12px;
@@ -233,7 +244,7 @@
       }
 
       .copy-btn:hover {
-        border-color: #b9c7d9;
+        border-color: var(--line-strong);
       }
 
       .device-block {
@@ -250,7 +261,7 @@
         font-size: 13px;
         font-weight: 600;
         padding-bottom: 8px;
-        border-bottom: 1px solid #e6ebf2;
+        border-bottom: 1px solid var(--line);
         margin-bottom: 8px;
       }
 
@@ -264,12 +275,12 @@
 
       .device-recent li {
         font-size: 13px;
-        color: #2e3a47;
+        color: var(--text);
       }
 
       .usb-panel {
         margin-top: 10px;
-        border-top: 1px solid #e6ebf2;
+        border-top: 1px solid var(--line);
         padding-top: 10px;
       }
 
@@ -298,9 +309,9 @@
 
       details {
         margin-top: 12px;
-        background: #fff;
+        background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 0 14px;
       }
 

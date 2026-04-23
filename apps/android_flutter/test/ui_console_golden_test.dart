@@ -61,6 +61,20 @@ void main() {
       );
     });
 
+    testWidgets('golden buffering ${resolution.name}', (tester) async {
+      await _pumpHarness(
+        tester,
+        resolution.size,
+        state: ConsoleUiState.buffering,
+      );
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(
+          'goldens/ui_console_buffering_${resolution.name}.png',
+        ),
+      );
+    });
+
     testWidgets('golden error ${resolution.name}', (tester) async {
       await _pumpHarness(
         tester,

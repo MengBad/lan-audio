@@ -22,6 +22,12 @@ Phase 0 / Phase 1 update:
   - `metrics.{buffered_ms, underrun, late_packets, dropped_packets, rtt_ms, reconnect_count, decode_errors, sink_write_gap_ms_p95}`
 - Service controls, local address, adb device listing, and similar management data stay outside the runtime snapshot contract.
 
+Post-`v1.4` regression update:
+
+- The Windows first screen uses the Audio Console Dark visual structure.
+- The top status area, key runtime metrics, audio mode, connection address, and stop action must remain visible without opening diagnostics.
+- Diagnostics remain collapsed by default and continue to use the existing desktop snapshot data.
+
 ## First Screen
 
 The first screen keeps four pieces of information visible:

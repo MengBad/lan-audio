@@ -370,6 +370,8 @@ data class StableServiceMetrics(
     val lossEstimate: Int = 0,
     val lastSeq: Long? = null,
     val startupSilenceFillCount: Int = 0,
+    val rxFramesPerSec: Double = 0.0,
+    val audioTrackWriteFramesPerSec: Double = 0.0,
     val jitterP95Ms: Int? = null,
     val floorHoldCount: Int = 0,
 )
@@ -432,6 +434,8 @@ data class StableServiceSnapshot(
                 "loss_estimate" to metrics.lossEstimate,
                 "last_seq" to metrics.lastSeq,
                 "startup_silence_fill_count" to metrics.startupSilenceFillCount,
+                "rx_frames_per_sec" to metrics.rxFramesPerSec,
+                "audio_track_write_frames_per_sec" to metrics.audioTrackWriteFramesPerSec,
                 "jitter_p95_ms" to metrics.jitterP95Ms,
                 "floor_hold_count" to metrics.floorHoldCount,
             ),
@@ -449,11 +453,11 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
     val normalizedEffectiveCodec = effectiveCodec.ifBlank { "pcm16" }
     val state = when {
         connectionState == "reconnecting" -> "recovering"
+        playbackState == "playing" -> "streaming"
         recentLog.startsWith("set_audio_mode:") ||
             recentLog.startsWith("set_audio_mode_pending:") ||
             recentLog.startsWith("audio_mode_changed:") ||
             recentLog.startsWith("v2_audio_mode_changed:") -> "reconfiguring"
-        playbackState == "playing" -> "streaming"
         connectionState == "connected" -> "negotiated"
         connectionState == "connecting" -> "handshaking"
         serviceState == "stopping" || serviceState == "error" || connectionState == "error" -> "closed"
@@ -522,6 +526,8 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             lossEstimate = metrics.lossEstimate,
             lastSeq = metrics.lastSeq,
             startupSilenceFillCount = metrics.startupSilenceFillCount,
+            rxFramesPerSec = metrics.rxFramesPerSec,
+            audioTrackWriteFramesPerSec = metrics.audioTrackWriteFramesPerSec,
             jitterP95Ms = metrics.jitterP95Ms,
             floorHoldCount = metrics.floorHoldCount,
         ),

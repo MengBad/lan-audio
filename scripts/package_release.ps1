@@ -173,6 +173,51 @@ function Update-ReleaseGateForArtifacts {
     Set-Content -LiteralPath $GatePath -Value $gateJson -Encoding utf8
 }
 
+function Assert-AndroidReleaseSigning {
+    param(
+        [Parameter(Mandatory = $true)][string]$AndroidProject
+    )
+
+    $localPropsPath = Join-Path $AndroidProject 'android/local.properties'
+    if (-not (Test-Path $localPropsPath)) {
+        throw "Android release signing requires android/local.properties."
+    }
+
+    $props = @{}
+    Get-Content -LiteralPath $localPropsPath | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
+            return
+        }
+        $idx = $line.IndexOf('=')
+        if ($idx -le 0) {
+            return
+        }
+        $props[$line.Substring(0, $idx)] = $line.Substring($idx + 1)
+    }
+
+    foreach ($key in @(
+        'lanAudio.releaseStoreFile',
+        'lanAudio.releaseStorePassword',
+        'lanAudio.releaseKeyAlias',
+        'lanAudio.releaseKeyPassword'
+    )) {
+        if (-not $props.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$props[$key])) {
+            throw "Android release signing is incomplete: missing $key in apps/android_flutter/android/local.properties"
+        }
+    }
+
+    $storeFile = [string]$props['lanAudio.releaseStoreFile']
+    if ([System.IO.Path]::IsPathRooted($storeFile)) {
+        $storePath = $storeFile
+    } else {
+        $storePath = Join-Path (Join-Path $AndroidProject 'android/app') $storeFile
+    }
+    if (-not (Test-Path $storePath)) {
+        throw "Android release keystore not found: $storePath"
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
 if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
@@ -212,6 +257,7 @@ try {
     }
 
     if (-not $NoAndroid) {
+        Assert-AndroidReleaseSigning -AndroidProject (Join-Path $repoRoot 'apps/android_flutter')
         Invoke-Step -Name 'Build Android release APKs (split per ABI)' -Action {
             $sourceProject = Join-Path $repoRoot 'apps/android_flutter'
             $stagedProject = Join-Path $env:TEMP "lan_audio_android_release_$PID"

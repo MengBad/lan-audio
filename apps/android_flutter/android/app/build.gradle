@@ -4,6 +4,39 @@ plugins {
     id 'dev.flutter.flutter-gradle-plugin'
 }
 
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def releaseSigningValue = { String name ->
+    def envName = "LAN_AUDIO_${name.toUpperCase().replace('.', '_')}"
+    def ciEnvName = [
+        releaseStoreFile: 'LAN_AUDIO_ANDROID_RELEASE_STORE_FILE',
+        releaseStorePassword: 'LAN_AUDIO_ANDROID_RELEASE_STORE_PASSWORD',
+        releaseKeyAlias: 'LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS',
+        releaseKeyPassword: 'LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD',
+    ][name]
+    return localProperties.getProperty("lanAudio.${name}") ?: System.getenv(ciEnvName ?: envName) ?: System.getenv(envName)
+}
+
+def releaseSigningConfigured = {
+    return releaseSigningValue('releaseStoreFile') &&
+        releaseSigningValue('releaseStorePassword') &&
+        releaseSigningValue('releaseKeyAlias') &&
+        releaseSigningValue('releaseKeyPassword')
+}
+
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } &&
+    !releaseSigningConfigured()) {
+    throw new GradleException(
+        'Release signing is not configured. Set lanAudio.releaseStoreFile / lanAudio.releaseStorePassword / lanAudio.releaseKeyAlias / lanAudio.releaseKeyPassword in android/local.properties, or LAN_AUDIO_ANDROID_RELEASE_STORE_FILE / LAN_AUDIO_ANDROID_RELEASE_STORE_PASSWORD / LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS / LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD in CI.'
+    )
+}
+
 android {
     namespace 'com.example.lan_audio_android_mvp'
     compileSdk flutter.compileSdkVersion
@@ -47,12 +80,37 @@ android {
         abortOnError false
     }
 
+    signingConfigs {
+        release {
+            def releaseStoreFile = releaseSigningValue('releaseStoreFile')
+            def releaseStorePassword = releaseSigningValue('releaseStorePassword')
+            def releaseKeyAlias = releaseSigningValue('releaseKeyAlias')
+            def releaseKeyPassword = releaseSigningValue('releaseKeyPassword')
+            if (releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+tasks.matching { it.name.toLowerCase().contains('release') }.configureEach {
+    doFirst {
+        if (!android.signingConfigs.release.storeFile) {
+            throw new GradleException(
+                'Release signing is not configured. Set lanAudio.releaseStoreFile / lanAudio.releaseStorePassword / lanAudio.releaseKeyAlias / lanAudio.releaseKeyPassword in android/local.properties, or LAN_AUDIO_ANDROID_RELEASE_STORE_FILE / LAN_AUDIO_ANDROID_RELEASE_STORE_PASSWORD / LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS / LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD in CI.'
+            )
         }
     }
 }

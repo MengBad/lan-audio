@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'audio/background_playback_service.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
+import 'ui/metric_display_sampler.dart';
 import 'ui/widgets/danger_action_button.dart';
 import 'ui/widgets/hero_status_widget.dart';
 import 'ui/widgets/metric_chip_widget.dart';
@@ -89,12 +90,15 @@ class _DebugPageState extends State<DebugPage> {
 
   final BackgroundPlaybackService _backgroundService =
       BackgroundPlaybackService();
+  final MetricDisplaySampler _metricDisplaySampler =
+      const MetricDisplaySampler();
   final Map<String, DiscoveryServer> _servers = {};
   final Map<String, DateTime> _recentConnectedHosts = {};
   final TextEditingController _manualHostController = TextEditingController();
 
   RawDatagramSocket? _discoverySocket;
   Timer? _probeTimer;
+  Timer? _metricSamplerTimer;
   StreamSubscription<PlaybackServiceSnapshot>? _serviceEventsSub;
 
   String _status = 'idle';
@@ -118,10 +122,13 @@ class _DebugPageState extends State<DebugPage> {
   PlaybackState _playbackState = PlaybackState.stopped;
 
   DateTime _lastProbeAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastBufferMetricPublishedAt =
+      DateTime.fromMillisecondsSinceEpoch(0);
 
   int _sampleRate = 48000;
   int _channels = 2;
   int _serviceBufferedMs = 0;
+  int _displayBufferedMs = 0;
   int _serviceJitterBufferedMs = 0;
   int _serviceTrackQueuedMs = 0;
   int _serviceUnderrun = 0;
@@ -168,6 +175,7 @@ class _DebugPageState extends State<DebugPage> {
           .setOptions(startBufferMs: 60, maxBufferMs: 300, pingIntervalMs: 1000)
           .catchError((_) {});
     }
+    _startMetricSampler();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowFirstUseHint();
@@ -178,6 +186,7 @@ class _DebugPageState extends State<DebugPage> {
   @override
   void dispose() {
     _serviceEventsSub?.cancel();
+    _metricSamplerTimer?.cancel();
     _probeTimer?.cancel();
     _discoverySocket?.close();
     _releaseMulticastLock();
@@ -283,6 +292,26 @@ class _DebugPageState extends State<DebugPage> {
       if (_wsConnected || _playbackState != PlaybackState.stopped) {
         _lastErrorMessage = null;
       }
+    });
+  }
+
+  void _startMetricSampler() {
+    _metricSamplerTimer?.cancel();
+    _metricSamplerTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      if (!_metricDisplaySampler.canPublish(
+        now: now,
+        lastPublishedAt: _lastBufferMetricPublishedAt,
+        runtimeState: _runtimeState,
+      )) {
+        return;
+      }
+      if (_displayBufferedMs == _serviceBufferedMs) return;
+      setState(() {
+        _displayBufferedMs = _serviceBufferedMs;
+        _lastBufferMetricPublishedAt = now;
+      });
     });
   }
 
@@ -635,7 +664,7 @@ class _DebugPageState extends State<DebugPage> {
     return tr('连接已选', 'Connect Selected');
   }
 
-  int get _uiBufferedMs => _serviceBufferedMs;
+  int get _uiBufferedMs => _displayBufferedMs;
   int get _uiJitterBufferedMs => _serviceJitterBufferedMs;
   int get _uiTrackQueuedMs => _serviceTrackQueuedMs;
   int get _uiUnderrun => _serviceUnderrun;
@@ -686,7 +715,15 @@ class _DebugPageState extends State<DebugPage> {
     return _consoleState != ConsoleUiState.connecting;
   }
 
-  String get _metricBufferText => '$_uiBufferedMs';
+  bool get _showLegacyMainDebugContent => false;
+
+  String get _metricBufferText {
+    if (_consoleState != ConsoleUiState.streaming &&
+        _consoleState != ConsoleUiState.buffering) {
+      return '--';
+    }
+    return '$_uiBufferedMs';
+  }
 
   String get _metricFpsText {
     final value = _uiRxFramesPerSec;
@@ -781,6 +818,291 @@ class _DebugPageState extends State<DebugPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showConnectionSheet(List<DiscoveryServer> servers) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AudioConsoleColors.surface,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: SingleChildScrollView(
+            child: _buildConnectionControls(
+              servers,
+              onModeChanged: (mode) {
+                setState(() => _connectMode = mode);
+                setSheetState(() {});
+              },
+              closeAfterAction: true,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConnectionControls(
+    List<DiscoveryServer> servers, {
+    required ValueChanged<ConnectMode> onModeChanged,
+    bool closeAfterAction = false,
+  }) {
+    Future<void> runAndClose(Future<void> Function() action) async {
+      if (closeAfterAction && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      await action();
+    }
+
+    final recentHost = _mostRecentHost();
+    return Column(
+      key: const Key('connection_controls_panel'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(tr('连接控制', 'Connection Control'), style: AudioConsoleType.title()),
+        const SizedBox(height: 8),
+        Text(
+          '${tr('当前目标', 'Current target')}: $_serverAddress',
+          key: const Key('connection_current_target'),
+          style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
+        ),
+        if (recentHost != null) const SizedBox(height: 4),
+        if (recentHost != null)
+          Text(
+            '${tr('最近设备', 'Recent device')}: $recentHost',
+            key: const Key('connection_recent_device'),
+            style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
+          ),
+        const SizedBox(height: 12),
+        SegmentedButton<ConnectMode>(
+          segments: [
+            ButtonSegment(
+              value: ConnectMode.discovered,
+              icon: const Icon(Icons.radar),
+              label: Text(tr('发现', 'Discover')),
+            ),
+            ButtonSegment(
+              value: ConnectMode.manual,
+              icon: const Icon(Icons.edit_location_alt),
+              label: Text(tr('手动', 'Manual')),
+            ),
+            ButtonSegment(
+              value: ConnectMode.usb,
+              icon: const Icon(Icons.usb),
+              label: Text(tr('USB', 'USB')),
+            ),
+          ],
+          selected: <ConnectMode>{_connectMode},
+          onSelectionChanged: (selection) => onModeChanged(selection.first),
+        ),
+        const SizedBox(height: 12),
+        if (_connectMode == ConnectMode.manual)
+          TextField(
+            key: const Key('manual_host_input'),
+            controller: _manualHostController,
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              labelText: tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
+              hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
+            ),
+          )
+        else if (_connectMode == ConnectMode.discovered && servers.isNotEmpty)
+          SizedBox(
+            height: 132,
+            child: ListView.builder(
+              itemCount: servers.length,
+              itemBuilder: (context, index) {
+                final s = servers[index];
+                final selected = s.serverId == _selectedServerId;
+                return ListTile(
+                  key: Key('connection_server_${s.host}'),
+                  dense: true,
+                  selected: selected,
+                  title: Text('${s.serverName} (${s.host})'),
+                  subtitle: Text('ws:${s.wsPort} udp:${s.udpPort}'),
+                  onTap: () {
+                    setState(() => _selectedServerId = s.serverId);
+                  },
+                );
+              },
+            ),
+          )
+        else if (_connectMode == ConnectMode.discovered)
+          Text(
+            tr('暂无发现结果，可以扫描或手动输入。',
+                'No discovered server yet. Scan or input manually.'),
+            style: AudioConsoleType.body(color: AudioConsoleColors.text2),
+          )
+        else
+          Text(
+            tr('使用 adb reverse 后连接手机本机地址。',
+                'Use adb reverse, then connect to phone localhost.'),
+            style: AudioConsoleType.body(color: AudioConsoleColors.text2),
+          ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              key: const Key('connection_primary_action'),
+              onPressed: _isConnecting
+                  ? null
+                  : () {
+                      if (_connectMode == ConnectMode.discovered) {
+                        runAndClose(_connectSelected);
+                      } else if (_connectMode == ConnectMode.usb) {
+                        runAndClose(_connectUsb);
+                      } else {
+                        runAndClose(_connectManual);
+                      }
+                    },
+              icon: const Icon(Icons.link),
+              label: Text(_connectActionLabel()),
+            ),
+            OutlinedButton.icon(
+              key: const Key('connection_scan_action'),
+              onPressed: _probeRunning ? null : _probeSubnetForServers,
+              icon: const Icon(Icons.search),
+              label: Text(
+                _probeRunning
+                    ? tr('扫描中...', 'Scanning...')
+                    : tr('扫描局域网', 'Scan LAN'),
+              ),
+            ),
+            if (recentHost != null)
+              OutlinedButton.icon(
+                key: const Key('connection_recent_action'),
+                onPressed: _isConnecting
+                    ? null
+                    : () => runAndClose(_connectQuickRecent),
+                icon: const Icon(Icons.history),
+                label: Text(tr('重新连接最近设备', 'Reconnect recent')),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _showAdvancedSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AudioConsoleColors.surface,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: SingleChildScrollView(child: _buildAdvancedPanel()),
+      ),
+    );
+  }
+
+  Widget _buildAdvancedPanel() {
+    return Column(
+      key: const Key('advanced_debug_panel'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(tr('高级与调试', 'Advanced & Debug'), style: AudioConsoleType.title()),
+        const SizedBox(height: 12),
+        SegmentedButton<AppLang>(
+          segments: const [
+            ButtonSegment(value: AppLang.zh, label: Text('中文')),
+            ButtonSegment(value: AppLang.en, label: Text('English')),
+          ],
+          selected: <AppLang>{_lang},
+          onSelectionChanged: (selection) {
+            setState(() => _lang = selection.first);
+          },
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const Key('advanced_check_update_action'),
+          onPressed: _updateCheckRunning
+              ? null
+              : () => _checkForUpdate(
+                    silentDelayMs: 0,
+                    showNoUpdateHint: true,
+                  ),
+          icon: const Icon(Icons.system_update),
+          label: Text(tr('检查更新', 'Check Update')),
+        ),
+        const SizedBox(height: 14),
+        _buildDebugMetricsPanel(),
+      ],
+    );
+  }
+
+  Widget _buildDebugMetricsPanel() {
+    final caps = _negotiatedCapabilities.entries
+        .where((e) => e.value)
+        .map((e) => e.key)
+        .join(', ');
+    final profile =
+        _modeProfile.entries.map((e) => '${e.key}=${e.value}').join(', ');
+    final lines = <String>[
+      '${tr('协议版本', 'Protocol')}: v${_protocolVersion ?? 1}  |  ${tr('当前模式', 'Mode')}: ${_audioModeWire(_currentAudioMode)}',
+      'codec: $_effectiveCodec',
+      'data_plane: $_protocolPath',
+      'transport: $_transportMode',
+      'connected_clients: $_connectedClientCount',
+      'playback_backend: $_playbackBackend',
+      'server: ${_serverPlatform ?? 'unknown'} ${_serverAppVersion ?? ''}',
+      'capabilities: $caps',
+      'mode_profile: $profile',
+      'sample_rate: $_sampleRate',
+      'channels: $_channels',
+      'total_buffered_ms: ${_serviceBufferedMs} (jitter: ${_uiJitterBufferedMs} + track: ${_uiTrackQueuedMs})',
+      'audio_track_latency_ms: ${_uiAudioTrackLatencyMs == null ? '-' : '${_uiAudioTrackLatencyMs} ms'}',
+      'jitter_underrun: $_uiUnderrun',
+      'jitter_dropped: $_uiDropped',
+      'jitter_late: $_uiLate',
+      'floor_hold_count: $_uiFloorHoldCount',
+      'jitter_p95_ms: ${_uiJitterP95Ms == null ? '-' : '${_uiJitterP95Ms} ms'}',
+      'rx_frames_per_sec: ${_uiRxFramesPerSec == null ? '-' : _uiRxFramesPerSec!.toStringAsFixed(2)}',
+      'udp_packets: $_uiUdpPackets',
+      'udp_bytes: $_uiUdpBytes',
+      'loss_estimate: $_uiUdpLoss',
+      'last_seq: ${_uiLastSeq ?? '-'}',
+      'tcp_rtt_ms: ${_tcpRoundTripMs ?? '-'}',
+    ];
+    return Container(
+      key: const Key('advanced_debug_metrics'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AudioConsoleColors.bg2,
+        borderRadius: AudioConsoleRadius.button,
+        border: Border.all(color: AudioConsoleColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tr('调试指标', 'Debug Metrics'),
+              style: AudioConsoleType.caption(color: AudioConsoleColors.text2)),
+          const SizedBox(height: 8),
+          for (final line in lines)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(line, style: AudioConsoleType.monoMeta()),
+            ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            color: Colors.black,
+            child: Text(
+              _wsLog.isEmpty ? '(empty)' : _wsLog,
+              style: AudioConsoleType.debugConsole(color: Colors.greenAccent),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -932,14 +1254,11 @@ class _DebugPageState extends State<DebugPage> {
       appBar: AppBar(
         title: Text(tr('LAN Audio 控制台', 'LAN Audio Console')),
         actions: [
-          PopupMenuButton<AppLang>(
-            initialValue: _lang,
-            onSelected: (lang) => setState(() => _lang = lang),
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: AppLang.zh, child: Text('中文')),
-              PopupMenuItem(value: AppLang.en, child: Text('English')),
-            ],
-            icon: const Icon(Icons.language),
+          IconButton(
+            key: const Key('advanced_debug_entry'),
+            tooltip: tr('高级与调试', 'Advanced & Debug'),
+            onPressed: _showAdvancedSheet,
+            icon: const Icon(Icons.tune),
           ),
         ],
       ),
@@ -988,6 +1307,8 @@ class _DebugPageState extends State<DebugPage> {
             title: tr('连接到', 'Connected to'),
             badge: _transportBadge,
             address: _serverAddress,
+            hint: tr('点击管理连接目标', 'Tap to manage connection'),
+            onTap: () => _showConnectionSheet(servers),
           ),
           const SizedBox(height: 12),
           Row(
@@ -1058,125 +1379,129 @@ class _DebugPageState extends State<DebugPage> {
               ),
             ),
           const SizedBox(height: 8),
-          Text(
-            tr('高级与调试', 'Advanced & Debug'),
-            style: AudioConsoleType.caption(color: AudioConsoleColors.text3),
-          ),
-          const SizedBox(height: 6),
-          Opacity(opacity: 0.82, child: _buildQuickConnectCard(servers)),
-          if (_mostRecentHost() != null) const SizedBox(height: 10),
-          Opacity(
-            opacity: 0.82,
-            child: Card(
-              color: AudioConsoleColors.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: AudioConsoleRadius.card,
-                side: const BorderSide(color: AudioConsoleColors.border),
-              ),
-              child: ExpansionTile(
-                title: Text(tr('连接控制', 'Connection Control')),
-                subtitle: Text(
-                  tr('发现/手动/USB 连接入口', 'Discovery/manual/USB entry'),
-                  style: AudioConsoleType.monoMeta(
-                      color: AudioConsoleColors.text3),
+          if (_showLegacyMainDebugContent) ...[
+            Text(
+              tr('高级与调试', 'Advanced & Debug'),
+              style: AudioConsoleType.caption(color: AudioConsoleColors.text3),
+            ),
+            const SizedBox(height: 6),
+            Opacity(opacity: 0.82, child: _buildQuickConnectCard(servers)),
+            if (_mostRecentHost() != null) const SizedBox(height: 10),
+            Opacity(
+              opacity: 0.82,
+              child: Card(
+                color: AudioConsoleColors.surface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: AudioConsoleRadius.card,
+                  side: const BorderSide(color: AudioConsoleColors.border),
                 ),
-                childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                children: [
-                  SegmentedButton<ConnectMode>(
-                    segments: [
-                      ButtonSegment(
-                        value: ConnectMode.discovered,
-                        label: Text(tr('发现设备', 'Discovered')),
-                      ),
-                      ButtonSegment(
-                        value: ConnectMode.manual,
-                        label: Text(tr('手动地址', 'Manual')),
-                      ),
-                      ButtonSegment(
-                        value: ConnectMode.usb,
-                        label: Text(tr('USB(adb)', 'USB (adb)')),
-                      ),
-                    ],
-                    selected: <ConnectMode>{_connectMode},
-                    onSelectionChanged: (selection) {
-                      setState(() {
-                        _connectMode = selection.first;
-                      });
-                    },
+                child: ExpansionTile(
+                  title: Text(tr('连接控制', 'Connection Control')),
+                  subtitle: Text(
+                    tr('发现/手动/USB 连接入口', 'Discovery/manual/USB entry'),
+                    style: AudioConsoleType.monoMeta(
+                        color: AudioConsoleColors.text3),
                   ),
-                  const SizedBox(height: 10),
-                  if (_connectMode == ConnectMode.manual)
-                    TextField(
-                      controller: _manualHostController,
-                      decoration: InputDecoration(
-                        border: const OutlineInputBorder(),
-                        labelText:
-                            tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
-                        hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
-                      ),
-                    )
-                  else if (servers.isNotEmpty)
-                    SizedBox(
-                      height: 120,
-                      child: ListView.builder(
-                        itemCount: servers.length,
-                        itemBuilder: (context, index) {
-                          final s = servers[index];
-                          final selected = s.serverId == _selectedServerId;
-                          return ListTile(
-                            dense: true,
-                            selected: selected,
-                            title: Text('${s.serverName} (${s.host})'),
-                            subtitle: Text('ws:${s.wsPort} udp:${s.udpPort}'),
-                            onTap: () {
-                              setState(() {
-                                _selectedServerId = s.serverId;
-                              });
-                            },
-                          );
-                        },
-                      ),
-                    )
-                  else
-                    Text(
-                      tr('暂无发现结果，可扫描或手动输入。',
-                          'No discovered server yet. Scan or input manually.'),
+                  childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  children: [
+                    SegmentedButton<ConnectMode>(
+                      segments: [
+                        ButtonSegment(
+                          value: ConnectMode.discovered,
+                          label: Text(tr('发现设备', 'Discovered')),
+                        ),
+                        ButtonSegment(
+                          value: ConnectMode.manual,
+                          label: Text(tr('手动地址', 'Manual')),
+                        ),
+                        ButtonSegment(
+                          value: ConnectMode.usb,
+                          label: Text(tr('USB(adb)', 'USB (adb)')),
+                        ),
+                      ],
+                      selected: <ConnectMode>{_connectMode},
+                      onSelectionChanged: (selection) {
+                        setState(() {
+                          _connectMode = selection.first;
+                        });
+                      },
                     ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: _isConnecting
-                              ? null
-                              : () {
-                                  if (_connectMode == ConnectMode.discovered) {
-                                    _connectSelected();
-                                  } else if (_connectMode == ConnectMode.usb) {
-                                    _connectUsb();
-                                  } else {
-                                    _connectManual();
-                                  }
-                                },
-                          child: Text(_connectActionLabel()),
+                    const SizedBox(height: 10),
+                    if (_connectMode == ConnectMode.manual)
+                      TextField(
+                        controller: _manualHostController,
+                        decoration: InputDecoration(
+                          border: const OutlineInputBorder(),
+                          labelText:
+                              tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
+                          hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton(
-                        onPressed:
-                            _probeRunning ? null : _probeSubnetForServers,
-                        child: Text(
-                          _probeRunning
-                              ? tr('扫描中...', 'Scanning...')
-                              : tr('扫描局域网', 'Scan LAN'),
+                      )
+                    else if (servers.isNotEmpty)
+                      SizedBox(
+                        height: 120,
+                        child: ListView.builder(
+                          itemCount: servers.length,
+                          itemBuilder: (context, index) {
+                            final s = servers[index];
+                            final selected = s.serverId == _selectedServerId;
+                            return ListTile(
+                              dense: true,
+                              selected: selected,
+                              title: Text('${s.serverName} (${s.host})'),
+                              subtitle: Text('ws:${s.wsPort} udp:${s.udpPort}'),
+                              onTap: () {
+                                setState(() {
+                                  _selectedServerId = s.serverId;
+                                });
+                              },
+                            );
+                          },
                         ),
+                      )
+                    else
+                      Text(
+                        tr('暂无发现结果，可扫描或手动输入。',
+                            'No discovered server yet. Scan or input manually.'),
                       ),
-                    ],
-                  ),
-                ],
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _isConnecting
+                                ? null
+                                : () {
+                                    if (_connectMode ==
+                                        ConnectMode.discovered) {
+                                      _connectSelected();
+                                    } else if (_connectMode ==
+                                        ConnectMode.usb) {
+                                      _connectUsb();
+                                    } else {
+                                      _connectManual();
+                                    }
+                                  },
+                            child: Text(_connectActionLabel()),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed:
+                              _probeRunning ? null : _probeSubnetForServers,
+                          child: Text(
+                            _probeRunning
+                                ? tr('扫描中...', 'Scanning...')
+                                : tr('扫描局域网', 'Scan LAN'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
           const SizedBox(height: 10),
           Opacity(
             opacity: 0.72,

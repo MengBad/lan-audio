@@ -58,6 +58,26 @@ Outputs:
 
 `package_release.ps1` normally requires the non-artifact gate fields to pass first. When `FORCE_RELEASE=true`, packaging still runs but gate enforcement is bypassed and the release-tracking artifacts are annotated for human override.
 
+## Android Release Signing
+
+Release APKs must be signed with a stable release keystore. Debug signing is only for debug builds and must not be used for GitHub Release artifacts.
+
+Local release packaging requires these entries in `apps/android_flutter/android/local.properties`:
+
+- `lanAudio.releaseStoreFile`
+- `lanAudio.releaseStorePassword`
+- `lanAudio.releaseKeyAlias`
+- `lanAudio.releaseKeyPassword`
+
+GitHub Actions uses repository secrets to recreate the same keystore identity on every run:
+
+- `LAN_AUDIO_ANDROID_RELEASE_KEYSTORE_BASE64`
+- `LAN_AUDIO_ANDROID_RELEASE_STORE_PASSWORD`
+- `LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS`
+- `LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD`
+
+Compatibility boundary: the shipped `v1.4` APKs were built through a path that used the build machine debug signing identity. If an installed APK was signed by a different debug key than the fixed release key, Android will require a one-time uninstall before installing the first fixed release-key build. From the first release built with the stable release keystore onward, APKs are expected to support normal signed overwrite upgrades as long as the same keystore is retained.
+
 ## Release Entry
 
 Use:

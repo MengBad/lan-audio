@@ -15,6 +15,7 @@ void main() {
       'rollback_state': 'main_path_active',
       'metrics': <String, dynamic>{
         'buffered_ms': 42,
+        'rx_frames_per_sec': 99.5,
         'underrun': 0,
         'late_packets': 1,
         'dropped_packets': 2,
@@ -35,6 +36,7 @@ void main() {
     expect(snapshot.state, 'streaming');
     expect(snapshot.rollbackState, 'main_path_active');
     expect(snapshot.metrics['buffered_ms'], 42);
+    expect(snapshot.metrics['rx_frames_per_sec'], 99.5);
     expect(snapshot.metrics['sink_write_gap_ms_p95'], 6);
   });
 }

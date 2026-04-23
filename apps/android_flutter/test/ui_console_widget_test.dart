@@ -45,6 +45,27 @@ void main() {
     expect(find.byKey(const Key('hero_orb_pulsing')), findsOneWidget);
   });
 
+  testWidgets('server card opens connection controls entry point',
+      (tester) async {
+    var tapped = false;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAudioConsoleTheme(),
+      home: Scaffold(
+        body: ServerCardWidget(
+          title: 'Connected to',
+          badge: 'Wi-Fi',
+          address: '10.0.0.185:39991',
+          hint: 'Tap to manage connection',
+          onTap: () => tapped = true,
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byKey(const Key('server_card')));
+    expect(tapped, isTrue);
+    expect(find.byKey(const Key('server_card_hint')), findsOneWidget);
+  });
+
   testWidgets('error: error semantics and recover entry are visible',
       (tester) async {
     await tester.pumpWidget(_buildHarness(state: ConsoleUiState.error));

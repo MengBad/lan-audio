@@ -41,6 +41,9 @@ artifacts/validate/
 *.hprof
 apps/android_flutter/android/.gradle/
 apps/android_flutter/android/local.properties
+apps/android_flutter/android/*.jks
+apps/android_flutter/android/*.keystore
+apps/android_flutter/android/release-signing.generated.env
 
 # Local extracted / staging files
 tmp_apk_extract/

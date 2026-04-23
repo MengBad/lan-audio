@@ -49,6 +49,9 @@
 
 ## Current Priority
 
+- [x] Post-`v1.4` regression pass: Android Audio Console restores discoverable Server Card connection controls, moves debug/update actions behind the top-right advanced entry, throttles visible `buffer ms` to a 1s UI cadence, restores `rx fps` from the stable snapshot, and fixes mode-switch UI recovery from `buffering` back to `streaming`.
+- [x] Post-`v1.4` release-flow fix: Android release APK signing no longer uses the per-machine debug keystore; release builds now require a stable release keystore locally and in GitHub Actions.
+- [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
 - [ ] Refactor Android runtime internals without breaking the shared snapshot contract
 - [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
 - [ ] Improve post-release diagnostics and operator-facing troubleshooting flow

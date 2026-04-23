@@ -38,6 +38,18 @@ void main() {
     expect(state, ConsoleUiState.buffering);
   });
 
+  test('mode switch recovery maps back to streaming when playback resumes', () {
+    final state = ConsoleStatusMapper.map(
+      isConnecting: false,
+      wsConnected: true,
+      isPlaying: true,
+      isBuffering: true,
+      runtimeState: 'reconfiguring',
+      hasError: false,
+    );
+    expect(state, ConsoleUiState.streaming);
+  });
+
   test('maps to error when ui has explicit error', () {
     final state = ConsoleStatusMapper.map(
       isConnecting: false,

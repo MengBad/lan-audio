@@ -3,6 +3,8 @@
 ## Release Update (`2026-04-24`)
 
 - `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.
+- Post-release regression fixes keep the Protocol v2 contract stable: no data-plane header fields, control messages, mode enums, or rollback semantics were changed.
+- Android stable snapshot export now includes the already-computed `rx_frames_per_sec` and `audio_track_write_frames_per_sec` UI metrics so the console can show real receive cadence without changing protocol meaning.
 - Release decision is currently `allow_release`, sourced from `artifacts/release/acceptance_gate.json`.
 - Shared mode contracts, connection state machine, rollback state, failure taxonomy, service snapshot, and release gate schema now live in `crates/lan_audio_domain`.
 - Protocol messages still preserve v1/v2 compatibility, but shared contract types are now imported from the domain layer instead of being duplicated ad hoc.
