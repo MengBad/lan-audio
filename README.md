@@ -14,7 +14,7 @@ The goal of this project is straightforward: play audio on a Windows PC, send it
 - The repository contains a Rust LAN server, an Android Flutter client, and a Windows Tauri desktop app.
 - The documented recommended path is `windows_loopback + v2_header + opus`.
 - The maintained rollback path is `legacy_las1 + pcm16`.
-- Post-`v1.4` work is in regression-fix mode: Android and Windows console polish, stable metrics rendering, mode-switch UI recovery, and release APK signing consistency are being tightened without changing the protocol path.
+- The `v1.4.1` release candidate is a post-`v1.4` hotfix for Android and Windows console polish, stable metrics rendering, mode-switch UI recovery, and stable release APK signing; it does not change the protocol path.
 - Local validation, packaging, and release scripts are part of the repository.
 - Current follow-up work is focused on stability, latency tuning, mode strategy, Protocol v2 evolution, and desktop/UI productization.
 - This project is currently a better fit for developers and testers on Windows + Android than for general end users.

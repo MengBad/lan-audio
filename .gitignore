@@ -36,6 +36,8 @@ artifacts/contracts/
 artifacts/reports/
 artifacts/ui_baseline/
 artifacts/validate/
+artifacts/actions-signing-*/
+output/
 
 # Android crash dumps
 *.hprof

@@ -2,8 +2,9 @@
 
 ## Release State
 
-- Latest release: `v1.4`
-- Release mode: `FORCE_RELEASE=true`
+- Latest release before hotfix tag: `v1.4`
+- Current release target: `v1.4.1`
+- Release mode: `v1.4` used `FORCE_RELEASE=true`; `v1.4.1` target is a normal hotfix release
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -35,6 +36,13 @@
 - [x] Version and release docs updated to `v1.4`
 - [x] `scripts/package_release.ps1` preflight completed
 - [x] `scripts/release.ps1` executed
+
+## v1.4.1 Hotfix Release Prep
+
+- [x] Version metadata advanced to `1.4.1`
+- [x] Android version metadata advanced to `versionName=1.4.1`, `versionCode=2010401`
+- [x] Stable Android release signing verified locally and in GitHub Actions
+- [x] Historical `v1.4` debug-key APK compatibility boundary documented
 
 ## Completed In The v1.3 Cycle
 

@@ -2,7 +2,8 @@
 
 ## Current State
 
-- Latest shipped release: `v1.4`
+- Latest shipped release before the hotfix tag: `v1.4`
+- Current release target: `v1.4.1`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Current phase: post-release regression fix and controlled follow-up
@@ -19,4 +20,4 @@
 
 ## Release Position
 
-This follow-up does not trigger a new release by itself. The repository should remain in `continue_fixing / controlled validation` until local validation, packaging, signing configuration, and any required manual device checks are complete.
+This follow-up is being prepared as the `v1.4.1` hotfix release once local validation, packaging, signing configuration, and any required manual device checks are complete. The hotfix keeps the protocol and playback path unchanged from `v1.4`.

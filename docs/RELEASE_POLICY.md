@@ -2,11 +2,13 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.4`
+- Latest shipped release before the hotfix tag: `v1.4`
+- Current release target: `v1.4.1`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Release mode for `v1.4`: `FORCE_RELEASE=true` with human-override notes recorded in release-tracked docs and artifacts
+- Release mode for `v1.4.1`: normal hotfix release after local packaging and GitHub Actions signing verification
 
 Release decisions are artifact-driven. The source of truth is:
 
@@ -76,7 +78,7 @@ GitHub Actions uses repository secrets to recreate the same keystore identity on
 - `LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS`
 - `LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD`
 
-Compatibility boundary: the shipped `v1.4` APKs were built through a path that used the build machine debug signing identity. If an installed APK was signed by a different debug key than the fixed release key, Android will require a one-time uninstall before installing the first fixed release-key build. From the first release built with the stable release keystore onward, APKs are expected to support normal signed overwrite upgrades as long as the same keystore is retained.
+Compatibility boundary: the shipped `v1.4` APKs were built through a path that used the build machine debug signing identity. If an installed APK was signed by a different debug key than the fixed release key, Android will require a one-time uninstall before installing `v1.4.1`. From `v1.4.1` onward, APKs are expected to support normal signed overwrite upgrades as long as the same keystore is retained.
 
 ## Release Entry
 

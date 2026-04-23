@@ -2,7 +2,8 @@
 
 ## Current Position
 
-- Latest shipped release: `v1.4`
+- Latest shipped release before the hotfix tag: `v1.4`
+- Current release target: `v1.4.1`
 - Default runtime path: `windows_loopback + v2_header + opus`
 - Maintained rollback path: `legacy_las1 + pcm16`
 - Supported transports: `wifi`, `usb`
