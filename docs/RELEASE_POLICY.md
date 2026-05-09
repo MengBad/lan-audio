@@ -14,6 +14,7 @@ Release decisions are artifact-driven. The source of truth is:
 
 - `artifacts/release/acceptance_gate.json`
 - `artifacts/release/device_acceptance.json`
+- `artifacts/latency/latency_probe_latest.json` for structured latency revalidation
 
 ## Version Source
 
@@ -128,6 +129,7 @@ A standard release is allowed only when all of the following are true:
 - rewrite validation has passed
 - device acceptance has passed
 - rollback verification has passed
+- latency probe/export has produced a current `artifacts/latency/latency_probe_latest.json`
 - Android release APKs are present
 - Windows release EXE is present
 - there are no critical bugs

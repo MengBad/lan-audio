@@ -14,6 +14,7 @@
 - 产品定位：V2 是低延迟音频传输升级，不只是协议替换。
 - 默认策略：推荐路径默认启用，仍保留显式回滚到 `legacy_las1 + pcm16`。
 - Post-`v1.4` 修复未改变协议契约或 snapshot 语义，只补齐 stable snapshot 中已有接收速率指标的导出，并修正 UI 对模式切换瞬态的状态映射。
+- 延迟复核已系统化：`scripts/export_latency_probe.ps1` 将诊断 snapshot 转为 `artifacts/latency/latency_probe_latest.json`，按 `low_latency / balanced / high_quality` 输出结构化目标与结果。
 
 ## 兼容原则
 
@@ -88,7 +89,7 @@
 - 客观指标：`Playback=playing`，`pcmPeak≈6539~8731`，`pcmRms≈0.138~0.155`，`rx_frames_per_sec≈99~101`，`audio_track_write_frames_per_sec≈96~101`。
 - 主观听感：用户已确认听到测试音，且没有卡顿、破音。
 - 回滚路径：`legacy_las1 + pcm16` 与 `synthetic + v2_header + pcm16` 仍保留。
-- 下一阶段：补齐 `windows_loopback + v2_header + opus` 的 Android 真机长稳与延迟样本，再决定 release sign-off。
+- 下一阶段：继续用 latency probe artifact 记录三档模式复核结果，并补齐真实运行证据后再决定 release sign-off。
 
 ## 本轮验收结论（2026-04-14）
 
@@ -145,7 +146,7 @@
 
 - 当前 V2 可继续进入下一阶段，但不满足正式 Release 条件。
 - 原因：
-  - `windows_loopback + v2_header + opus` 仍缺 Android 真机长稳与延迟复核。
+  - `windows_loopback + v2_header + opus` 仍缺 Android 真机长稳；延迟复核流程已结构化，可直接沉淀 artifact。
   - Opus 已完成 synthetic 真机听感与服务端压力测试，但 loopback + Opus 真机样本仍不足。
   - USB tethering 尚未做本项目真机验收。
   - 本轮未要求手机真机验证，新增低延迟策略只基于本地验证与代码审查。

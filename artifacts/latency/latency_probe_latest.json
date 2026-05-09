@@ -1,0 +1,58 @@
+﻿{
+    "contract_version":  1,
+    "generated_at":  "2026-05-03T09:14:51Z",
+    "source":  {
+                   "metric_formula":  "latency_proxy_ms = buffered_ms + rtt_ms + sink_write_gap_ms_p95",
+                   "snapshot_paths":  [
+
+                                      ],
+                   "snapshot_files_read":  [
+
+                                           ]
+               },
+    "targets":  {
+                    "low_latency":  120,
+                    "balanced":  200,
+                    "high_quality":  350
+                },
+    "overall":  {
+                    "status":  "pending_no_snapshot",
+                    "sample_count":  0,
+                    "passed":  false
+                },
+    "modes":  [
+                  {
+                      "mode":  "low_latency",
+                      "target_latency_proxy_ms":  120,
+                      "sample_count":  0,
+                      "passed":  false,
+                      "status":  "pending_no_snapshot",
+                      "average_latency_proxy_ms":  null,
+                      "p95_latency_proxy_ms":  null,
+                      "max_latency_proxy_ms":  null
+                  },
+                  {
+                      "mode":  "balanced",
+                      "target_latency_proxy_ms":  200,
+                      "sample_count":  0,
+                      "passed":  false,
+                      "status":  "pending_no_snapshot",
+                      "average_latency_proxy_ms":  null,
+                      "p95_latency_proxy_ms":  null,
+                      "max_latency_proxy_ms":  null
+                  },
+                  {
+                      "mode":  "high_quality",
+                      "target_latency_proxy_ms":  350,
+                      "sample_count":  0,
+                      "passed":  false,
+                      "status":  "pending_no_snapshot",
+                      "average_latency_proxy_ms":  null,
+                      "p95_latency_proxy_ms":  null,
+                      "max_latency_proxy_ms":  null
+                  }
+              ],
+    "samples":  [
+
+                ]
+}

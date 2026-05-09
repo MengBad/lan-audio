@@ -109,6 +109,8 @@ When expanded, group metrics by user-friendly categories:
 
 Raw engineering labels may remain available, but the visible label should be readable. Example: `tx_packets` is displayed as `Sent packets`.
 
+Latency revalidation is exported outside the UI by `scripts/export_latency_probe.ps1`. The script consumes desktop diagnostics or Android snapshot JSON and writes `artifacts/latency/latency_probe_latest.json` with per-mode latency proxy results for `low_latency`, `balanced`, and `high_quality`.
+
 ## USB Device Refresh
 
 - ADB device discovery should not interrupt normal streaming UX.
@@ -145,4 +147,4 @@ Language defaults should follow the system locale (`zh*` -> Chinese, otherwise E
 - More guided USB tethering help
 - Firewall help text
 - Structured diagnostics export (desktop JSON snapshot export is available; Android bundle still pending)
-- Android real-device latency revalidation for the recommended `windows_loopback + v2_header + opus` path before release sign-off
+- Keep feeding real diagnostics snapshots into `scripts/export_latency_probe.ps1` before release sign-off

@@ -17,6 +17,7 @@
 - Ensure mode-switch UI exits transient buffering once playback resumes or enters a real error/recoverable state.
 - Refresh the Windows first screen toward Audio Console Dark without changing service orchestration.
 - Require a stable Android release keystore for local and GitHub release APK builds.
+- Systematize latency revalidation with `scripts/export_latency_probe.ps1`, producing `artifacts/latency/latency_probe_latest.json` for the three product modes.
 
 ## Release Position
 
