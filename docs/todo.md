@@ -2,8 +2,8 @@
 
 ## Release State
 
-- Latest release before hotfix tag: `v1.4`
-- Current release target: `v1.4.1`
+- Latest release: `v1.4.1`
+- Current release target: `v1.5`
 - Release mode: `v1.4` used `FORCE_RELEASE=true`; `v1.4.1` target is a normal hotfix release
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
@@ -43,6 +43,15 @@
 - [x] Android version metadata advanced to `versionName=1.4.1`, `versionCode=2010401`
 - [x] Stable Android release signing verified locally and in GitHub Actions
 - [x] Historical `v1.4` debug-key APK compatibility boundary documented
+- [x] Android MediaSession integration completed (`PlaybackState`, metadata, `MediaStyle`, `PLAY_PAUSE`, `STOP`)
+- [x] Android update detection completed (silent startup check, manual settings entry, Release page jump)
+- [x] Windows update detection completed (silent startup check, tray manual check, in-window banner)
+- [x] Desktop diagnostics export completed (`dist/diagnostics/` JSON snapshot export)
+- [x] Android balanced buffering strategy optimized for the v1.4.1 follow-up
+- [x] Mode-switch transient/concurrency recovery fixed so UI can return from `buffering` to `streaming`
+- [x] Android `.hprof` heap dumps removed from `apps/android_flutter/`
+- [x] `.hprof` and `tmp_test/` ignore rules recorded in root `.gitignore`
+- [x] Android and Windows update checker repository paths corrected to `MengBad/lan-audio`
 
 ## Completed In The v1.3 Cycle
 
@@ -60,6 +69,7 @@
 - [x] Post-`v1.4` regression pass: Android Audio Console restores discoverable Server Card connection controls, moves debug/update actions behind the top-right advanced entry, throttles visible `buffer ms` to a 1s UI cadence, restores `rx fps` from the stable snapshot, and fixes mode-switch UI recovery from `buffering` back to `streaming`.
 - [x] Post-`v1.4` release-flow fix: Android release APK signing no longer uses the per-machine debug keystore; release builds now require a stable release keystore locally and in GitHub Actions.
 - [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
+- [x] Latency revalidation is systematized through `scripts/export_latency_probe.ps1`; it exports per-mode `low_latency / balanced / high_quality` latency proxy results to `artifacts/latency/latency_probe_latest.json`.
 - [ ] Refactor Android runtime internals without breaking the shared snapshot contract
 - [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
 - [ ] Improve post-release diagnostics and operator-facing troubleshooting flow
@@ -85,12 +95,16 @@
 
 - [ ] Simplify service lifecycle ownership
 - [x] Improve diagnostics export (`dist/diagnostics/` desktop JSON snapshot export)
+- [x] Structured latency probe/export (`artifacts/latency/` JSON artifact from diagnostics snapshots)
 - [x] Windows update detection (silent startup check + tray manual check + in-window banner)
 - [ ] Improve rollback / safe-mode discoverability
 - [ ] Keep desktop state rendering contract-driven
 
 ## Later Backlog
 
+- [ ] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off
+- [ ] Android runtime refactor without breaking the shared snapshot contract
+- [ ] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
 - [ ] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
