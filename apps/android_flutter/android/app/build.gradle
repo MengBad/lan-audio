@@ -40,6 +40,7 @@ if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
 android {
     namespace 'com.example.lan_audio_android_mvp'
     compileSdk flutter.compileSdkVersion
+    ndkVersion '25.1.8937393'
 
     defaultConfig {
         applicationId 'com.example.lan_audio_android_mvp'
