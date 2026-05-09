@@ -25,6 +25,7 @@
 - [x] TASK-V16-203 Desktop diagnostics support bundle completed: new `export_support_bundle` Tauri command writes `snapshot.json`, `system_info.json`, `recent_events.json`, and `README.txt` under `dist/diagnostics/support-bundle-<timestamp>/`; the legacy JSON snapshot command remains available for compatibility.
 - [known_issue] TASK-V16-301 USB direct real-device acceptance attempted on `5391d451` on 2026-05-09. Desktop `usb` transport config creates adb reverse entries for `tcp:39991` and `tcp:39992`, but the Android debug start path did not reach a stable USB session: MIUI blocked one cached debug broadcast, and the foreground service later remained in `CONNECTING` with a stale `ws_failure:Failed to connect to /10.0.0.185:39991`. No 10-minute underrun/silence-fill sample was produced. Current status: transport plumbing is partially present, but USB direct remains a known issue pending a first-class UI/debug start path reset.
 - [x] TASK-V16-302 Capability negotiation errors completed: shared `NegotiationError` now covers unsupported codec/data-plane, version mismatch, timeout, and explicit rejection; server negotiation rejects clients with no compatible codec fallback and returns a readable failure; shared snapshots can carry `last_error`; Android and Desktop UI parsing now surfaces readable negotiation errors.
+- [x] TASK-V16-303 Rollback path continuous testing completed: protocol tests with `legacy_` prefix cover PCM16 payload round-trip, `legacy_las1` header parsing, and legacy hello to v2 ack compatibility; `scripts/validate_local.ps1` now runs `cargo test -p lan_audio_protocol -- legacy`.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -53,6 +54,7 @@
   - 10min 长稳：underrun=N/A, silence_fill=N/A
   - 结论：known_issue（desktop USB transport and TCP data-plane hooks exist, but Android debug start/session reset is not robust enough for acceptance on `5391d451`）
 - [x] `NegotiationError` enum implemented with protocol/server tests
+- [x] Legacy rollback protocol tests added and wired into `scripts/validate_local.ps1`
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -161,6 +163,7 @@
 - [x] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off: low_latency 64ms / balanced 185ms / high_quality 505ms
 - [ ] Android runtime refactor without breaking the shared snapshot contract
 - [x] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
+- [x] `legacy_las1 + pcm16` is a permanent maintenance path and must not be removed; every local validation run includes the `cargo test -p lan_audio_protocol -- legacy` guard.
 - [ ] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
