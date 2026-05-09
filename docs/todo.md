@@ -27,7 +27,7 @@
 ## v1.4 Release Gate
 
 - [human-override] TASK-V14-001 `v1.3.6` acceptance evidence recorded
-- [human-override] TASK-V14-002 main-path `windows_loopback + v2_header + opus` 30+ minute long-run passes
+- [x] TASK-V14-002 main-path `windows_loopback + v2_header + opus` latency probe completed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
 - [human-override] TASK-V14-003 USB validation recorded
 - [x] TASK-V14-010 MediaSession verified on `5391d451`
 - [x] TASK-V14-011 Android update check verified on `5391d451`
@@ -102,7 +102,7 @@
 
 ## Later Backlog
 
-- [ ] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off
+- [x] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off: low_latency 64ms / balanced 185ms / high_quality 505ms
 - [ ] Android runtime refactor without breaking the shared snapshot contract
 - [ ] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
 - [ ] QR-based connection entry
