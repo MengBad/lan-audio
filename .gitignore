@@ -49,3 +49,7 @@ apps/android_flutter/android/release-signing.generated.env
 
 # Local extracted / staging files
 tmp_apk_extract/
+
+# Android heap dumps
+*.hprof
+tmp_test/
