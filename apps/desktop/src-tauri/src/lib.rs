@@ -9,7 +9,7 @@ mod orchestrator;
 mod state;
 mod update_checker;
 
-use commands::{setup_tray_menu, spawn_silent_startup_update_check};
+use commands::{setup_phase_two_tray_menu, spawn_silent_startup_update_check};
 use orchestrator::push_log;
 use state::{AppState, AppStateInner, DesktopServiceConfig, ServiceStatus, UpdateState};
 
@@ -37,7 +37,7 @@ pub fn run() {
         .setup(|app| {
             let state = app.state::<AppState>();
             spawn_silent_startup_update_check(app.handle(), Arc::clone(&state.update_state));
-            setup_tray_menu(app)?;
+            setup_phase_two_tray_menu(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +49,8 @@ pub fn run() {
             commands::list_adb_devices,
             commands::enable_usb_mode,
             commands::disable_usb_mode,
+            commands::switch_to_rollback_mode,
+            commands::restore_recommended_mode,
             commands::export_diagnostics_report,
             commands::check_for_updates,
             commands::open_release_page

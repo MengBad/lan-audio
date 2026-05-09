@@ -25,6 +25,49 @@ use crate::state::{
 };
 use crate::update_checker;
 
+fn apply_runtime_path_mode_to_config(
+    config: &mut crate::state::DesktopServiceConfig,
+    rollback: bool,
+) {
+    config.audio_source = AudioSourceKind::WindowsLoopback;
+    config.allow_loopback_v2_header_gray = false;
+    if rollback {
+        config.data_plane_format = DataPlaneFormat::LegacyLas1;
+        config.codec_selection = CodecSelection::Pcm16;
+    } else {
+        config.data_plane_format = DataPlaneFormat::V2Header;
+        config.codec_selection = CodecSelection::Opus;
+    }
+}
+
+fn apply_runtime_path_mode(state: &State<'_, AppState>, rollback: bool) -> Result<(), String> {
+    let restart_needed = {
+        let mut guard = state.inner.lock().expect("state lock");
+        apply_runtime_path_mode_to_config(&mut guard.config, rollback);
+        matches!(
+            guard.status,
+            ServiceStatus::Running | ServiceStatus::Starting
+        )
+    };
+
+    let (data_plane, codec) = if rollback {
+        ("legacy_las1", "pcm16")
+    } else {
+        ("v2_header", "opus")
+    };
+    push_log(
+        &state.logs,
+        format!("runtime path switched: windows_loopback + {data_plane} + {codec}"),
+    );
+
+    if restart_needed {
+        stop_service_impl(state, true)?;
+        start_service_impl(state)?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
     let (status, last_error, cfg, service) = {
@@ -240,6 +283,22 @@ pub(crate) fn disable_usb_mode(state: State<'_, AppState>) -> Result<DesktopSnap
 }
 
 #[tauri::command]
+pub(crate) fn switch_to_rollback_mode(
+    state: State<'_, AppState>,
+) -> Result<DesktopSnapshot, String> {
+    apply_runtime_path_mode(&state, true)?;
+    Ok(get_desktop_snapshot(state))
+}
+
+#[tauri::command]
+pub(crate) fn restore_recommended_mode(
+    state: State<'_, AppState>,
+) -> Result<DesktopSnapshot, String> {
+    apply_runtime_path_mode(&state, false)?;
+    Ok(get_desktop_snapshot(state))
+}
+
+#[tauri::command]
 pub(crate) fn export_diagnostics_report(state: State<'_, AppState>) -> Result<String, String> {
     let exported_at_unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -363,6 +422,7 @@ pub(crate) fn spawn_silent_startup_update_check(
     });
 }
 
+#[allow(dead_code)]
 pub(crate) fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app)
         .text("check_updates", "检查更新")
@@ -380,4 +440,57 @@ pub(crate) fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+pub(crate) fn setup_phase_two_tray_menu(app: &tauri::App) -> tauri::Result<()> {
+    let menu = MenuBuilder::new(app)
+        .text("switch_rollback_mode", "切换到回滚模式（legacy PCM16）")
+        .text("restore_recommended_mode", "恢复推荐模式（Opus v2）")
+        .text("check_updates", "检查更新")
+        .build()?;
+
+    TrayIconBuilder::new()
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            if let Some(state) = app.try_state::<AppState>() {
+                match event.id().as_ref() {
+                    "switch_rollback_mode" => {
+                        let _ = apply_runtime_path_mode(&state, true);
+                        let _ = app.emit("desktop-snapshot-changed", ());
+                    }
+                    "restore_recommended_mode" => {
+                        let _ = apply_runtime_path_mode(&state, false);
+                        let _ = app.emit("desktop-snapshot-changed", ());
+                    }
+                    "check_updates" => {
+                        run_update_check(Arc::clone(&state.update_state));
+                        let _ = app.emit("update-check-finished", ());
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::DesktopServiceConfig;
+
+    #[test]
+    fn runtime_path_mode_updates_data_plane_and_codec() {
+        let mut cfg = DesktopServiceConfig::default();
+
+        apply_runtime_path_mode_to_config(&mut cfg, true);
+        assert_eq!(cfg.audio_source, AudioSourceKind::WindowsLoopback);
+        assert_eq!(cfg.data_plane_format, DataPlaneFormat::LegacyLas1);
+        assert_eq!(cfg.codec_selection, CodecSelection::Pcm16);
+
+        apply_runtime_path_mode_to_config(&mut cfg, false);
+        assert_eq!(cfg.audio_source, AudioSourceKind::WindowsLoopback);
+        assert_eq!(cfg.data_plane_format, DataPlaneFormat::V2Header);
+        assert_eq!(cfg.codec_selection, CodecSelection::Opus);
+    }
 }

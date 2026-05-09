@@ -510,10 +510,22 @@
       </details>
 
       <details>
-        <summary id="logSummary"></summary>
-        <div style="margin: 10px 0;">
-          <button class="copy-btn" id="exportDiagBtn" type="button"></button>
+        <summary id="advancedSummary"></summary>
+        <div class="plain-list" style="margin-bottom: 12px;">
+          <div class="row"><span class="label" id="advancedPathLabel"></span><span class="value" id="advancedDataPathValue"></span></div>
+          <div class="row">
+            <span class="label" id="advancedRollbackLabel"></span>
+            <button class="copy-btn" id="advancedSafeModeBtn" type="button"></button>
+          </div>
+          <div class="row">
+            <span class="label" id="advancedExportLabel"></span>
+            <button class="copy-btn" id="exportDiagBtn" type="button"></button>
+          </div>
         </div>
+      </details>
+
+      <details>
+        <summary id="logSummary"></summary>
         <div class="log-pane" id="logPane"></div>
       </details>
     </div>
@@ -538,6 +550,11 @@
           safeModeEnable: '切回安全模式',
           safeModeDisable: '恢复推荐路径',
           safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
+          rollbackConfirm: '切换到回滚模式将使用 PCM16 编码，延迟更高但兼容性更好。\n确认切换？',
+          advancedSummary: '高级选项',
+          advancedPath: '当前数据面路径',
+          advancedRollback: '回滚路径',
+          advancedExport: '诊断报告',
           dump: '导出 capture wav（调试）',
           exportDiag: '导出诊断快照（JSON）',
           exportDiagDone: '诊断快照已导出：{path}',
@@ -658,6 +675,11 @@
           safeModeEnable: 'Switch to safe mode',
           safeModeDisable: 'Restore recommended path',
           safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
+          rollbackConfirm: 'Switching to rollback mode uses PCM16 encoding. Latency is higher, but compatibility is better.\nContinue?',
+          advancedSummary: 'Advanced Options',
+          advancedPath: 'Current data-plane path',
+          advancedRollback: 'Rollback path',
+          advancedExport: 'Diagnostics report',
           dump: 'Export capture wav (debug)',
           exportDiag: 'Export diagnostics snapshot (JSON)',
           exportDiagDone: 'Diagnostics snapshot exported: {path}',
@@ -967,6 +989,10 @@
         document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
         document.getElementById('healthSourceLabel').textContent = `${t('healthSource')}:`;
         document.getElementById('debugSummary').textContent = t('debugSummary');
+        document.getElementById('advancedSummary').textContent = t('advancedSummary');
+        document.getElementById('advancedPathLabel').textContent = t('advancedPath');
+        document.getElementById('advancedRollbackLabel').textContent = t('advancedRollback');
+        document.getElementById('advancedExportLabel').textContent = t('advancedExport');
         document.getElementById('logSummary').textContent = t('logSummary');
         document.getElementById('groupTx').textContent = t('groupTx');
         document.getElementById('groupCapture').textContent = t('groupCapture');
@@ -1039,6 +1065,11 @@
         const safeModeBtn = document.getElementById('safeModeBtn');
         safeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
         safeModeBtn.title = t('safeModeHint');
+        const advancedSafeModeBtn = document.getElementById('advancedSafeModeBtn');
+        advancedSafeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
+        advancedSafeModeBtn.title = t('safeModeHint');
+        document.getElementById('advancedDataPathValue').textContent =
+          `${snapshot.audio_source} + ${runtime.data_plane || snapshot.data_plane_format} + ${runtime.effective_codec || snapshot.effective_codec}`;
 
         const recent = snapshot.recent_clients || [];
         const currentDevice = snapshot.connected_devices > 0 && recent.length > 0 ? recent[0] : t('noDevice');
@@ -1105,6 +1136,7 @@
         document.getElementById('codecOpus').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
         document.getElementById('safeModeBtn').disabled = disabled;
+        document.getElementById('advancedSafeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
         document.getElementById('usbRefreshBtn').disabled = disabled;
@@ -1155,23 +1187,13 @@
       async function toggleSafeMode() {
         if (!state.snapshot) return;
         const isSafeMode = state.snapshot.data_plane_format === 'legacy_las1' && state.snapshot.codec_selection === 'pcm16';
-        document.getElementById('sourceLoopback').classList.add('active');
-        document.getElementById('sourceSynthetic').classList.remove('active');
-        document.getElementById('fallbackToggle').checked = state.snapshot.fallback_to_synthetic;
-        document.getElementById('dumpToggle').checked = state.snapshot.capture_dump_wav;
         if (isSafeMode) {
-          document.getElementById('dataPlaneLegacy').classList.remove('active');
-          document.getElementById('dataPlaneV2Header').classList.add('active');
-          document.getElementById('codecPcm16').classList.remove('active');
-          document.getElementById('codecOpus').classList.add('active');
-          await applySettings('windows_loopback');
+          await call('restore_recommended_mode');
           return;
         }
-        document.getElementById('dataPlaneLegacy').classList.add('active');
-        document.getElementById('dataPlaneV2Header').classList.remove('active');
-        document.getElementById('codecPcm16').classList.add('active');
-        document.getElementById('codecOpus').classList.remove('active');
-        await applySettings('windows_loopback');
+        if (window.confirm(t('rollbackConfirm'))) {
+          await call('switch_to_rollback_mode');
+        }
       }
 
       async function copyAddress() {
@@ -1242,6 +1264,7 @@
         });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
         document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
+        document.getElementById('advancedSafeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
         document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);
