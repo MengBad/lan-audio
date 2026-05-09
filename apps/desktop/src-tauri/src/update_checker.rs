@@ -3,8 +3,8 @@ use std::time::Duration;
 use semver::Version;
 use serde::Deserialize;
 
-const LATEST_RELEASE_API: &str = "https://api.github.com/repos/lan-audio/lan-audio/releases/latest";
-const RELEASE_PAGE_FALLBACK: &str = "https://github.com/lan-audio/lan-audio/releases";
+const LATEST_RELEASE_API: &str = "https://api.github.com/repos/MengBad/lan-audio/releases/latest";
+const RELEASE_PAGE_FALLBACK: &str = "https://github.com/MengBad/lan-audio/releases";
 const REQUEST_TIMEOUT_SECONDS: u64 = 6;
 
 #[derive(Debug, Clone)]
