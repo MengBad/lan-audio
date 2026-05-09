@@ -12,21 +12,22 @@
 - Verified scenarios:
   - `USB + synthetic`
   - `WiFi + windows_loopback`
-  - `v1.6 Android background/power matrix`: known_issue, not executed on 2026-05-09 because `adb devices` returned no attached device in the local workspace
+  - `v1.6 Android foreground install/metrics`: passed on `5391d451` (`2026-05-09`)
+  - `v1.6 Android background/power matrix`: known_issue on `5391d451` (`2026-05-09`); foreground playback starts and reports metrics, but background/power scenarios can fall back to `buffering` with `rx_frames_per_sec=0.0`
 
 ## v1.6 Engineering Completion Plan
 
 - [known_issue] TASK-V16-101 Android `PlaybackSessionController` split is partially extracted only. Completed safe extraction for `PlaybackBufferPolicy`, `PlaybackPacingEngine`, `PlaybackLatencyGuard`, and `PlaybackMetricsCollector`; the main controller remains 1847 lines, so the `<400` line coordination target needs a deeper follow-up that can move playout/decode/session state ownership without changing the Oboe callback path.
 - [x] TASK-V16-102 Android foreground service lifecycle is now guarded by an explicit internal state machine: `IDLE -> CONNECTING -> PLAYING -> STOPPING -> IDLE`, with transient `ERROR -> IDLE`; `ACTION_START` is accepted only from `IDLE`, `ACTION_STOP` is a safe no-op in `IDLE`, MediaSession play/pause never starts playback, and `onTaskRemoved` routes through stop.
-- [known_issue] TASK-V16-103 Android power/background real-device matrix not executed on 2026-05-09 because `adb devices` returned no attached device. Required matrix remains: screen off playback, Home/background 5 minutes, battery saver, force-kill/reopen.
+- [known_issue] TASK-V16-103 Android power/background real-device matrix executed on `5391d451` on 2026-05-09. Foreground install and connection passed on `windows_loopback + v2_header + opus` (`playback=playing`, `rx_frames_per_sec≈50`, `dropped_late_frames=0/0`). Background/power matrix remains incomplete: after screen-off/Home/battery-saver cycling, playback can remain in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen can recover after restarting the PC sender, but the first reopen attempt stayed in `buffering` with `recent=start_ignored_state:playing`. Mitigation for now: stop/restart the PC sender and reconnect from Android after a force-stop or aggressive power-management event.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
 - [x] `flutter analyze` passed with no issues
 - [x] `flutter test` passed
 - [x] `android/gradlew.bat assembleDebug` passed
-- [known_issue] Real-device debug install and metric snapshot verification blocked: `adb devices` returned no attached device
-- [known_issue] Android power/background validation conclusion recorded as not executed because no device was visible to adb
+- [x] Real-device debug install and foreground metric snapshot verification passed on `5391d451`; local debug install required full uninstall because the previously installed package used a different signing key and higher versionCode
+- [known_issue] Android power/background validation did not pass cleanly: Home/screen-off/battery-saver cycling can leave playback in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen recovered only after restarting the PC sender
 - [x] `docs/todo.md` updated with Phase 1 status
 
 ## v1.4 Validation Summary (`2026-04-24`)
@@ -115,7 +116,7 @@
 
 ## Android Follow-Up
 
-- [known_issue] Continue real-device validation under background and power-saving conditions (blocked on 2026-05-09 by no device visible in `adb devices`)
+- [known_issue] Continue real-device validation under background and power-saving conditions (2026-05-09 `5391d451`: foreground metrics passed; background/power cycling can stall at `buffering` with `rx_frames_per_sec=0.0`)
 - [ ] Improve buffering and underrun diagnostics
 - [known_issue] Reduce runtime complexity in playback/session coordination (policy/pacing/guard/metrics helpers extracted; controller still needs deeper split)
 - [ ] Preserve Oboe callback path as the maintained playback direction
