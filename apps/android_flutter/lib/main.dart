@@ -289,7 +289,9 @@ class _DebugPageState extends State<DebugPage> {
       _audioLog = snapshot.state;
       _wsLog = jsonEncode(snapshot.toMap());
 
-      if (_wsConnected || _playbackState != PlaybackState.stopped) {
+      if (snapshot.lastError != null) {
+        _lastErrorMessage = snapshot.lastError;
+      } else if (_wsConnected || _playbackState != PlaybackState.stopped) {
         _lastErrorMessage = null;
       }
     });

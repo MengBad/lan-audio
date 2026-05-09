@@ -26,6 +26,44 @@ pub const UDP_FLAG_V2_SILENCE: u16 = 1 << 0;
 pub const UDP_FLAG_V2_CONFIG_CHANGED: u16 = 1 << 1;
 pub const UDP_FLAG_V2_DISCONTINUITY: u16 = 1 << 2;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NegotiationError {
+    #[error("unsupported codec: offered={offered:?}, required={required:?}")]
+    UnsupportedCodec {
+        offered: Vec<AudioCodecPreference>,
+        required: AudioCodecPreference,
+    },
+    #[error("unsupported data plane: offered={offered:?}")]
+    UnsupportedDataPlane { offered: Vec<DataPlanePath> },
+    #[error("protocol version mismatch: local={local}, remote={remote}")]
+    VersionMismatch { local: u8, remote: u8 },
+    #[error("negotiation timeout after {elapsed_ms}ms")]
+    Timeout { elapsed_ms: u64 },
+    #[error("negotiation rejected: {reason}")]
+    Rejected { reason: String },
+}
+
+impl NegotiationError {
+    pub fn human_message(&self) -> String {
+        match self {
+            Self::UnsupportedCodec { offered, required } => {
+                format!("Client offered {offered:?}, but {required:?} is required")
+            }
+            Self::UnsupportedDataPlane { offered } => {
+                format!("Client does not support a compatible data plane: {offered:?}")
+            }
+            Self::VersionMismatch { local, remote } => {
+                format!("Protocol version mismatch: local v{local}, remote v{remote}")
+            }
+            Self::Timeout { elapsed_ms } => {
+                format!("Negotiation timed out after {elapsed_ms}ms")
+            }
+            Self::Rejected { reason } => format!("Negotiation rejected: {reason}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataPlanePacketKind {
     LegacyLas1,
@@ -632,6 +670,24 @@ mod tests {
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
         assert_eq!(decoded, caps);
+    }
+
+    #[test]
+    fn negotiation_error_serializes_with_stable_shape() {
+        let err = NegotiationError::UnsupportedCodec {
+            offered: vec![AudioCodecPreference::Pcm16],
+            required: AudioCodecPreference::Opus,
+        };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "unsupported_codec",
+                "offered": ["pcm16"],
+                "required": "opus"
+            })
+        );
+        assert!(err.human_message().contains("Opus"));
     }
 
     #[test]

@@ -237,6 +237,8 @@ pub struct ServiceSnapshot {
     pub state: ConnectionState,
     pub rollback_state: RollbackState,
     pub metrics: ServiceMetricsSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<serde_json::Value>,
 }
 
 impl ServiceSnapshot {
@@ -252,6 +254,7 @@ impl ServiceSnapshot {
             state: ConnectionState::Disconnected,
             rollback_state: RollbackState::MainPathActive,
             metrics: ServiceMetricsSnapshot::default(),
+            last_error: None,
         }
     }
 }
