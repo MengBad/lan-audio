@@ -3,15 +3,31 @@
 ## Release State
 
 - Latest release: `v1.5`
-- Current release target: `v1.5`
-- Release mode: `v1.5` uses `FORCE_RELEASE=true`; long-run gates are accepted by human override with latency probe evidence
-- Release gate: `allow_release`
+- Current release target: `v1.6`
+- Release mode: standard (`FORCE_RELEASE=false`)
+- Release gate: `continue_fix`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Verified device: `5391d451` (`Xiaomi 24129PN74C`)
 - Verified scenarios:
   - `USB + synthetic`
   - `WiFi + windows_loopback`
+  - `v1.6 Android background/power matrix`: known_issue, not executed on 2026-05-09 because `adb devices` returned no attached device in the local workspace
+
+## v1.6 Engineering Completion Plan
+
+- [known_issue] TASK-V16-101 Android `PlaybackSessionController` split is partially extracted only. Completed safe extraction for `PlaybackBufferPolicy`, `PlaybackPacingEngine`, `PlaybackLatencyGuard`, and `PlaybackMetricsCollector`; the main controller remains 1847 lines, so the `<400` line coordination target needs a deeper follow-up that can move playout/decode/session state ownership without changing the Oboe callback path.
+- [x] TASK-V16-102 Android foreground service lifecycle is now guarded by an explicit internal state machine: `IDLE -> CONNECTING -> PLAYING -> STOPPING -> IDLE`, with transient `ERROR -> IDLE`; `ACTION_START` is accepted only from `IDLE`, `ACTION_STOP` is a safe no-op in `IDLE`, MediaSession play/pause never starts playback, and `onTaskRemoved` routes through stop.
+- [known_issue] TASK-V16-103 Android power/background real-device matrix not executed on 2026-05-09 because `adb devices` returned no attached device. Required matrix remains: screen off playback, Home/background 5 minutes, battery saver, force-kill/reopen.
+
+### v1.6 Phase 1 Gate (`2026-05-09`)
+
+- [x] `flutter analyze` passed with no issues
+- [x] `flutter test` passed
+- [x] `android/gradlew.bat assembleDebug` passed
+- [known_issue] Real-device debug install and metric snapshot verification blocked: `adb devices` returned no attached device
+- [known_issue] Android power/background validation conclusion recorded as not executed because no device was visible to adb
+- [x] `docs/todo.md` updated with Phase 1 status
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -85,7 +101,7 @@
 - [x] Post-`v1.4` release-flow fix: Android release APK signing no longer uses the per-machine debug keystore; release builds now require a stable release keystore locally and in GitHub Actions.
 - [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
 - [x] Latency revalidation is systematized through `scripts/export_latency_probe.ps1`; it exports per-mode `low_latency / balanced / high_quality` latency proxy results to `artifacts/latency/latency_probe_latest.json`.
-- [ ] Refactor Android runtime internals without breaking the shared snapshot contract
+- [known_issue] Refactor Android runtime internals without breaking the shared snapshot contract (v1.6 partial extraction landed; full controller split still pending)
 - [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
 - [ ] Improve post-release diagnostics and operator-facing troubleshooting flow
 - [ ] Keep rollback path exercised as mainline changes land
@@ -99,9 +115,9 @@
 
 ## Android Follow-Up
 
-- [ ] Continue real-device validation under background and power-saving conditions
+- [known_issue] Continue real-device validation under background and power-saving conditions (blocked on 2026-05-09 by no device visible in `adb devices`)
 - [ ] Improve buffering and underrun diagnostics
-- [ ] Reduce runtime complexity in playback/session coordination
+- [known_issue] Reduce runtime complexity in playback/session coordination (policy/pacing/guard/metrics helpers extracted; controller still needs deeper split)
 - [ ] Preserve Oboe callback path as the maintained playback direction
 - [x] MediaSession integration (`PlaybackState`, metadata, `MediaStyle`, `PLAY_PAUSE`, `STOP`)
 - [x] Android update detection (silent startup check + manual settings entry + SnackBar jump to Release page)
