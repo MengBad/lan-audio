@@ -2,9 +2,9 @@
 
 ## Release State
 
-- Latest release: `v1.4.1`
+- Latest release: `v1.5`
 - Current release target: `v1.5`
-- Release mode: `v1.4` used `FORCE_RELEASE=true`; `v1.4.1` target is a normal hotfix release
+- Release mode: `v1.5` uses `FORCE_RELEASE=true`; long-run gates are accepted by human override with latency probe evidence
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -52,6 +52,21 @@
 - [x] Android `.hprof` heap dumps removed from `apps/android_flutter/`
 - [x] `.hprof` and `tmp_test/` ignore rules recorded in root `.gitignore`
 - [x] Android and Windows update checker repository paths corrected to `MengBad/lan-audio`
+
+## v1.5 Forced Release (`2026-05-09`)
+
+- [x] Version metadata advanced to `1.5`
+- [human-override] Main-path long-run gate accepted by operator; latency probe is the replacement evidence
+- [x] Latency probe passed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
+- [x] Audio Console Dark UI redesign merged, including DM Sans + IBM Plex Mono typography
+- [x] Android MediaSession integration shipped
+- [x] Android and Windows update detection shipped
+- [x] Desktop diagnostics snapshot export shipped
+- [x] Android balanced buffering strategy shipped
+- [x] Mode-switch transient/concurrency recovery shipped
+- [x] Android toolchain upgraded to AGP 8.7.3 and Kotlin 2.1.0
+- [x] Local validation passed before release
+- [x] Release notes must include `human-override`, main path `windows_loopback + v2_header + opus`, rollback path `legacy_las1 + pcm16`, latency probe values, and UI redesign summary
 
 ## Completed In The v1.3 Cycle
 

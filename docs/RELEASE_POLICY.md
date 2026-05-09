@@ -2,13 +2,14 @@
 
 ## Current Release State
 
-- Latest shipped release before the hotfix tag: `v1.4`
-- Current release target: `v1.4.1`
+- Latest shipped release before the forced v1.5 tag: `v1.4.1`
+- Current release target: `v1.5`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Release mode for `v1.4`: `FORCE_RELEASE=true` with human-override notes recorded in release-tracked docs and artifacts
 - Release mode for `v1.4.1`: normal hotfix release after local packaging and GitHub Actions signing verification
+- Release mode for `v1.5`: `FORCE_RELEASE=true`; long-run gate is human-overridden using the passed latency probe evidence (`low_latency=64ms`, `balanced=185ms`, `high_quality=505ms`)
 
 Release decisions are artifact-driven. The source of truth is:
 
@@ -164,6 +165,9 @@ Release notes should include:
 - current Protocol v2 status
 - default main path
 - rollback path
+- latency probe measured values
+- UI redesign summary, including Audio Console Dark
+- human-override marker when FORCE_RELEASE is used
 - verified scope
 - known limitations
 - rollback method
