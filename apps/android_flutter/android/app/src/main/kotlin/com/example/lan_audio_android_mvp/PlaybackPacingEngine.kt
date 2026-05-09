@@ -7,6 +7,7 @@ internal object PlaybackPacingEngine {
 
     private const val BALANCED_AUDIO_QUEUE_LOW_WATERMARK_EXTRA_MS = 10
     private const val BALANCED_AUDIO_QUEUE_FILL_TARGET_EXTRA_MS = 10
+    private const val BALANCED_ONE_SHOT_REFILL_TARGET_MS = 50
     private const val BUFFER_EMPTY_LOW_WATERMARK_MS = 20
 
     fun pacingOffsetMs(
@@ -49,5 +50,46 @@ internal object PlaybackPacingEngine {
 
     fun balancedAudioQueueFillTargetMs(frameDurationMs: Int): Int {
         return balancedAudioQueueLowWatermarkMs(frameDurationMs) + BALANCED_AUDIO_QUEUE_FILL_TARGET_EXTRA_MS
+    }
+
+    fun targetWriteBatchSize(
+        options: PlaybackOptions,
+        currentMode: String,
+        audioQueuedMs: Int,
+        jitterBufferedMs: Int,
+        frameDurationMs: Int,
+        state: BalancedRefillState,
+    ): Int {
+        val baseBatchSize = options.batchFrames.coerceIn(1, 4)
+        if (options.preferLowLatencyPath || currentMode != "balanced") {
+            state.reset()
+            return baseBatchSize
+        }
+
+        val fillTargetMs = balancedAudioQueueFillTargetMs(frameDurationMs)
+        if (audioQueuedMs >= fillTargetMs) {
+            state.reset()
+            return baseBatchSize
+        }
+
+        val availableFrames = ((jitterBufferedMs / frameDurationMs).coerceAtLeast(0) + 1).coerceAtLeast(1)
+        if (!state.queueBelowFillTarget) {
+            state.queueBelowFillTarget = true
+            val refillFramesNeeded = kotlin.math.ceil(
+                (BALANCED_ONE_SHOT_REFILL_TARGET_MS - audioQueuedMs).coerceAtLeast(0) /
+                    frameDurationMs.toDouble(),
+            ).toInt().coerceAtLeast(1)
+            return refillFramesNeeded.coerceAtMost(availableFrames)
+        }
+
+        return baseBatchSize.coerceAtMost(availableFrames)
+    }
+}
+
+internal class BalancedRefillState {
+    var queueBelowFillTarget: Boolean = false
+
+    fun reset() {
+        queueBelowFillTarget = false
     }
 }

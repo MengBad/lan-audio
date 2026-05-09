@@ -91,7 +91,7 @@ class PlaybackSessionController(
     private var lastDiagnosedSilenceFillCount: Int = 0
     private var lastDiagnosedSinkSilenceFillCount: Int = 0
     private var lastDiagnosedOboeUnderrunCount: Int = 0
-    private var balancedQueueBelowFillTarget: Boolean = false
+    private val balancedRefillState = BalancedRefillState()
     @Volatile
     private var highQualityPrefillActive = false
     @Volatile
@@ -175,7 +175,7 @@ class PlaybackSessionController(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
-        balancedQueueBelowFillTarget = false
+        balancedRefillState.reset()
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L
         highQualityPrefillTargetMs = 0
@@ -1127,7 +1127,7 @@ class PlaybackSessionController(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
-        balancedQueueBelowFillTarget = false
+        balancedRefillState.reset()
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L
         highQualityPrefillTargetMs = 0
@@ -1236,7 +1236,7 @@ class PlaybackSessionController(
                 recentArrivalIntervalsMs.clear()
                 jitterP95Ms = null
             }
-            balancedQueueBelowFillTarget = false
+            balancedRefillState.reset()
             jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
             withPlaybackSinkLock {
                 playbackSink.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
@@ -1532,7 +1532,7 @@ class PlaybackSessionController(
         consecutiveEmptyQueueMisses = 0
         consecutivePlayoutHits = 0
         bufferingCandidateSinceMs = 0
-        balancedQueueBelowFillTarget = false
+        balancedRefillState.reset()
     }
 
     private inline fun <T> withPlaybackSinkLock(block: () -> T): T {
@@ -1574,10 +1574,13 @@ class PlaybackSessionController(
         val bytesPerFrame = first.channels.coerceAtLeast(1) * 2
         fun frameCountFor(payload: ByteArray): Int = (payload.size / bytesPerFrame).coerceAtLeast(1)
 
-        val batchSize = targetWriteBatchSize(
+        val batchSize = PlaybackPacingEngine.targetWriteBatchSize(
+            options = options,
+            currentMode = PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode),
             audioQueuedMs = audioQueuedMs,
             jitterBufferedMs = jitterBufferedMs,
             frameDurationMs = first.frameDurationMs.coerceAtLeast(options.frameDurationMs),
+            state = balancedRefillState,
         )
         if (batchSize == 1) {
             return WriteBatch(
@@ -1613,37 +1616,6 @@ class PlaybackSessionController(
             packetCount = chunks.size,
             pcmFrames = frameCountFor(out),
         )
-    }
-
-    private fun targetWriteBatchSize(
-        audioQueuedMs: Int,
-        jitterBufferedMs: Int,
-        frameDurationMs: Int,
-    ): Int {
-        val baseBatchSize = options.batchFrames.coerceIn(1, 4)
-        if (options.preferLowLatencyPath) {
-            balancedQueueBelowFillTarget = false
-            return baseBatchSize
-        }
-        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "balanced") {
-            balancedQueueBelowFillTarget = false
-            return baseBatchSize
-        }
-        val fillTargetMs = PlaybackPacingEngine.balancedAudioQueueFillTargetMs(frameDurationMs)
-        if (audioQueuedMs >= fillTargetMs) {
-            balancedQueueBelowFillTarget = false
-            return baseBatchSize
-        }
-        val availableFrames = ((jitterBufferedMs / frameDurationMs).coerceAtLeast(0) + 1).coerceAtLeast(1)
-        if (!balancedQueueBelowFillTarget) {
-            balancedQueueBelowFillTarget = true
-            val refillTargetMs = BALANCED_ONE_SHOT_REFILL_TARGET_MS
-            val refillFramesNeeded = kotlin.math.ceil(
-                (refillTargetMs - audioQueuedMs).coerceAtLeast(0) / frameDurationMs.toDouble(),
-            ).toInt().coerceAtLeast(1)
-            return refillFramesNeeded.coerceAtMost(availableFrames)
-        }
-        return baseBatchSize.coerceAtMost(availableFrames)
     }
 
     private fun maybeLogMetrics(force: Boolean = false, reason: String = "periodic") {
@@ -1815,7 +1787,6 @@ class PlaybackSessionController(
         private const val LOW_LATENCY_ADAPTIVE_BOOST_MS = 5
         private const val LOW_LATENCY_RECOVER_MS = 10_000L
         private const val WIFI_BALANCED_MAX_BUFFER_CAP_MS = 30
-        private const val BALANCED_ONE_SHOT_REFILL_TARGET_MS = 50
         private const val STARTUP_SILENCE_PHASE_MS = 3_000L
         private const val HIGH_QUALITY_PREFILL_MAX_WAIT_MS = 500L
     }
