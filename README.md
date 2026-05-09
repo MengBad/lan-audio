@@ -11,10 +11,16 @@ The goal of this project is straightforward: play audio on a Windows PC, send it
 
 ## Current Status
 
+- Current version: `1.4.1`.
 - The repository contains a Rust LAN server, an Android Flutter client, and a Windows Tauri desktop app.
 - The documented recommended path is `windows_loopback + v2_header + opus`.
 - The maintained rollback path is `legacy_las1 + pcm16`.
 - The `v1.4.1` release candidate is a post-`v1.4` hotfix for Android and Windows console polish, stable metrics rendering, mode-switch UI recovery, and stable release APK signing; it does not change the protocol path.
+- Android MediaSession integration is available with playback state, metadata, MediaStyle controls, play/pause, and stop.
+- Android and Windows update detection are available as silent checks with manual entry points that link to GitHub Releases.
+- Desktop diagnostics snapshot export writes JSON artifacts under `dist/diagnostics/`.
+- Balanced-mode playback buffering has been tuned for better short-run stability during the v1.4.1 follow-up.
+- Latency revalidation is now systematized through `scripts/export_latency_probe.ps1`, which exports per-mode structured artifacts under `artifacts/latency/`.
 - Local validation, packaging, and release scripts are part of the repository.
 - Current follow-up work is focused on stability, latency tuning, mode strategy, Protocol v2 evolution, and desktop/UI productization.
 - This project is currently a better fit for developers and testers on Windows + Android than for general end users.
@@ -51,6 +57,12 @@ For a full local validation pass:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+```
+
+To export the structured latency probe artifact from desktop or Android snapshot JSON:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\export_latency_probe.ps1 -SnapshotPath .\dist\diagnostics\*.json
 ```
 
 ## How It Works
