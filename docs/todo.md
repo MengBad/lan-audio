@@ -20,6 +20,9 @@
 - [known_issue] TASK-V16-101 Android `PlaybackSessionController` split is partially extracted only. Completed safe extraction for `PlaybackBufferPolicy`, `PlaybackPacingEngine`, `PlaybackLatencyGuard`, and `PlaybackMetricsCollector`; the main controller remains 1847 lines, so the `<400` line coordination target needs a deeper follow-up that can move playout/decode/session state ownership without changing the Oboe callback path.
 - [x] TASK-V16-102 Android foreground service lifecycle is now guarded by an explicit internal state machine: `IDLE -> CONNECTING -> PLAYING -> STOPPING -> IDLE`, with transient `ERROR -> IDLE`; `ACTION_START` is accepted only from `IDLE`, `ACTION_STOP` is a safe no-op in `IDLE`, MediaSession play/pause never starts playback, and `onTaskRemoved` routes through stop.
 - [known_issue] TASK-V16-103 Android power/background real-device matrix executed on `5391d451` on 2026-05-09. Foreground install and connection passed on `windows_loopback + v2_header + opus` (`playback=playing`, `rx_frames_per_sec≈50`, `dropped_late_frames=0/0`). Background/power matrix remains incomplete: after screen-off/Home/battery-saver cycling, playback can remain in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen can recover after restarting the PC sender, but the first reopen attempt stayed in `buffering` with `recent=start_ignored_state:playing`. Mitigation for now: stop/restart the PC sender and reconnect from Android after a force-stop or aggressive power-management event.
+- [x] TASK-V16-201 Desktop Tauri entrypoint split completed: `lib.rs` is now registration/startup only, with command handlers in `commands.rs`, shared app state and snapshot types in `state.rs`, and service lifecycle orchestration in `orchestrator.rs`.
+- [x] TASK-V16-202 Rollback/safe-mode discoverability completed: tray menu now exposes rollback/recommended path switching, the desktop UI has a bottom `Advanced Options` section showing the active path, rollback toggle, and diagnostics export, and rollback switching requires confirmation.
+- [x] TASK-V16-203 Desktop diagnostics support bundle completed: new `export_support_bundle` Tauri command writes `snapshot.json`, `system_info.json`, `recent_events.json`, and `README.txt` under `dist/diagnostics/support-bundle-<timestamp>/`; the legacy JSON snapshot command remains available for compatibility.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -29,6 +32,16 @@
 - [x] Real-device debug install and foreground metric snapshot verification passed on `5391d451`; local debug install required full uninstall because the previously installed package used a different signing key and higher versionCode
 - [known_issue] Android power/background validation did not pass cleanly: Home/screen-off/battery-saver cycling can leave playback in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen recovered only after restarting the PC sender
 - [x] `docs/todo.md` updated with Phase 1 status
+
+### v1.6 Phase 2 Gate (`2026-05-09`)
+
+- [x] `cargo fmt --all -- --check` passed
+- [x] `cargo check` passed
+- [x] `cargo check -p lan_audio_desktop` passed
+- [x] `cargo test -p lan_audio_protocol -p lan_audio_server` passed
+- [x] Desktop rollback controls compile and the runtime-path config test verifies `legacy_las1 + pcm16` / `v2_header + opus` snapshot inputs
+- [x] Desktop support bundle export implemented with all required files
+- [x] `docs/todo.md` updated with Phase 2 status
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -103,8 +116,8 @@
 - [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
 - [x] Latency revalidation is systematized through `scripts/export_latency_probe.ps1`; it exports per-mode `low_latency / balanced / high_quality` latency proxy results to `artifacts/latency/latency_probe_latest.json`.
 - [known_issue] Refactor Android runtime internals without breaking the shared snapshot contract (v1.6 partial extraction landed; full controller split still pending)
-- [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
-- [ ] Improve post-release diagnostics and operator-facing troubleshooting flow
+- [x] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
+- [x] Improve post-release diagnostics and operator-facing troubleshooting flow
 - [ ] Keep rollback path exercised as mainline changes land
 
 ## Protocol / Transport Follow-Up
@@ -125,18 +138,18 @@
 
 ## Desktop Follow-Up
 
-- [ ] Simplify service lifecycle ownership
-- [x] Improve diagnostics export (`dist/diagnostics/` desktop JSON snapshot export)
+- [x] Simplify service lifecycle ownership
+- [x] Improve diagnostics export (`dist/diagnostics/` desktop support bundle plus legacy JSON snapshot export)
 - [x] Structured latency probe/export (`artifacts/latency/` JSON artifact from diagnostics snapshots)
 - [x] Windows update detection (silent startup check + tray manual check + in-window banner)
-- [ ] Improve rollback / safe-mode discoverability
-- [ ] Keep desktop state rendering contract-driven
+- [x] Improve rollback / safe-mode discoverability
+- [x] Keep desktop state rendering contract-driven
 
 ## Later Backlog
 
 - [x] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off: low_latency 64ms / balanced 185ms / high_quality 505ms
 - [ ] Android runtime refactor without breaking the shared snapshot contract
-- [ ] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
+- [x] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
 - [ ] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help

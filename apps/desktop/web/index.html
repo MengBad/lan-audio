@@ -556,8 +556,8 @@
           advancedRollback: '回滚路径',
           advancedExport: '诊断报告',
           dump: '导出 capture wav（调试）',
-          exportDiag: '导出诊断快照（JSON）',
-          exportDiagDone: '诊断快照已导出：{path}',
+          exportDiag: '导出诊断包',
+          exportDiagDone: '诊断包已导出：{path}',
           updateBannerText: '发现新版本 v{version}',
           updateBannerBtn: '前往下载',
           address: '连接地址',
@@ -681,8 +681,8 @@
           advancedRollback: 'Rollback path',
           advancedExport: 'Diagnostics report',
           dump: 'Export capture wav (debug)',
-          exportDiag: 'Export diagnostics snapshot (JSON)',
-          exportDiagDone: 'Diagnostics snapshot exported: {path}',
+          exportDiag: 'Export support bundle',
+          exportDiagDone: 'Support bundle exported: {path}',
           updateBannerText: 'New version v{version} is available',
           updateBannerBtn: 'Open release page',
           address: 'Connect Address',
@@ -1208,7 +1208,7 @@
 
       async function exportDiagnostics() {
         try {
-          const path = await tauriInvoke('export_diagnostics_report');
+          const path = await tauriInvoke('export_support_bundle');
           document.getElementById('statusSubline').textContent = trf('exportDiagDone', { path });
         } catch (error) {
           document.getElementById('errorText').textContent = String(error);

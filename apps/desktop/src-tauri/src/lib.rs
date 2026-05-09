@@ -52,6 +52,7 @@ pub fn run() {
             commands::switch_to_rollback_mode,
             commands::restore_recommended_mode,
             commands::export_diagnostics_report,
+            commands::export_support_bundle,
             commands::check_for_updates,
             commands::open_release_page
         ])

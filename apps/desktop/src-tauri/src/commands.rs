@@ -225,6 +225,35 @@ pub(crate) struct AdbDeviceInfo {
     transport_id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct SupportBundleSystemInfo {
+    exported_at_unix_seconds: u64,
+    os: &'static str,
+    os_family: &'static str,
+    arch: &'static str,
+    app_version: String,
+    local_ip: String,
+    connect_address: String,
+    ws_port: u16,
+    udp_port: u16,
+    transport_mode: String,
+    usb_serial: Option<String>,
+    audio_devices: Vec<String>,
+    network_interfaces: Vec<String>,
+}
+
+fn unix_seconds_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn write_json_file<T: Serialize>(path: PathBuf, value: &T) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub(crate) fn list_adb_devices() -> Result<Vec<AdbDeviceInfo>, String> {
     adb_devices()
@@ -300,16 +329,12 @@ pub(crate) fn restore_recommended_mode(
 
 #[tauri::command]
 pub(crate) fn export_diagnostics_report(state: State<'_, AppState>) -> Result<String, String> {
-    let exported_at_unix_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let exported_at_unix_seconds = unix_seconds_now();
     let snapshot = get_desktop_snapshot(state);
     let report = DiagnosticsReport {
         exported_at_unix_seconds,
         snapshot,
     };
-    let content = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
 
     let mut output_dir = PathBuf::from("dist");
     output_dir.push("diagnostics");
@@ -317,7 +342,70 @@ pub(crate) fn export_diagnostics_report(state: State<'_, AppState>) -> Result<St
 
     let file_name = format!("desktop-diagnostics-{exported_at_unix_seconds}.json");
     output_dir.push(file_name);
-    fs::write(&output_dir, content).map_err(|e| e.to_string())?;
+    write_json_file(output_dir.clone(), &report)?;
+    Ok(output_dir.display().to_string())
+}
+
+#[tauri::command]
+pub(crate) fn export_support_bundle(state: State<'_, AppState>) -> Result<String, String> {
+    let exported_at_unix_seconds = unix_seconds_now();
+    let snapshot = get_desktop_snapshot(state);
+
+    let mut output_dir = PathBuf::from("dist");
+    output_dir.push("diagnostics");
+    output_dir.push(format!("support-bundle-{exported_at_unix_seconds}"));
+    fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+
+    let mut snapshot_path = output_dir.clone();
+    snapshot_path.push("snapshot.json");
+    write_json_file(snapshot_path, &snapshot)?;
+
+    let mut recent_events = snapshot
+        .logs
+        .iter()
+        .rev()
+        .take(50)
+        .cloned()
+        .collect::<Vec<_>>();
+    recent_events.reverse();
+    let mut events_path = output_dir.clone();
+    events_path.push("recent_events.json");
+    write_json_file(events_path, &recent_events)?;
+
+    let mut audio_devices = Vec::new();
+    if !snapshot.metrics.capture_device_name.is_empty() {
+        audio_devices.push(snapshot.metrics.capture_device_name.clone());
+    }
+    if audio_devices.is_empty() {
+        audio_devices.push("unknown capture device".to_string());
+    }
+    let system_info = SupportBundleSystemInfo {
+        exported_at_unix_seconds,
+        os: std::env::consts::OS,
+        os_family: std::env::consts::FAMILY,
+        arch: std::env::consts::ARCH,
+        app_version: snapshot.version.clone(),
+        local_ip: snapshot.local_ip.clone(),
+        connect_address: snapshot.connect_address.clone(),
+        ws_port: snapshot.ws_port,
+        udp_port: snapshot.udp_port,
+        transport_mode: snapshot.transport_mode.clone(),
+        usb_serial: snapshot.usb_serial.clone(),
+        audio_devices,
+        network_interfaces: vec![format!("local_ip={}", snapshot.local_ip)],
+    };
+    let mut system_path = output_dir.clone();
+    system_path.push("system_info.json");
+    write_json_file(system_path, &system_info)?;
+
+    let mut readme_path = output_dir.clone();
+    readme_path.push("README.txt");
+    fs::write(
+        readme_path,
+        "LAN Audio support bundle\n\nAttach this directory when filing an issue. It includes a desktop snapshot, basic system information, and the most recent runtime events.\n",
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(output_dir.display().to_string())
 }
 
