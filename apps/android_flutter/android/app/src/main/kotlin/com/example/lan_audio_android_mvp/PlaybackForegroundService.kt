@@ -35,8 +35,10 @@ class PlaybackForegroundService : MediaSessionService() {
     private var explicitStopRequested = false
     private var lastNotificationAtMs = 0L
     private var lastNotificationKey = ""
+    private var lifecycleState = ServiceLifecycleState.IDLE
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
+        syncLifecycleState(snapshot)
         updateMediaSession(snapshot)
         updateNotification(snapshot)
     }
@@ -67,6 +69,14 @@ class PlaybackForegroundService : MediaSessionService() {
         Log.i(logTag, "onStartCommand action=${intent?.action}")
         when (intent?.action) {
             PlaybackActions.ACTION_START -> {
+                syncLifecycleState(stateStore.current())
+                if (lifecycleState != ServiceLifecycleState.IDLE) {
+                    Log.w(logTag, "ACTION_START ignored in lifecycleState=$lifecycleState")
+                    stateStore.update {
+                        it.copy(recentLog = "start_ignored_state:${lifecycleState.name.lowercase()}")
+                    }
+                    return START_STICKY
+                }
                 val host = intent.getStringExtra(PlaybackActions.EXTRA_HOST).orEmpty()
                 val wsPort = intent.getIntExtra(PlaybackActions.EXTRA_WS_PORT, 39991)
                 val udpPort = intent.getIntExtra(PlaybackActions.EXTRA_UDP_PORT, 39992)
@@ -76,6 +86,8 @@ class PlaybackForegroundService : MediaSessionService() {
                     intent.getStringExtra(PlaybackActions.EXTRA_TRANSPORT_MODE) ?: "wifi"
                 if (host.isBlank()) {
                     Log.w(logTag, "startPlayback rejected: empty host")
+                    transitionLifecycle(ServiceLifecycleState.ERROR, "start_missing_host")
+                    transitionLifecycle(ServiceLifecycleState.IDLE, "start_missing_host:error_idle")
                     stateStore.update {
                         it.copy(
                             serviceState = "error",
@@ -96,6 +108,7 @@ class PlaybackForegroundService : MediaSessionService() {
                     explicitStopRequested = false
                     persistTarget(host, wsPort, udpPort, serverName, transportMode)
                     acquirePlaybackLocks()
+                    transitionLifecycle(ServiceLifecycleState.CONNECTING, "action_start")
                     Log.i(logTag, "startPlayback target=$serverName host=$host ws=$wsPort udp=$udpPort transport=$transportMode")
                     sessionController.startPlayback(
                         PlaybackTarget(
@@ -243,9 +256,7 @@ class PlaybackForegroundService : MediaSessionService() {
             logTag,
             "onTaskRemoved foregroundStarted=$foregroundStarted serviceState=${snapshot.serviceState} connectionState=${snapshot.connectionState} playbackState=${snapshot.playbackState}"
         )
-        if (shouldRestoreAfterDestroy(snapshot)) {
-            schedulePlaybackRestore("task_removed")
-        }
+        stopFromMediaAction("task_removed")
         super.onTaskRemoved(rootIntent)
     }
 
@@ -294,11 +305,19 @@ class PlaybackForegroundService : MediaSessionService() {
     }
 
     private fun stopFromMediaAction(reason: String) {
+        syncLifecycleState(stateStore.current())
+        if (lifecycleState == ServiceLifecycleState.IDLE) {
+            Log.i(logTag, "stop ignored in IDLE reason=$reason")
+            stateStore.update { it.copy(recentLog = "stop_noop_idle:$reason") }
+            return
+        }
+        transitionLifecycle(ServiceLifecycleState.STOPPING, reason)
         explicitStopRequested = true
         clearPersistedTarget()
         sessionController.stopPlayback(reason)
         releasePlaybackLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        transitionLifecycle(ServiceLifecycleState.IDLE, "$reason:stopped")
         stopSelf()
     }
 
@@ -308,10 +327,41 @@ class PlaybackForegroundService : MediaSessionService() {
             stopFromMediaAction("notification_play_pause")
             return
         }
-        Log.i(logTag, "play/pause ignored while inactive to avoid implicit reconnect")
+        Log.i(logTag, "play/pause ignored while inactive to avoid implicit start")
         stateStore.update {
             it.copy(recentLog = "play_pause_ignored_inactive")
         }
+    }
+
+    private fun syncLifecycleState(snapshot: PlaybackSnapshot) {
+        if (lifecycleState == ServiceLifecycleState.STOPPING) {
+            return
+        }
+        if (snapshot.connectionState == "error" || snapshot.serviceState == "error") {
+            transitionLifecycle(ServiceLifecycleState.ERROR, "snapshot:${snapshot.recentLog}")
+            transitionLifecycle(ServiceLifecycleState.IDLE, "snapshot_error_idle:${snapshot.recentLog}")
+            return
+        }
+        val next = when {
+            snapshot.connectionState == "connecting" || snapshot.connectionState == "reconnecting" ->
+                ServiceLifecycleState.CONNECTING
+            snapshot.connectionState == "connected" ||
+                snapshot.playbackState == "playing" ||
+                snapshot.playbackState == "buffering" ->
+                ServiceLifecycleState.PLAYING
+            snapshot.serviceState == "idle" && snapshot.connectionState != "connected" ->
+                ServiceLifecycleState.IDLE
+            else -> lifecycleState
+        }
+        transitionLifecycle(next, "snapshot")
+    }
+
+    private fun transitionLifecycle(next: ServiceLifecycleState, reason: String) {
+        if (lifecycleState == next) {
+            return
+        }
+        Log.i(logTag, "service_lifecycle ${lifecycleState.name}->${next.name} reason=$reason")
+        lifecycleState = next
     }
 
     private fun shouldIgnoreStartPlayback(host: String): Boolean {
@@ -583,4 +633,12 @@ class PlaybackForegroundService : MediaSessionService() {
             context.startService(intent)
         }
     }
+}
+
+private enum class ServiceLifecycleState {
+    IDLE,
+    CONNECTING,
+    PLAYING,
+    STOPPING,
+    ERROR,
 }
