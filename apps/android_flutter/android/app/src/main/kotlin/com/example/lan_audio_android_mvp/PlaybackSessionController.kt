@@ -37,8 +37,8 @@ class PlaybackSessionController(
     private var reconnectAttemptCount = 0
     private var reconnectTotalCount = 0
     private var streamManager: StreamSessionManager? = null
-    private var options = PlaybackModeProfiles.forMode("balanced").toOptions()
-    private var jitterBuffer = newJitterBuffer(options)
+    private var options = PlaybackBufferPolicy.optionsFor("balanced", TransportHint.Wifi)
+    private var jitterBuffer = PlaybackBufferPolicy.newJitterBuffer(options)
     private var currentTransportHint: TransportHint = TransportHint.Wifi
     private var currentTarget: PlaybackTarget? = null
     private var focusRequest: AudioFocusRequest? = null
@@ -87,7 +87,7 @@ class PlaybackSessionController(
     private var rxWindowFrames = 0
     private var lastAudioFormat: ActiveAudioFormat? = null
     private var oboeUnderrunCount = 0
-    private var smoothedRxFramesPerSec: Double? = null
+    private val metricsCollector = PlaybackMetricsCollector()
     private var lastDiagnosedSilenceFillCount: Int = 0
     private var lastDiagnosedSinkSilenceFillCount: Int = 0
     private var lastDiagnosedOboeUnderrunCount: Int = 0
@@ -116,7 +116,7 @@ class PlaybackSessionController(
         currentTarget = target
         currentTransportHint = transportHintFromWire(target.transportMode)
         val currentMode = PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode)
-        options = PlaybackModeProfiles.forMode(currentMode, currentTransportHint).toOptions(options.pingIntervalMs)
+        options = PlaybackBufferPolicy.optionsFor(currentMode, currentTransportHint, options.pingIntervalMs)
         reconnectFuture?.cancel(false)
         reconnectFuture = null
         reconnectAttemptCount = 0
@@ -131,7 +131,7 @@ class PlaybackSessionController(
         }
         registerNoisyReceiver()
 
-        jitterBuffer = newJitterBuffer(options)
+        jitterBuffer = PlaybackBufferPolicy.newJitterBuffer(options)
         lastSeq = null
         udpLoss = 0
         silenceFillCount = 0
@@ -171,7 +171,7 @@ class PlaybackSessionController(
         rxWindowFrames = 0
         lastAudioFormat = null
         oboeUnderrunCount = 0
-        smoothedRxFramesPerSec = null
+        metricsCollector.reset()
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
@@ -408,7 +408,7 @@ class PlaybackSessionController(
         }
         stateStore.update {
             it.copy(
-                modeProfile = modeProfileForOptions(
+                modeProfile = PlaybackBufferPolicy.modeProfileForOptions(
                     currentMode = it.currentAudioMode,
                     transportHint = currentTransportHint,
                     options = options,
@@ -811,7 +811,8 @@ class PlaybackSessionController(
         val jitterBufferedMs = jitterBuffer.bufferedMs()
         var totalBufferedMs = jitterBufferedMs + audioQueuedMs
         val latencyGuardCooldownMs = 220L
-        val latencyGuardObserveWindowMs = if (options.preferLowLatencyPath) 0L else LATENCY_GUARD_OBSERVE_WINDOW_MS
+        val latencyGuardObserveWindowMs =
+            if (options.preferLowLatencyPath) 0L else PlaybackLatencyGuard.OBSERVE_WINDOW_MS
         val overflowActive = totalBufferedMs > options.maxTotalLatencyMs
         if (overflowActive) {
             if (latencyGuardOverflowSinceMs == 0L) {
@@ -820,7 +821,8 @@ class PlaybackSessionController(
         } else {
             latencyGuardOverflowSinceMs = 0L
         }
-        val trackQueueReadyForTrim = audioQueuedMs >= balancedAudioQueueLowWatermarkMs(frameDurationMs)
+        val trackQueueReadyForTrim =
+            audioQueuedMs >= PlaybackPacingEngine.balancedAudioQueueLowWatermarkMs(frameDurationMs)
         val guardMayTrim = options.preferLowLatencyPath ||
             ((latencyGuardOverflowSinceMs > 0L) &&
                 (now - latencyGuardOverflowSinceMs >= latencyGuardObserveWindowMs) &&
@@ -840,7 +842,7 @@ class PlaybackSessionController(
             }
         } else if (overflowActive && !options.preferLowLatencyPath && latencyGuardOverflowSinceMs > 0L) {
             val overflowMs = now - latencyGuardOverflowSinceMs
-            if (overflowMs in 1 until LATENCY_GUARD_OBSERVE_WINDOW_MS &&
+            if (overflowMs in 1 until PlaybackLatencyGuard.OBSERVE_WINDOW_MS &&
                 now - lastLatencyGuardAtMs >= latencyGuardCooldownMs
             ) {
                 stateStore.update { it.copy(recentLog = "latency_guard_hold:${totalBufferedMs}") }
@@ -848,14 +850,16 @@ class PlaybackSessionController(
         }
         val catchupMs = (totalBufferedMs - options.targetTotalLatencyMs).coerceAtLeast(0)
         val effectiveIntervalMs = (writtenPacketCount * frameDurationMs +
-            pacingOffsetMs(
+            PlaybackPacingEngine.pacingOffsetMs(
+                options = options,
                 totalBufferedMs = totalBufferedMs,
                 catchupMs = catchupMs,
                 frameDurationMs = frameDurationMs,
                 audioQueuedMs = audioQueuedMs,
+                smoothedRxFramesPerSec = metricsCollector.smoothedRxFramesPerSec,
             )).coerceIn(
                 frameDurationMs,
-                writtenPacketCount * frameDurationMs + BALANCED_PACING_SLOWDOWN_MAX_MS,
+                writtenPacketCount * frameDurationMs + PlaybackPacingEngine.BALANCED_PACING_SLOWDOWN_MAX_MS,
             )
         nextPlayoutAtMs = now + effectiveIntervalMs.toLong()
         val resumeThreshold = if (options.preferLowLatencyPath) {
@@ -1119,7 +1123,7 @@ class PlaybackSessionController(
         startupSilenceFillBaseline = 0
         startupSilenceTrackingActive = false
         startupSilencePhaseUntilMs = 0L
-        smoothedRxFramesPerSec = null
+        metricsCollector.reset()
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
@@ -1250,7 +1254,7 @@ class PlaybackSessionController(
             } else if (streamActive && audioInit && backendChanged) {
                 reinitAudioBackend(normalized, reason, resetJitterState = false)
             } else if (modeChanged && profile.resetBufferOnSwitch && !streamActive) {
-                jitterBuffer = newJitterBuffer(options)
+                jitterBuffer = PlaybackBufferPolicy.newJitterBuffer(options)
                 withPlaybackSinkLock {
                     playbackSink.stop()
                     playbackSink.release()
@@ -1356,75 +1360,6 @@ class PlaybackSessionController(
         val sorted = samples.sorted()
         val idx = kotlin.math.ceil(sorted.size * 0.95).toInt().coerceIn(1, sorted.size) - 1
         return sorted[idx].coerceAtLeast(0)
-    }
-
-    private fun newJitterBuffer(opts: PlaybackOptions): PlaybackJitterBuffer {
-        return PlaybackJitterBuffer(opts.startBufferMs, opts.maxBufferMs, opts.dropThresholdMs)
-    }
-
-    private fun pacingOffsetMs(
-        totalBufferedMs: Int,
-        catchupMs: Int,
-        frameDurationMs: Int,
-        audioQueuedMs: Int,
-    ): Int {
-        if (options.preferLowLatencyPath) {
-            return when {
-                catchupMs >= 120 -> -4
-                catchupMs >= 70 -> -3
-                catchupMs >= 35 -> -2
-                else -> 0
-            }
-        }
-
-        val lowerBoundMs = options.startBufferMs.coerceAtLeast(options.targetTotalLatencyMs - 40)
-        val upperBoundMs = options.maxTotalLatencyMs.coerceAtMost(options.targetTotalLatencyMs + 30)
-        val rxBelowSteadyState = (smoothedRxFramesPerSec ?: BALANCED_EXPECTED_RX_FRAMES_PER_SEC) <
-            BALANCED_RX_FRAMES_FLOOR
-        val audioQueueLowWatermarkMs = balancedAudioQueueLowWatermarkMs(frameDurationMs)
-        return when {
-            audioQueuedMs <= audioQueueLowWatermarkMs / 2 -> -2
-            audioQueuedMs < audioQueueLowWatermarkMs -> -1
-            totalBufferedMs <= lowerBoundMs - frameDurationMs -> 2
-            totalBufferedMs < lowerBoundMs -> 1
-            rxBelowSteadyState -> 0
-            totalBufferedMs >= upperBoundMs + frameDurationMs -> -1
-            else -> 0
-        }
-    }
-
-    private fun balancedAudioQueueLowWatermarkMs(frameDurationMs: Int): Int {
-        return (frameDurationMs * 2 + BALANCED_AUDIO_QUEUE_LOW_WATERMARK_EXTRA_MS)
-            .coerceAtLeast(BUFFER_EMPTY_LOW_WATERMARK_MS)
-    }
-
-    private fun balancedAudioQueueFillTargetMs(frameDurationMs: Int): Int {
-        return balancedAudioQueueLowWatermarkMs(frameDurationMs) + BALANCED_AUDIO_QUEUE_FILL_TARGET_EXTRA_MS
-    }
-
-    private fun modeProfileForOptions(
-        currentMode: String,
-        transportHint: TransportHint,
-        options: PlaybackOptions,
-    ): PlaybackModeProfile {
-        return PlaybackModeProfiles.forMode(currentMode, transportHint).copy(
-            startBufferMs = options.startBufferMs,
-            maxBufferMs = options.maxBufferMs,
-            batchFrames = options.batchFrames,
-            dropThresholdMs = options.dropThresholdMs,
-            targetTotalLatencyMs = options.targetTotalLatencyMs,
-            maxTotalLatencyMs = options.maxTotalLatencyMs,
-            audioQueueSoftCapMs = options.audioQueueSoftCapMs,
-            bufferingEnterDelayMs = options.bufferingEnterDelayMs,
-            preferLowLatencyPath = options.preferLowLatencyPath,
-            preferStableAudioTrack = options.preferStableAudioTrack,
-            preferredCodec = options.preferredCodec,
-            preferredSampleFormat = options.preferredSampleFormat,
-            lowLatencyBufferMultiplier = options.lowLatencyBufferMultiplier,
-            lowLatencyFallbackBufferMultiplier = options.lowLatencyFallbackBufferMultiplier,
-            frameDurationMs = options.frameDurationMs,
-            resetBufferOnSwitch = options.resetBufferOnSwitch,
-        )
     }
 
     private fun createPlaybackSink(): PlaybackAudioSink {
@@ -1694,7 +1629,7 @@ class PlaybackSessionController(
             balancedQueueBelowFillTarget = false
             return baseBatchSize
         }
-        val fillTargetMs = balancedAudioQueueFillTargetMs(frameDurationMs)
+        val fillTargetMs = PlaybackPacingEngine.balancedAudioQueueFillTargetMs(frameDurationMs)
         if (audioQueuedMs >= fillTargetMs) {
             balancedQueueBelowFillTarget = false
             return baseBatchSize
@@ -1738,10 +1673,7 @@ class PlaybackSessionController(
 
         val observedRxFramesPerSec =
             ((metrics.udpPackets - lastLoggedUdpPackets).coerceAtLeast(0) * 1000.0) / elapsedMs.toDouble()
-        val rxFramesPerSec = smoothedRxFramesPerSec?.let { previous ->
-            previous + ((observedRxFramesPerSec - previous) * RX_FPS_SMOOTHING_ALPHA)
-        } ?: observedRxFramesPerSec
-        smoothedRxFramesPerSec = rxFramesPerSec
+        val rxFramesPerSec = metricsCollector.observeRxFramesPerSec(observedRxFramesPerSec)
         val audioTrackWriteFramesPerSec =
             ((metrics.audioTrackWriteFrames - lastLoggedAudioTrackWriteFrames).coerceAtLeast(0L) * 1000.0) /
                 elapsedMs.toDouble()
@@ -1816,10 +1748,10 @@ class PlaybackSessionController(
         }
         val cause = when {
             silenceDelta > 0 && startupSilenceTrackingActive -> "startup_fill"
-            silenceDelta > 0 && nowMs - lastLatencyGuardAtMs <= LATENCY_GUARD_CAUSE_WINDOW_MS ->
+            silenceDelta > 0 && nowMs - lastLatencyGuardAtMs <= PlaybackLatencyGuard.CAUSE_WINDOW_MS ->
                 "post_latency_guard"
             silenceDelta > 0 &&
-                audioTrackQueuedMs <= balancedAudioQueueLowWatermarkMs(options.frameDurationMs) ->
+                audioTrackQueuedMs <= PlaybackPacingEngine.balancedAudioQueueLowWatermarkMs(options.frameDurationMs) ->
                 "buffer_empty"
             underrunDelta > 0 -> "oboe_starvation"
             else -> "unknown"
@@ -1883,17 +1815,8 @@ class PlaybackSessionController(
         private const val LOW_LATENCY_ADAPTIVE_BOOST_MS = 5
         private const val LOW_LATENCY_RECOVER_MS = 10_000L
         private const val WIFI_BALANCED_MAX_BUFFER_CAP_MS = 30
-        private const val BALANCED_PACING_SLOWDOWN_MAX_MS = 4
-        private const val LATENCY_GUARD_OBSERVE_WINDOW_MS = 250L
-        private const val LATENCY_GUARD_CAUSE_WINDOW_MS = 800L
-        private const val BALANCED_AUDIO_QUEUE_LOW_WATERMARK_EXTRA_MS = 10
-        private const val BALANCED_AUDIO_QUEUE_FILL_TARGET_EXTRA_MS = 10
         private const val BALANCED_ONE_SHOT_REFILL_TARGET_MS = 50
         private const val STARTUP_SILENCE_PHASE_MS = 3_000L
-        private const val BUFFER_EMPTY_LOW_WATERMARK_MS = 20
-        private const val BALANCED_EXPECTED_RX_FRAMES_PER_SEC = 50.0
-        private const val BALANCED_RX_FRAMES_FLOOR = 48.0
-        private const val RX_FPS_SMOOTHING_ALPHA = 0.25
         private const val HIGH_QUALITY_PREFILL_MAX_WAIT_MS = 500L
     }
 
