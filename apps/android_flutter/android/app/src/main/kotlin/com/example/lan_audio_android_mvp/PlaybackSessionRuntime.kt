@@ -189,10 +189,12 @@ class PlaybackSessionRuntime(
 
         stateStore.update {
             it.copy(
-                serviceState = "running",
-                connectionState = "connecting",
-                playbackState = "buffering",
-                modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode, currentTransportHint),
+            serviceState = "running",
+            connectionState = "connecting",
+            playbackState = "buffering",
+            reconnectAttempts = 0,
+            reconnectDelayMs = 0,
+            modeProfile = PlaybackModeProfiles.forMode(it.currentAudioMode, currentTransportHint),
                 connectionPath = if (target.transportMode == "usb") "usb_localhost" else "lan_ip_wifi_or_usb",
         playbackBackend = playbackBackendLabel(),
                 protocolPath = "legacy_or_v2_auto",
@@ -254,11 +256,14 @@ class PlaybackSessionRuntime(
                 reconnectAttemptCount = 0
                 stateStore.update {
                     it.copy(
-                        connectionState = "connected",
-                        playbackState = "buffering",
-                        connectedClientCount = if (it.connectedClientCount <= 0) 1 else it.connectedClientCount,
-                        recentLog = "ws_connected",
-                    )
+                    connectionState = "connected",
+                    playbackState = "buffering",
+                    reconnectAttempts = 0,
+                    reconnectDelayMs = 0,
+                    connectedClientCount = if (it.connectedClientCount <= 0) 1 else it.connectedClientCount,
+                    recentLog = "ws_connected",
+                    error = null,
+                )
                 }
                 ensurePlayoutLoop()
             }
@@ -374,10 +379,12 @@ class PlaybackSessionRuntime(
         reconnectTotalCount = 0
         stateStore.update {
             it.copy(
-                serviceState = "stopping",
-                connectionState = "disconnected",
-                playbackState = "stopped",
-                recentLog = reason,
+            serviceState = "stopping",
+            connectionState = "disconnected",
+            playbackState = "stopped",
+            reconnectAttempts = 0,
+            reconnectDelayMs = 0,
+            recentLog = reason,
             )
         }
         stopStreamAndAudio()
@@ -385,10 +392,12 @@ class PlaybackSessionRuntime(
         releaseAudioFocus()
         stateStore.update {
             it.copy(
-                serviceState = "idle",
-                connectionState = "idle",
-                playbackState = "stopped",
-                recentLog = reason,
+            serviceState = "idle",
+            connectionState = "idle",
+            playbackState = "stopped",
+            reconnectAttempts = 0,
+            reconnectDelayMs = 0,
+            recentLog = reason,
             )
         }
     }
@@ -954,10 +963,16 @@ class PlaybackSessionRuntime(
             stopStreamAndAudio()
             stateStore.update {
                 it.copy(
-                    serviceState = "running",
-                    connectionState = "disconnected",
+                    serviceState = "error",
+                    connectionState = "error",
                     playbackState = "stopped",
+                    reconnectAttempts = reconnectAttemptCount,
+                    reconnectDelayMs = 0,
                     recentLog = "reconnect_exhausted:$reason",
+                    error = mapOf(
+                        "code" to "reconnect_exhausted",
+                        "message" to "reconnect failed after $MAX_AUTO_RECONNECT_ATTEMPTS attempts: $reason",
+                    ),
                 )
             }
             return
@@ -968,13 +983,27 @@ class PlaybackSessionRuntime(
             reconnectAttemptCount = attemptNumber
             reconnectTotalCount += 1
         }
-        val delayMs = if (immediate) 0L else AUTO_RECONNECT_DELAY_MS
+        val delayMs = if (immediate) 0L else reconnectDelayMs(attemptNumber)
         Log.w(
             logTag,
             "scheduleReconnect reason=$reason immediate=$immediate attempt=$attemptNumber/$MAX_AUTO_RECONNECT_ATTEMPTS delayMs=$delayMs",
         )
         reconnectFuture?.cancel(false)
         val generation = ++streamGeneration
+        stateStore.update {
+            it.copy(
+                serviceState = "running",
+                connectionState = "reconnecting",
+                playbackState = "buffering",
+                reconnectAttempts = attemptNumber,
+                reconnectDelayMs = delayMs.toInt(),
+                recentLog = if (immediate) {
+                    "reconnect:$reason"
+                } else {
+                    "reconnect_wait:$attemptNumber/$MAX_AUTO_RECONNECT_ATTEMPTS:${delayMs}ms:$reason"
+                },
+            )
+        }
         reconnectFuture = controlExecutor.schedule({
             if (generation != streamGeneration) {
                 return@schedule
@@ -984,6 +1013,8 @@ class PlaybackSessionRuntime(
                     serviceState = "running",
                     connectionState = "reconnecting",
                     playbackState = "buffering",
+                    reconnectAttempts = attemptNumber,
+                    reconnectDelayMs = 0,
                     recentLog = if (immediate) "reconnect:$reason" else "reconnect:$attemptNumber/$MAX_AUTO_RECONNECT_ATTEMPTS:$reason",
                 )
             }
@@ -1014,7 +1045,14 @@ class PlaybackSessionRuntime(
                     reconnectFuture = null
                     reconnectAttemptCount = 0
                     stateStore.update {
-                        it.copy(connectionState = "connected", playbackState = "buffering", recentLog = "ws_reconnected")
+                        it.copy(
+                            connectionState = "connected",
+                            playbackState = "buffering",
+                            reconnectAttempts = 0,
+                            reconnectDelayMs = 0,
+                            recentLog = "ws_reconnected",
+                            error = null,
+                        )
                     }
                 }
 
@@ -1916,8 +1954,7 @@ class PlaybackSessionRuntime(
     }
 
     companion object {
-        private const val MAX_AUTO_RECONNECT_ATTEMPTS = 3
-        private const val AUTO_RECONNECT_DELAY_MS = 2000L
+        private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5
         private const val DECODE_SUMMARY_INTERVAL_MS = 5_000L
         private const val JITTER_P95_WINDOW_FRAMES = 50
         private const val LOW_LATENCY_ADAPTIVE_BOOST_MS = 5
@@ -1935,6 +1972,11 @@ class PlaybackSessionRuntime(
         private const val BALANCED_RX_FRAMES_FLOOR = 48.0
         private const val RX_FPS_SMOOTHING_ALPHA = 0.25
         private const val HIGH_QUALITY_PREFILL_MAX_WAIT_MS = 500L
+    }
+
+    private fun reconnectDelayMs(attemptNumber: Int): Long {
+        val shift = (attemptNumber - 1).coerceIn(0, 4)
+        return 1_000L shl shift
     }
 
     private data class WriteBatch(

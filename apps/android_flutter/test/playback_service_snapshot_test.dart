@@ -14,6 +14,8 @@ void main() {
       'state': 'streaming',
       'rollback_state': 'main_path_active',
       'eq_enabled': true,
+      'reconnect_attempts': 3,
+      'reconnect_delay_ms': 4000,
       'eq_settings': <String, dynamic>{
         'enabled': true,
         'low_db': 6,
@@ -44,6 +46,8 @@ void main() {
     expect(snapshot.state, 'streaming');
     expect(snapshot.rollbackState, 'main_path_active');
     expect(snapshot.eqEnabled, true);
+    expect(snapshot.reconnectAttempts, 3);
+    expect(snapshot.reconnectDelayMs, 4000);
     expect(snapshot.eqSettings['low_db'], 6);
     expect(snapshot.eqSettings['high_db'], 3);
     expect(snapshot.loudnessNormalizationEnabled, true);
@@ -67,5 +71,18 @@ void main() {
     expect(mapped['eq_enabled'], true);
     expect(mapped['eq_settings'], isA<Map<String, dynamic>>());
     expect((mapped['eq_settings'] as Map<String, dynamic>)['mid_db'], 4);
+  });
+
+  test('PlaybackServiceSnapshot exposes reconnect attempt fields', () {
+    final snapshot = PlaybackServiceSnapshot.fromMap(const <String, dynamic>{
+      'state': 'recovering',
+      'reconnect_attempts': 5,
+      'reconnect_delay_ms': 16000,
+    });
+
+    expect(snapshot.state, 'recovering');
+    expect(snapshot.reconnectAttempts, 5);
+    expect(snapshot.reconnectDelayMs, 16000);
+    expect(snapshot.toMap()['reconnect_attempts'], 5);
   });
 }

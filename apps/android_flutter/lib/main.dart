@@ -169,6 +169,8 @@ class _DebugPageState extends State<DebugPage> {
   int _eqHighDb = 0;
   bool _loudnessNormalizationEnabled = false;
   double _loudnessGainDb = 0.0;
+  int _reconnectAttempts = 0;
+  int _reconnectDelayMs = 0;
   bool _experimentalPath = false;
   bool _updateCheckRunning = false;
   bool _nsdDiscoveryRunning = false;
@@ -402,6 +404,8 @@ class _DebugPageState extends State<DebugPage> {
       _loudnessNormalizationEnabled = snapshot.loudnessNormalizationEnabled;
       _loudnessGainDb =
           (metrics['loudness_gain_db'] as num?)?.toDouble() ?? _loudnessGainDb;
+      _reconnectAttempts = snapshot.reconnectAttempts;
+      _reconnectDelayMs = snapshot.reconnectDelayMs;
       _experimentalPath = snapshot.dataPlane == 'v2_header';
       _tcpRoundTripMs = (metrics['rtt_ms'] as num?)?.toInt();
       _tcpRoundTripMedianMs = _tcpRoundTripMs;
@@ -421,7 +425,9 @@ class _DebugPageState extends State<DebugPage> {
 
       _wsConnected = runtimeState != 'disconnected' && runtimeState != 'closed';
 
-      _status = '${snapshot.state}/${snapshot.rollbackState}';
+      _status = runtimeState == 'recovering'
+          ? '${tr('重新连接中', 'Reconnecting')}... (${tr('第', '#')} $_reconnectAttempts${tr('次', '')}, ${_reconnectDelayMs}ms)'
+          : '${snapshot.state}/${snapshot.rollbackState}';
       _audioLog = snapshot.state;
       _wsLog = jsonEncode(snapshot.toMap());
     });
@@ -1328,6 +1334,11 @@ class _DebugPageState extends State<DebugPage> {
 
   String _statusChipLabel() {
     if (_isConnecting) return tr('连接中', 'CONNECTING');
+    if (_wsConnected &&
+        _playbackState == PlaybackState.buffering &&
+        _reconnectAttempts > 0) {
+      return tr('重连中', 'RECONNECTING');
+    }
     if (_wsConnected && _playbackState == PlaybackState.playing)
       return tr('推流中', 'STREAMING');
     if (_wsConnected && _playbackState == PlaybackState.buffering)
@@ -1339,6 +1350,9 @@ class _DebugPageState extends State<DebugPage> {
   Color _statusChipColor(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final label = _statusChipLabel();
+    if (label == 'RECONNECTING' || label == '重连中') {
+      return Colors.deepOrange.shade700;
+    }
     if (label == 'STREAMING' || label == '推流中') return Colors.green.shade600;
     if (label == 'BUFFERING' || label == '缓冲中') return Colors.orange.shade700;
     if (label == 'CONNECTED' || label == '已连接') return scheme.primary;

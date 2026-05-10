@@ -302,6 +302,8 @@ data class PlaybackSnapshot(
     val serverAppVersion: String? = null,
     val eqSettings: PlaybackEqSettings = PlaybackEqSettings(),
     val loudnessNormalizationEnabled: Boolean = false,
+    val reconnectAttempts: Int = 0,
+    val reconnectDelayMs: Int = 0,
     val metrics: PlaybackMetrics = PlaybackMetrics(),
     val recentLog: String = "",
     val error: Map<String, String>? = null,
@@ -355,6 +357,8 @@ data class PlaybackSnapshot(
                 "highDb" to eqSettings.highDb,
             ),
             "loudnessNormalizationEnabled" to loudnessNormalizationEnabled,
+            "reconnectAttempts" to reconnectAttempts,
+            "reconnectDelayMs" to reconnectDelayMs,
             "metrics" to mapOf(
                 "sampleRate" to metrics.sampleRate,
                 "channels" to metrics.channels,
@@ -440,6 +444,8 @@ data class StableServiceSnapshot(
     val eqEnabled: Boolean = false,
     val eqSettings: Map<String, Any?> = emptyMap(),
     val loudnessNormalizationEnabled: Boolean = false,
+    val reconnectAttempts: Int = 0,
+    val reconnectDelayMs: Int = 0,
     val metrics: StableServiceMetrics = StableServiceMetrics(),
 ) {
     fun toMap(): Map<String, Any?> {
@@ -464,6 +470,8 @@ data class StableServiceSnapshot(
             "eq_enabled" to eqEnabled,
             "eq_settings" to eqSettings,
             "loudness_normalization_enabled" to loudnessNormalizationEnabled,
+            "reconnect_attempts" to reconnectAttempts,
+            "reconnect_delay_ms" to reconnectDelayMs,
             "metrics" to mapOf(
                 "buffered_ms" to metrics.bufferedMs,
                 "underrun" to metrics.underrun,
@@ -563,6 +571,8 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             "high_db" to eqSettings.highDb,
         ),
         loudnessNormalizationEnabled = loudnessNormalizationEnabled,
+        reconnectAttempts = reconnectAttempts,
+        reconnectDelayMs = reconnectDelayMs,
         metrics = StableServiceMetrics(
             bufferedMs = metrics.totalBufferedMs,
             underrun = metrics.jitterUnderrun,

@@ -24,6 +24,8 @@ class PlaybackServiceSnapshot {
     required this.eqEnabled,
     required this.eqSettings,
     required this.loudnessNormalizationEnabled,
+    required this.reconnectAttempts,
+    required this.reconnectDelayMs,
     required this.metrics,
   });
 
@@ -47,6 +49,8 @@ class PlaybackServiceSnapshot {
   final bool eqEnabled;
   final Map<String, dynamic> eqSettings;
   final bool loudnessNormalizationEnabled;
+  final int reconnectAttempts;
+  final int reconnectDelayMs;
   final Map<String, dynamic> metrics;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -57,7 +61,8 @@ class PlaybackServiceSnapshot {
       transport: '${normalized['transport'] ?? 'wifi'}',
       mode: '${normalized['mode'] ?? 'balanced'}',
       dataPlane: '${normalized['data_plane'] ?? 'legacy_las1'}',
-      activeDataPlane: '${normalized['active_data_plane'] ?? normalized['data_plane'] ?? 'legacy_las1'}',
+      activeDataPlane:
+          '${normalized['active_data_plane'] ?? normalized['data_plane'] ?? 'legacy_las1'}',
       rollbackAvailable: normalized['rollback_available'] == true,
       codec: '${normalized['codec'] ?? 'pcm16'}',
       effectiveCodec: '${normalized['effective_codec'] ?? 'pcm16'}',
@@ -75,8 +80,10 @@ class PlaybackServiceSnapshot {
               const <String, bool>{},
       serverPlatform: normalized['server_platform']?.toString(),
       serverAppVersion: normalized['server_app_version']?.toString(),
-      transportMode: '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
-      playbackBackend: '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
+      transportMode:
+          '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
+      playbackBackend:
+          '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
       connectedClientCount:
           (normalized['connected_client_count'] as num?)?.toInt() ?? 0,
       eqEnabled: normalized['eq_enabled'] == true,
@@ -86,10 +93,16 @@ class PlaybackServiceSnapshot {
           const <String, dynamic>{},
       loudnessNormalizationEnabled:
           normalized['loudness_normalization_enabled'] == true,
+      reconnectAttempts: (normalized['reconnect_attempts'] as num?)?.toInt() ??
+          (normalized['reconnectAttempts'] as num?)?.toInt() ??
+          0,
+      reconnectDelayMs: (normalized['reconnect_delay_ms'] as num?)?.toInt() ??
+          (normalized['reconnectDelayMs'] as num?)?.toInt() ??
+          0,
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
-              const <String, dynamic>{},
+          const <String, dynamic>{},
     );
   }
 
@@ -115,6 +128,8 @@ class PlaybackServiceSnapshot {
       'eq_enabled': eqEnabled,
       'eq_settings': eqSettings,
       'loudness_normalization_enabled': loudnessNormalizationEnabled,
+      'reconnect_attempts': reconnectAttempts,
+      'reconnect_delay_ms': reconnectDelayMs,
       'metrics': metrics,
     };
   }
