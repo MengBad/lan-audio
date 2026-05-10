@@ -293,11 +293,18 @@
   - Android persists history JSON in SharedPreferences, capped at 10 entries.
   - Flutter shows favorites first, then recent history; tap connects, long press toggles favorite/delete/edit name, and right-swipe deletes.
 - Theme 3 gate status:
-  - [ ] mDNS real-device discovery and connect verified
-  - [ ] Simulated network interruption auto-recovers playback
-  - [ ] Connection history persists after app restart
+  - [x] mDNS real-device discovery and connect verified
+  - [x] Simulated network interruption auto-recovers playback
+  - [x] Connection history persists after app restart
   - [x] `flutter test` passed
   - [x] `cargo test -p lan_audio_server` passed
   - [x] `android/gradlew.bat assembleDebug` passed
   - [x] `docs/todo.md` updated
-- Theme 3 conclusion: `await_manual_device_verify`; code/test gates pass, real-device gate awaits user validation before Theme 4.
+- Theme 3 conclusion: `pass`; manual gate approved before Theme 4.
+
+## v1.7 Theme 4 Open Source Readiness (`2026-05-10`)
+
+- TASK-V17-401 contributor documentation:
+  - Added root `CONTRIBUTING.md` with environment requirements, local run steps, commit rules, architecture notes, and primary/rollback path guidance.
+  - Added GitHub issue templates for bug reports, feature requests, and connection issues.
+  - Added pull request template with validation and rollback checklist.
