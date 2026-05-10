@@ -8,8 +8,8 @@ It supports Wi-Fi and USB transport, keeps a permanent rollback path, and is bui
 
 ## Overview
 
-- Current version: `1.7`
-- Latest release: `v1.7`
+- Current version: `1.7.1`
+- Latest release: `v1.7.1`
 - Primary path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Transport modes: `wifi`, `usb`
@@ -36,7 +36,7 @@ It supports Wi-Fi and USB transport, keeps a permanent rollback path, and is bui
 
 ## Current Status
 
-`v1.7` is the current standard release.
+`v1.7.1` is the current patch release for the v1.7 line.
 
 Validated release facts:
 
@@ -49,6 +49,7 @@ Validated release facts:
 - Verified scenarios: `USB direct`, `WiFi + windows_loopback`, `2 Android clients`
 - Latency probe: `low_latency p95=64ms`, `balanced p95=185ms`, `high_quality p95=505ms`
 - Known issue: desktop per-device disconnect command is deferred to v1.8.
+- v1.7.1 hotfix: update checker endpoints use `MengBad/lan-audio`, Android update checks run off the main thread, and release signing CI is aligned with the fixed keystore flow.
 
 ## Architecture
 
@@ -161,15 +162,15 @@ Version source:
 Release entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.7
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.7.1
 ```
 
 GitHub Release artifacts include:
 
-- `lan-audio-android-arm64-v8a-v1.7.apk`
-- `lan-audio-android-armeabi-v7a-v1.7.apk`
-- `lan-audio-android-x86_64-v1.7.apk`
-- `lan-audio-desktop-v1.7.exe`
+- `lan-audio-android-arm64-v8a-v1.7.1.apk`
+- `lan-audio-android-armeabi-v7a-v1.7.1.apk`
+- `lan-audio-android-x86_64-v1.7.1.apk`
+- `lan-audio-desktop-v1.7.1.exe`
 - `SHA256SUMS.txt`
 
 ## Documentation

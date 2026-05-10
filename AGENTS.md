@@ -147,7 +147,7 @@ Release 说明必须包含：
   + Windows 桌面版本（Cargo / Tauri）
   + Android 版本（pubspec + local.properties）
   + 文档中的当前版本信息
-* Android `versionCode` 采用 `2000000 + major * 10000 + minor * 100 + patch`（patch 缺省按 `0` 处理，例如 `1.4 -> 2010400`，`1.4.1 -> 2010401`），确保版本号单调递增，避免安装 downgrade。
+* Android `versionCode` 采用 `2000 + major * 1000 + minor * 10 + patch`（patch 缺省按 `0` 处理，例如 `1.7 -> 3070`，`1.7.1 -> 3071`），确保版本号单调递增，避免安装 downgrade。
 
 ## 禁止事项
 

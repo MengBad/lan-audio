@@ -4,6 +4,23 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.7.1] - 2026-05-11
+
+### Fixed
+
+- Corrected the desktop and Android update checker GitHub API endpoint to `MengBad/lan-audio`.
+- Moved Android update checks off the main thread to avoid `NetworkOnMainThreadException`.
+- Kept desktop manual update checks on a non-blocking path so release lookup cannot freeze the Tauri UI thread.
+- Aligned Android release signing in GitHub Actions with the fixed keystore-backed `local.properties` flow.
+- Kept Android `versionCode` monotonic for the v1.7 patch release (`1.7.1` -> `3071`).
+
+### Verification
+
+- `scripts/validate_local.ps1` passed.
+- `cargo test -p lan_audio_desktop -- update` passed.
+- `flutter test` passed.
+- Main branch Android APK workflow passed after the release signing fix.
+
 ## [1.7.0] - 2026-05-10
 
 ### Added

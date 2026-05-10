@@ -2,7 +2,7 @@
 
 ## Release State
 
-- Latest release: `v1.7`
+- Latest release: `v1.7.1`
 - Release gate: `allow_release`
 - FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
@@ -18,6 +18,16 @@
   - `high_quality p95=505ms`
 - Known issue:
   - Desktop per-device disconnect command is deferred to v1.8.
+
+## v1.7.1 Patch Release (`2026-05-11`)
+
+- [x] Desktop update checker GitHub API URL corrected to `MengBad/lan-audio`.
+- [x] Android update checker GitHub API URL corrected to `MengBad/lan-audio`.
+- [x] Android update check network request moved off the main thread.
+- [x] Desktop manual update checks verified on a non-blocking path.
+- [x] Android release signing CI aligned with fixed keystore-backed `local.properties`.
+- [x] Main branch contains v1.7 and v1.7.1 release fixes.
+- Release conclusion: `pass`; patch release for update-check and release-CI fixes.
 
 ## v1.7 Final Release Gate (`2026-05-10`)
 
