@@ -7,7 +7,9 @@ use uuid::Uuid;
 use crate::config::CodecSelection;
 use crate::config::ServerConfig;
 use crate::data_plane::DataPlaneRouter;
-use crate::discovery::{run_discovery_broadcast, DiscoveryConfig};
+use crate::discovery::{
+    run_discovery_broadcast, run_mdns_registration, DiscoveryConfig, MdnsServiceConfig,
+};
 use crate::metrics::{Metrics, MetricsSnapshot};
 use crate::session::{ClientRegistry, SessionServer};
 use crate::transport::BroadcastTransport;
@@ -127,8 +129,18 @@ impl LanAudioService {
         let mut handles = Vec::new();
         if self.cfg.transport_mode.as_str() == "wifi" {
             let rx = self.shutdown_tx.subscribe();
+            let mdns_rx = self.shutdown_tx.subscribe();
+            let mdns_cfg = MdnsServiceConfig {
+                server_name: self.cfg.server_name.clone(),
+                ws_port: self.cfg.ws_bind.port(),
+                version: "1.7".to_string(),
+                mode: audio_mode_txt(self.current_audio_mode()).to_string(),
+            };
             handles.push(tokio::spawn(async move {
                 run_discovery_broadcast(discovery_cfg, rx).await
+            }));
+            handles.push(tokio::spawn(async move {
+                run_mdns_registration(mdns_cfg, mdns_rx).await
             }));
         }
         {
@@ -205,5 +217,13 @@ impl LanAudioService {
     pub fn stop(&self) {
         let _ = &self.adb_reverse_manager;
         let _ = self.shutdown_tx.send(());
+    }
+}
+
+fn audio_mode_txt(mode: AudioMode) -> &'static str {
+    match mode {
+        AudioMode::LowLatency => "low_latency",
+        AudioMode::Balanced => "balanced",
+        AudioMode::HighQuality => "high_quality",
     }
 }

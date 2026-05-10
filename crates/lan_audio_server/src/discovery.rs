@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use if_addrs::{get_if_addrs, IfAddr};
 use lan_audio_protocol::DiscoveryBeacon;
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -19,6 +20,14 @@ pub struct DiscoveryConfig {
     pub broadcast_addr: SocketAddr,
     pub ws_port: u16,
     pub udp_port: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct MdnsServiceConfig {
+    pub server_name: String,
+    pub ws_port: u16,
+    pub version: String,
+    pub mode: String,
 }
 
 pub async fn run_discovery_broadcast(
@@ -74,6 +83,53 @@ pub async fn run_discovery_broadcast(
     }
 }
 
+pub async fn run_mdns_registration(
+    cfg: MdnsServiceConfig,
+    mut shutdown: broadcast::Receiver<()>,
+) -> anyhow::Result<()> {
+    let service_type = "_lan-audio._tcp.local.";
+    let instance_name = mdns_instance_name(&cfg.server_name);
+    let host_name = mdns_host_name(&cfg.server_name);
+    let host_ips = local_ipv4_addrs();
+
+    if host_ips.is_empty() {
+        warn!("mDNS registration skipped: no non-loopback IPv4 address");
+        let _ = shutdown.recv().await;
+        return Ok(());
+    }
+
+    let txt = [
+        ("version".to_string(), cfg.version.clone()),
+        ("mode".to_string(), cfg.mode.clone()),
+    ];
+    let service = ServiceInfo::new(
+        service_type,
+        &instance_name,
+        &host_name,
+        host_ips.as_slice(),
+        cfg.ws_port,
+        txt.as_slice(),
+    )
+    .context("create mDNS service info")?;
+    let daemon = ServiceDaemon::new().context("create mDNS service daemon")?;
+    daemon
+        .register(service)
+        .context("register LAN Audio mDNS service")?;
+
+    info!(
+        service_type,
+        instance = %instance_name,
+        host = %host_name,
+        port = cfg.ws_port,
+        "mDNS service registered"
+    );
+
+    let _ = shutdown.recv().await;
+    info!("mDNS service stopping");
+    daemon.shutdown().context("shutdown mDNS service daemon")?;
+    Ok(())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -82,6 +138,50 @@ fn now_ms() -> u64 {
 }
 
 pub type SharedDiscoveryConfig = Arc<DiscoveryConfig>;
+
+fn local_ipv4_addrs() -> Vec<IpAddr> {
+    get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter_map(|iface| match iface.addr {
+                    IfAddr::V4(v4) if !v4.ip.is_loopback() => Some(IpAddr::V4(v4.ip)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mdns_instance_name(server_name: &str) -> String {
+    let clean = server_name.trim();
+    if clean.is_empty() {
+        "LAN Audio".to_string()
+    } else if clean.starts_with("LAN Audio @") {
+        clean.to_string()
+    } else {
+        format!("LAN Audio @ {clean}")
+    }
+}
+
+fn mdns_host_name(server_name: &str) -> String {
+    let mut host = server_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while host.contains("--") {
+        host = host.replace("--", "-");
+    }
+    let host = host.trim_matches('-');
+    let host = if host.is_empty() { "lan-audio" } else { host };
+    format!("{host}.local.")
+}
 
 fn discovery_targets(default_target: SocketAddr) -> Vec<SocketAddr> {
     let mut targets = BTreeSet::new();
@@ -114,7 +214,7 @@ fn directed_broadcast(ip: Ipv4Addr, netmask: Ipv4Addr) -> Ipv4Addr {
 
 #[cfg(test)]
 mod tests {
-    use super::directed_broadcast;
+    use super::{directed_broadcast, mdns_host_name, mdns_instance_name};
     use std::net::Ipv4Addr;
 
     #[test]
@@ -130,5 +230,15 @@ mod tests {
             directed_broadcast(Ipv4Addr::new(10, 0, 0, 18), Ipv4Addr::new(255, 255, 0, 0)),
             Ipv4Addr::new(10, 0, 255, 255)
         );
+    }
+
+    #[test]
+    fn mdns_names_are_stable_and_readable() {
+        assert_eq!(
+            mdns_instance_name("Office PC"),
+            "LAN Audio @ Office PC".to_string()
+        );
+        assert_eq!(mdns_host_name("Office PC"), "office-pc.local.".to_string());
+        assert_eq!(mdns_host_name(""), "lan-audio.local.".to_string());
     }
 }

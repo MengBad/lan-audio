@@ -43,6 +43,8 @@ class DiscoveryServer {
     required this.wsPort,
     required this.udpPort,
     required this.lastSeen,
+    this.latencyMs,
+    this.source = 'udp',
   });
 
   final String serverId;
@@ -51,6 +53,8 @@ class DiscoveryServer {
   final int wsPort;
   final int udpPort;
   final DateTime lastSeen;
+  final int? latencyMs;
+  final String source;
 }
 
 enum PlaybackState {
@@ -101,6 +105,8 @@ class _DebugPageState extends State<DebugPage> {
   Timer? _pingTimer;
   Timer? _playTimer;
   Timer? _probeTimer;
+  Timer? _nsdPollTimer;
+  Timer? _discoveryTimeoutTimer;
   StreamSubscription<PlaybackServiceSnapshot>? _serviceEventsSub;
 
   String _status = 'idle';
@@ -165,6 +171,8 @@ class _DebugPageState extends State<DebugPage> {
   double _loudnessGainDb = 0.0;
   bool _experimentalPath = false;
   bool _updateCheckRunning = false;
+  bool _nsdDiscoveryRunning = false;
+  bool _discoveryTimedOut = false;
 
   @override
   void initState() {
@@ -393,8 +401,7 @@ class _DebugPageState extends State<DebugPage> {
           _eqHighDb;
       _loudnessNormalizationEnabled = snapshot.loudnessNormalizationEnabled;
       _loudnessGainDb =
-          (metrics['loudness_gain_db'] as num?)?.toDouble() ??
-              _loudnessGainDb;
+          (metrics['loudness_gain_db'] as num?)?.toDouble() ?? _loudnessGainDb;
       _experimentalPath = snapshot.dataPlane == 'v2_header';
       _tcpRoundTripMs = (metrics['rtt_ms'] as num?)?.toInt();
       _tcpRoundTripMedianMs = _tcpRoundTripMs;
@@ -482,6 +489,113 @@ class _DebugPageState extends State<DebugPage> {
     } catch (_) {}
   }
 
+  Future<void> _startNsdDiscovery() async {
+    _nsdPollTimer?.cancel();
+    _discoveryTimeoutTimer?.cancel();
+    setState(() {
+      _nsdDiscoveryRunning = true;
+      _discoveryTimedOut = false;
+      _status = tr('正在发现附近设备...', 'Discovering nearby devices...');
+    });
+    try {
+      await _platformChannel.invokeMethod('startNsdDiscovery');
+      _nsdPollTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _pollNsdServices(),
+      );
+      _discoveryTimeoutTimer = Timer(const Duration(seconds: 10), () {
+        if (!mounted || _servers.isNotEmpty || _wsConnected) {
+          return;
+        }
+        setState(() {
+          _nsdDiscoveryRunning = false;
+          _discoveryTimedOut = true;
+          _status = tr('未发现设备，请手动输入', 'No devices found. Enter host manually.');
+        });
+      });
+      await _pollNsdServices();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _nsdDiscoveryRunning = false;
+          _discoveryTimedOut = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _pollNsdServices() async {
+    try {
+      final services = await _platformChannel
+              .invokeMethod<List<dynamic>>('getNsdDiscoveredServices') ??
+          const <dynamic>[];
+      if (services.isEmpty) {
+        return;
+      }
+      var changed = false;
+      for (final raw in services) {
+        if (raw is! Map) {
+          continue;
+        }
+        final parsed = await _parseNsdService(raw);
+        if (parsed == null) {
+          continue;
+        }
+        _servers[parsed.serverId] = parsed;
+        changed = true;
+      }
+      if (changed && mounted) {
+        setState(() {
+          _nsdDiscoveryRunning = false;
+          _discoveryTimedOut = false;
+          _status = tr('已发现附近设备', 'Nearby device discovered');
+          _maybeSelectRecentOrFirst();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<DiscoveryServer?> _parseNsdService(Map raw) async {
+    final host = (raw['host'] as String?)?.trim() ?? '';
+    final serverId = (raw['serverId'] as String?)?.trim();
+    final serverName = (raw['serverName'] as String?)?.trim();
+    final wsPort = (raw['wsPort'] as num?)?.toInt() ?? 39991;
+    final udpPort = (raw['udpPort'] as num?)?.toInt() ?? 39992;
+    if (host.isEmpty || serverId == null || serverId.isEmpty) {
+      return null;
+    }
+    final latency = await _measureTcpLatencyMs(host, wsPort);
+    return DiscoveryServer(
+      serverId: serverId,
+      serverName: serverName?.isNotEmpty == true
+          ? serverName!
+          : tr('附近设备', 'Nearby Device'),
+      host: host,
+      wsPort: wsPort,
+      udpPort: udpPort,
+      lastSeen: DateTime.now(),
+      latencyMs: latency,
+      source: 'mdns',
+    );
+  }
+
+  Future<int?> _measureTcpLatencyMs(String host, int port) async {
+    final start = DateTime.now();
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        host,
+        port,
+        timeout: const Duration(milliseconds: 500),
+      );
+      return DateTime.now().difference(start).inMilliseconds;
+    } catch (_) {
+      return null;
+    } finally {
+      await socket?.close();
+    }
+  }
+
   Future<bool> _getFirstUseHintConsumed() async {
     try {
       return await _platformChannel
@@ -513,16 +627,20 @@ class _DebugPageState extends State<DebugPage> {
     }
     _serviceEventsSub?.cancel();
     _probeTimer?.cancel();
+    _nsdPollTimer?.cancel();
+    _discoveryTimeoutTimer?.cancel();
     _pingTimer?.cancel();
     _ws?.close();
     _udpSocket?.close();
     _discoverySocket?.close();
+    _platformChannel.invokeMethod('stopNsdDiscovery').catchError((_) {});
     _releaseMulticastLock();
     _manualHostController.dispose();
     super.dispose();
   }
 
   Future<void> _startDiscovery() async {
+    await _startNsdDiscovery();
     try {
       final socket =
           await RawDatagramSocket.bind(InternetAddress.anyIPv4, 39990);
@@ -623,6 +741,7 @@ class _DebugPageState extends State<DebugPage> {
         }
         final ip = '$prefix$host';
         Socket? socket;
+        final started = DateTime.now();
         try {
           socket = await Socket.connect(ip, wsPort,
               timeout: const Duration(milliseconds: 160));
@@ -638,6 +757,8 @@ class _DebugPageState extends State<DebugPage> {
               wsPort: wsPort,
               udpPort: udpPort,
               lastSeen: DateTime.now(),
+              latencyMs: DateTime.now().difference(started).inMilliseconds,
+              source: 'probe',
             );
             _status = tr('已通过扫描发现服务器', 'server discovered via probe');
             _maybeSelectRecentOrFirst();
@@ -684,6 +805,7 @@ class _DebugPageState extends State<DebugPage> {
         wsPort: jsonObj['ws_port'] as int,
         udpPort: jsonObj['udp_port'] as int,
         lastSeen: DateTime.now(),
+        source: 'udp',
       );
     } catch (_) {
       return null;
@@ -1492,6 +1614,20 @@ class _DebugPageState extends State<DebugPage> {
                       ],
                     ),
                   if (_probeRunning) const SizedBox(height: 10),
+                  if (_nsdDiscoveryRunning)
+                    Row(
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                            tr('正在发现附近设备...', 'Discovering nearby devices...')),
+                      ],
+                    ),
+                  if (_nsdDiscoveryRunning) const SizedBox(height: 10),
                   if (_connectMode == ConnectMode.manual)
                     TextField(
                       controller: _manualHostController,
@@ -1519,12 +1655,28 @@ class _DebugPageState extends State<DebugPage> {
                               'Auto discovery failed. Try "Scan LAN" or enter server address manually.',
                             ),
                           ),
+                          if (_discoveryTimedOut)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                tr('未发现设备，请手动输入',
+                                    'No devices found. Enter host manually.'),
+                                style: const TextStyle(
+                                  color: Colors.black54,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
                           const SizedBox(height: 8),
                           FilledButton.tonal(
-                            onPressed:
-                                _probeRunning ? null : _probeSubnetForServers,
+                            onPressed: (_probeRunning || _nsdDiscoveryRunning)
+                                ? null
+                                : () {
+                                    _startNsdDiscovery();
+                                    _probeSubnetForServers();
+                                  },
                             child: Text(
-                              _probeRunning
+                              (_probeRunning || _nsdDiscoveryRunning)
                                   ? tr('扫描中...', 'Scanning...')
                                   : tr('扫描局域网', 'Scan LAN'),
                             ),
@@ -1534,6 +1686,31 @@ class _DebugPageState extends State<DebugPage> {
                             tr('提示：可切换到“手动地址”输入 IP。',
                                 'Tip: switch to Manual and enter server IP.'),
                             style: const TextStyle(color: Colors.black54),
+                          ),
+                          ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            title: Text(tr('高级选项', 'Advanced')),
+                            children: [
+                              TextField(
+                                controller: _manualHostController,
+                                decoration: InputDecoration(
+                                  border: const OutlineInputBorder(),
+                                  labelText: tr('手动服务器地址 (IPv4)',
+                                      'Manual server host (IPv4)'),
+                                  hintText: tr(
+                                      '例如 192.168.1.23', 'e.g. 192.168.1.23'),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: FilledButton.tonal(
+                                  onPressed:
+                                      _isConnecting ? null : _connectManual,
+                                  child: Text(tr('手动连接', 'Connect Manual')),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -1579,10 +1756,30 @@ class _DebugPageState extends State<DebugPage> {
                                   ),
                               ],
                             ),
-                            subtitle: Text('ws:${s.wsPort} udp:${s.udpPort}'),
+                            subtitle: Text(
+                              '${s.host}  ws:${s.wsPort}  ping:${s.latencyMs == null ? '-' : '${s.latencyMs}ms'}',
+                            ),
                           );
                         },
                       ),
+                    ),
+                  if (_connectMode == ConnectMode.discovered &&
+                      servers.isNotEmpty)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: Text(tr('高级选项', 'Advanced')),
+                      children: [
+                        TextField(
+                          controller: _manualHostController,
+                          decoration: InputDecoration(
+                            border: const OutlineInputBorder(),
+                            labelText: tr(
+                                '手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
+                            hintText:
+                                tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
+                          ),
+                        ),
+                      ],
                     ),
                   const SizedBox(height: 10),
                   Row(
@@ -1605,10 +1802,14 @@ class _DebugPageState extends State<DebugPage> {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton(
-                        onPressed:
-                            _probeRunning ? null : _probeSubnetForServers,
+                        onPressed: (_probeRunning || _nsdDiscoveryRunning)
+                            ? null
+                            : () {
+                                _startNsdDiscovery();
+                                _probeSubnetForServers();
+                              },
                         child: Text(
-                          _probeRunning
+                          (_probeRunning || _nsdDiscoveryRunning)
                               ? tr('扫描中...', 'Scanning...')
                               : tr('扫描局域网', 'Scan LAN'),
                         ),

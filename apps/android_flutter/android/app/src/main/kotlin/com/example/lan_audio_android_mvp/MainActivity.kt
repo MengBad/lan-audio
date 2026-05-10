@@ -4,6 +4,8 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.content.Context
 import android.content.Intent
@@ -17,7 +19,10 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import android.util.Log
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +36,7 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val PREFS_NAME = "lan_audio_prefs"
         const val KEY_FIRST_USE_HINT_CONSUMED = "first_use_hint_consumed"
+        const val NSD_SERVICE_TYPE = "_lan-audio._tcp"
         val ACTIVE_PLAYBACK_STATES = setOf(
             "handshaking",
             "negotiated",
@@ -58,6 +64,9 @@ class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     @Volatile private var pendingPowerGuideRequest: Boolean = false
+    private var nsdManager: NsdManager? = null
+    private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
+    private val nsdServices = ConcurrentHashMap<String, Map<String, Any>>()
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,6 +111,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         logLifecycle("onDestroy no service stop issued from activity lifecycle")
+        stopNsdDiscovery()
         uiScope.coroutineContext.cancel()
         super.onDestroy()
     }
@@ -144,6 +154,17 @@ class MainActivity : FlutterActivity() {
                             val requested = pendingPowerGuideRequest
                             pendingPowerGuideRequest = false
                             result.success(requested)
+                        }
+                        "startNsdDiscovery" -> {
+                            startNsdDiscovery()
+                            result.success(null)
+                        }
+                        "stopNsdDiscovery" -> {
+                            stopNsdDiscovery()
+                            result.success(null)
+                        }
+                        "getNsdDiscoveredServices" -> {
+                            result.success(nsdServices.values.toList())
                         }
                         "checkForAppUpdate" -> {
                             val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
@@ -260,6 +281,101 @@ class MainActivity : FlutterActivity() {
 
     private fun preferences() =
         applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun startNsdDiscovery() {
+        stopNsdDiscovery()
+        nsdServices.clear()
+        val manager = applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
+        nsdManager = manager
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {
+                Log.i(logTag, "NSD discovery started type=$serviceType")
+            }
+
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (!serviceInfo.serviceType.contains(NSD_SERVICE_TYPE)) {
+                    return
+                }
+                resolveNsdService(serviceInfo)
+            }
+
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                val key = serviceInfo.serviceName
+                nsdServices.remove(key)
+                Log.i(logTag, "NSD service lost ${serviceInfo.serviceName}")
+            }
+
+            override fun onDiscoveryStopped(serviceType: String) {
+                Log.i(logTag, "NSD discovery stopped type=$serviceType")
+            }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(logTag, "NSD start failed type=$serviceType error=$errorCode")
+                stopNsdDiscovery()
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(logTag, "NSD stop failed type=$serviceType error=$errorCode")
+            }
+        }
+        nsdDiscoveryListener = listener
+        manager.discoverServices(NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+    }
+
+    private fun stopNsdDiscovery() {
+        val manager = nsdManager
+        val listener = nsdDiscoveryListener
+        nsdDiscoveryListener = null
+        if (manager != null && listener != null) {
+            try {
+                manager.stopServiceDiscovery(listener)
+            } catch (_: Throwable) {
+                // Discovery may already be stopped by the platform.
+            }
+        }
+    }
+
+    private fun resolveNsdService(serviceInfo: NsdServiceInfo) {
+        val manager = nsdManager ?: return
+        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                Log.w(logTag, "NSD resolve failed name=${info.serviceName} error=$errorCode")
+            }
+
+            override fun onServiceResolved(resolved: NsdServiceInfo) {
+                val host = resolved.host ?: return
+                val ipv4 = ipv4Address(host) ?: return
+                val port = resolved.port.takeIf { it > 0 } ?: 39991
+                val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    resolved.attributes["version"]?.toString(Charsets.UTF_8) ?: ""
+                } else {
+                    ""
+                }
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    resolved.attributes["mode"]?.toString(Charsets.UTF_8) ?: ""
+                } else {
+                    ""
+                }
+                val key = "${ipv4.hostAddress}:$port"
+                nsdServices[key] = mapOf(
+                    "serverId" to "mdns-$key",
+                    "serverName" to resolved.serviceName,
+                    "host" to (ipv4.hostAddress ?: ""),
+                    "wsPort" to port,
+                    "udpPort" to 39992,
+                    "version" to version,
+                    "mode" to mode,
+                )
+                Log.i(logTag, "NSD service resolved ${resolved.serviceName} ${ipv4.hostAddress}:$port")
+            }
+        })
+    }
+
+    private fun ipv4Address(address: InetAddress): Inet4Address? =
+        when (address) {
+            is Inet4Address -> address
+            else -> null
+        }
 
     private fun consumePowerGuideIntent(intent: Intent?) {
         if (intent?.getBooleanExtra(PlaybackActions.EXTRA_OPEN_POWER_GUIDE, false) == true) {
