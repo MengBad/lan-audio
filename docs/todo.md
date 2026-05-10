@@ -313,3 +313,6 @@
   - CI now generates `lan_audio_protocol` LCOV coverage with `cargo llvm-cov` and uploads through `codecov/codecov-action@v4`.
   - README now includes the Codecov badge.
   - Manual follow-up: configure `CODECOV_TOKEN` in GitHub repository secrets.
+- TASK-V17-403 changelog:
+  - Added Keep a Changelog style `CHANGELOG.md` covering v1.5, v1.6, and v1.7.
+  - `scripts/release.ps1` now warns when the current version is missing from `CHANGELOG.md`; the warning does not block release.

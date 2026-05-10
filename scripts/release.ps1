@@ -57,6 +57,30 @@ try {
         throw "Unexpected VERSION value after bump: $newVersion"
     }
 
+    $changelogPath = Join-Path $repoRoot 'CHANGELOG.md'
+    if (Test-Path $changelogPath) {
+        $changelogText = Get-Content -Raw $changelogPath
+        $shortVersion = ($newVersion -replace '\.0$', '')
+        $versionPatterns = @(
+            "[$newVersion]",
+            "[$shortVersion]",
+            "[$($newVersion).0]"
+        ) | Select-Object -Unique
+        $hasChangelogEntry = $false
+        foreach ($pattern in $versionPatterns) {
+            if ($changelogText.Contains($pattern)) {
+                $hasChangelogEntry = $true
+                break
+            }
+        }
+        if (-not $hasChangelogEntry) {
+            Write-Warning "CHANGELOG.md does not contain an entry for version $newVersion. Release will continue."
+        }
+    }
+    else {
+        Write-Warning "CHANGELOG.md is missing. Release will continue."
+    }
+
     if (-not $SkipPackage) {
         Invoke-Step -Name 'Build local release artifacts' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/package_release.ps1') -SkipValidate -Clean
@@ -64,7 +88,7 @@ try {
     }
 
     Invoke-Step -Name 'Git add' -Action {
-        git add VERSION AGENTS.md .cargo README.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
+        git add VERSION AGENTS.md .cargo README.md CHANGELOG.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
     }
 
     $staged = git diff --cached --name-only
