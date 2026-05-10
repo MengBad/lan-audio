@@ -58,10 +58,19 @@ android {
 
     signingConfigs {
         release {
-            storeFile file(System.getenv("LAN_AUDIO_KEYSTORE_PATH") ?: rootProject.file("../../lan-audio-release.jks"))
-            storePassword System.getenv("LAN_AUDIO_KEYSTORE_PASS") ?: ""
-            keyAlias System.getenv("LAN_AUDIO_KEY_ALIAS") ?: "lan-audio"
-            keyPassword System.getenv("LAN_AUDIO_KEY_PASS") ?: ""
+            def releaseStoreFile = localProperties.getProperty("lanAudio.releaseStoreFile")
+            storeFile releaseStoreFile
+                ? file(releaseStoreFile)
+                : file(System.getenv("LAN_AUDIO_KEYSTORE_PATH") ?: rootProject.file("../../lan-audio-release.jks"))
+            storePassword localProperties.getProperty("lanAudio.releaseStorePassword")
+                ?: System.getenv("LAN_AUDIO_KEYSTORE_PASS")
+                ?: ""
+            keyAlias localProperties.getProperty("lanAudio.releaseKeyAlias")
+                ?: System.getenv("LAN_AUDIO_KEY_ALIAS")
+                ?: "lan-audio"
+            keyPassword localProperties.getProperty("lanAudio.releaseKeyPassword")
+                ?: System.getenv("LAN_AUDIO_KEY_PASS")
+                ?: ""
         }
     }
 
