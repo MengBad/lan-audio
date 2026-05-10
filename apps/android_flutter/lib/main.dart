@@ -10,6 +10,7 @@ import 'audio/audio_track_output.dart';
 import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
+import 'connect_history.dart';
 import 'power_saving_guide.dart';
 
 const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
@@ -175,6 +176,7 @@ class _DebugPageState extends State<DebugPage> {
   bool _updateCheckRunning = false;
   bool _nsdDiscoveryRunning = false;
   bool _discoveryTimedOut = false;
+  List<ConnectHistoryEntry> _connectHistory = const <ConnectHistoryEntry>[];
 
   @override
   void initState() {
@@ -184,6 +186,7 @@ class _DebugPageState extends State<DebugPage> {
     _lang = sysLang.startsWith('zh') ? AppLang.zh : AppLang.en;
     debugPrint('ui_build $kUiBuildTag');
     _acquireMulticastLock();
+    _loadConnectHistory();
     _startDiscovery();
     if (kUseBackgroundPlaybackService) {
       debugPrint(
@@ -620,6 +623,160 @@ class _DebugPageState extends State<DebugPage> {
     } catch (_) {}
   }
 
+  Future<void> _loadConnectHistory() async {
+    try {
+      final raw =
+          await _platformChannel.invokeMethod<String>('getConnectHistory') ??
+              '';
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _connectHistory = ConnectHistoryStore.decode(raw);
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _persistConnectHistory() async {
+    try {
+      await _platformChannel.invokeMethod('setConnectHistory', {
+        'json': ConnectHistoryStore.encode(_connectHistory),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _recordConnectHistory({
+    required String host,
+    required int wsPort,
+    required String serverName,
+  }) async {
+    final known = _servers.values.where((s) => s.host == host).toList();
+    final latency = known.isEmpty ? 0 : (known.first.latencyMs ?? 0);
+    setState(() {
+      _connectHistory = ConnectHistoryStore.upsert(
+        _connectHistory,
+        ip: host,
+        port: wsPort,
+        hostname: serverName,
+        connectedAt: DateTime.now(),
+        latencyMs: latency,
+      );
+    });
+    await _persistConnectHistory();
+  }
+
+  Future<void> _connectHistoryEntry(ConnectHistoryEntry entry) async {
+    await _connectToHost(
+      host: entry.ip,
+      wsPort: entry.port,
+      udpPort: entry.port == 39991 ? 39992 : entry.port + 1,
+      serverName: entry.hostname,
+    );
+  }
+
+  Future<void> _removeConnectHistory(ConnectHistoryEntry entry) async {
+    setState(() {
+      _connectHistory = _connectHistory
+          .where((item) => !(item.ip == entry.ip && item.port == entry.port))
+          .toList();
+    });
+    await _persistConnectHistory();
+  }
+
+  Future<void> _toggleFavorite(ConnectHistoryEntry entry) async {
+    setState(() {
+      _connectHistory = ConnectHistoryStore.sortAndTrim(
+        _connectHistory.map((item) {
+          if (item.ip == entry.ip && item.port == entry.port) {
+            return item.copyWith(isFavorite: !item.isFavorite);
+          }
+          return item;
+        }).toList(),
+      );
+    });
+    await _persistConnectHistory();
+  }
+
+  Future<void> _renameHistoryEntry(ConnectHistoryEntry entry) async {
+    final controller = TextEditingController(text: entry.hostname);
+    final renamed = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('编辑名称', 'Edit name')),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: tr('设备名称', 'Device name'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(tr('取消', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: Text(tr('保存', 'Save')),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (renamed == null || renamed.isEmpty) {
+      return;
+    }
+    setState(() {
+      _connectHistory = ConnectHistoryStore.sortAndTrim(
+        _connectHistory.map((item) {
+          if (item.ip == entry.ip && item.port == entry.port) {
+            return item.copyWith(hostname: renamed);
+          }
+          return item;
+        }).toList(),
+      );
+    });
+    await _persistConnectHistory();
+  }
+
+  Future<void> _showHistoryActions(ConnectHistoryEntry entry) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(entry.isFavorite ? Icons.star_border : Icons.star),
+              title: Text(entry.isFavorite
+                  ? tr('取消收藏', 'Unfavorite')
+                  : tr('收藏', 'Favorite')),
+              onTap: () {
+                Navigator.of(context).pop();
+                _toggleFavorite(entry);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: Text(tr('编辑名称', 'Edit name')),
+              onTap: () {
+                Navigator.of(context).pop();
+                _renameHistoryEntry(entry);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: Text(tr('删除', 'Delete')),
+              onTap: () {
+                Navigator.of(context).pop();
+                _removeConnectHistory(entry);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     if (kUseBackgroundPlaybackService) {
@@ -913,6 +1070,11 @@ class _DebugPageState extends State<DebugPage> {
           _status =
               '${tr('后台服务已启动', 'background service started')}: $serverName ($host)';
         });
+        await _recordConnectHistory(
+          host: host,
+          wsPort: wsPort,
+          serverName: serverName,
+        );
       } catch (e) {
         setState(() {
           _status = '${tr('后台服务启动失败', 'service start failed')}: $e';
@@ -1036,6 +1198,11 @@ class _DebugPageState extends State<DebugPage> {
         _lastSeq = null;
         _audioLog = '';
       });
+      await _recordConnectHistory(
+        host: host,
+        wsPort: wsPort,
+        serverName: serverName,
+      );
     } catch (e) {
       setState(() {
         _wsConnected = false;
@@ -1525,6 +1692,53 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Widget _buildConnectHistoryCard() {
+    if (_connectHistory.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr('连接历史', 'Connection History'),
+                style:
+                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const SizedBox(height: 8),
+            ..._connectHistory.map((entry) {
+              return Dismissible(
+                key: ValueKey('${entry.ip}:${entry.port}'),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 16),
+                  color: Colors.red.shade600,
+                  child: const Icon(Icons.delete, color: Colors.white),
+                ),
+                onDismissed: (_) => _removeConnectHistory(entry),
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(
+                    entry.isFavorite ? Icons.star : Icons.history,
+                    color: entry.isFavorite ? Colors.amber.shade700 : null,
+                  ),
+                  title: Text(entry.hostname),
+                  subtitle: Text(
+                    '${entry.ip}:${entry.port}  ${tr('延迟', 'latency')}:${entry.lastLatencyMs}ms  ${tr('次数', 'count')}:${entry.connectCount}',
+                  ),
+                  onTap:
+                      _isConnecting ? null : () => _connectHistoryEntry(entry),
+                  onLongPress: () => _showHistoryActions(entry),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final servers = _servers.values.toList()
@@ -1582,6 +1796,8 @@ class _DebugPageState extends State<DebugPage> {
           const SizedBox(height: 10),
           _buildQuickConnectCard(servers),
           const SizedBox(height: 10),
+          _buildConnectHistoryCard(),
+          if (_connectHistory.isNotEmpty) const SizedBox(height: 10),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),

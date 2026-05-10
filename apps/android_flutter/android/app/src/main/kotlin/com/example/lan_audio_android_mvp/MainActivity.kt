@@ -36,6 +36,7 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val PREFS_NAME = "lan_audio_prefs"
         const val KEY_FIRST_USE_HINT_CONSUMED = "first_use_hint_consumed"
+        const val KEY_CONNECT_HISTORY_JSON = "connect_history_json"
         const val NSD_SERVICE_TYPE = "_lan-audio._tcp"
         val ACTIVE_PLAYBACK_STATES = setOf(
             "handshaking",
@@ -149,6 +150,14 @@ class MainActivity : FlutterActivity() {
                         }
                         "getDeviceManufacturer" -> {
                             result.success(Build.MANUFACTURER ?: "")
+                        }
+                        "getConnectHistory" -> {
+                            result.success(preferences().getString(KEY_CONNECT_HISTORY_JSON, "") ?: "")
+                        }
+                        "setConnectHistory" -> {
+                            val raw = (call.arguments as? Map<*, *>)?.get("json") as? String ?: "[]"
+                            preferences().edit().putString(KEY_CONNECT_HISTORY_JSON, raw).apply()
+                            result.success(null)
                         }
                         "consumePowerGuideRequest" -> {
                             val requested = pendingPowerGuideRequest

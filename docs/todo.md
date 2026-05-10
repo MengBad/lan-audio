@@ -269,10 +269,35 @@
   - Desktop UI now renders active device summaries from the shared metrics snapshot.
   - Known limitation: desktop-side "disconnect one selected device" is deferred to v1.8 because no stable per-client desktop command surface exists yet.
 - Theme 2 gate status:
-  - [ ] EQ real-device audible change verified
-  - [ ] Loudness normalization real-device gain display verified
-  - [ ] Multi-device 2-phone playback verified
+  - [x] EQ real-device audible change verified
+  - [x] Loudness normalization real-device gain display verified
+  - [x] Multi-device 2-phone playback verified
   - [x] `flutter test` passed
   - [x] `cargo test -p lan_audio_server` passed
   - [x] `docs/todo.md` updated
-- Theme 2 conclusion: `continue_device_verify`; code/test gates pass, device-audible checks remain manual.
+- Theme 2 conclusion: `pass`; manual gate approved before Theme 3.
+
+## v1.7 Theme 3 Connection Experience (`2026-05-10`)
+
+- TASK-V17-301 mDNS LAN discovery:
+  - Windows/server side registers `_lan-audio._tcp.local.` with service name `LAN Audio @ <server_name>`, port `39991`, and TXT records `version=1.7`, `mode=<current_mode>`.
+  - Android uses `NsdManager` to discover `_lan-audio._tcp`, keeps IPv4 results only, and feeds the Flutter nearby-device list through `lan_audio/platform`.
+  - Flutter keeps UDP beacon discovery and LAN probe as fallback, shows nearby devices with IP and TCP probe latency, and exposes manual IPv4 entry under Advanced.
+- TASK-V17-302 smart reconnect:
+  - Foreground playback service now retries network disconnects with exponential backoff `1s -> 2s -> 4s -> 8s -> 16s`.
+  - User stop cancels reconnect; reconnect success restores the existing target/mode/codec path.
+  - Stable snapshot now exposes `reconnect_attempts` and `reconnect_delay_ms`; UI shows `Reconnecting (#N, delay)` during recovery.
+  - Five failed retries enter `error` state with `reconnect_exhausted`.
+- TASK-V17-303 connection history and favorites:
+  - Added `ConnectHistory` model (`ip`, `port`, `hostname`, `last_connected`, `connect_count`, `is_favorite`, `last_latency_ms`).
+  - Android persists history JSON in SharedPreferences, capped at 10 entries.
+  - Flutter shows favorites first, then recent history; tap connects, long press toggles favorite/delete/edit name, and right-swipe deletes.
+- Theme 3 gate status:
+  - [ ] mDNS real-device discovery and connect verified
+  - [ ] Simulated network interruption auto-recovers playback
+  - [ ] Connection history persists after app restart
+  - [x] `flutter test` passed
+  - [x] `cargo test -p lan_audio_server` passed
+  - [x] `android/gradlew.bat assembleDebug` passed
+  - [x] `docs/todo.md` updated
+- Theme 3 conclusion: `await_manual_device_verify`; code/test gates pass, real-device gate awaits user validation before Theme 4.
