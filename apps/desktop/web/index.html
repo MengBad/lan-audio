@@ -388,6 +388,29 @@
         font-size: 13px;
       }
 
+      .guidance-panel {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border: 1px solid rgba(14, 165, 233, 0.24);
+        border-radius: 8px;
+        background: rgba(14, 165, 233, 0.08);
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .guidance-panel summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .guidance-panel pre {
+        margin: 10px 0 0;
+        white-space: pre-wrap;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        line-height: 1.45;
+      }
+
       @media (max-width: 900px) {
         .layout { grid-template-columns: 1fr; }
         .debug-groups { grid-template-columns: 1fr; }
@@ -431,6 +454,10 @@
           </div>
         </div>
         <div class="error-text" id="errorText"></div>
+        <details class="guidance-panel" id="firewallGuide" style="display:none;">
+          <summary id="firewallGuideTitle"></summary>
+          <pre id="firewallGuideBody"></pre>
+        </details>
         <div class="qr-panel" id="qrPanel" style="display:none;">
           <div class="qr-code" id="qrCode"></div>
           <div>
@@ -876,6 +903,63 @@
         return JSON.stringify(value);
       }
 
+      function firewallGuidanceForMessage(raw) {
+        if (!raw) return null;
+        const message = String(raw).toLowerCase();
+        const firewallSteps =
+          'Windows 防火墙放行步骤 / Windows Firewall steps:\n' +
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n' +
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n' +
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991';
+        if (message.includes('connection refused') || message.includes('econnrefused') || message.includes('refused')) {
+          return {
+            title: state.lang === 'zh'
+              ? 'PC 端服务未启动或端口被防火墙拦截'
+              : 'PC service is not running or the port is blocked',
+            body: firewallSteps,
+          };
+        }
+        if (message.includes('timeout') || message.includes('timed out') || message.includes('etimedout')) {
+          return {
+            title: state.lang === 'zh'
+              ? '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991'
+              : 'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+            body: firewallSteps,
+          };
+        }
+        if (message.includes('auth') || message.includes('version') || message.includes('incompatible')) {
+          return {
+            title: state.lang === 'zh'
+              ? '版本不兼容，请检查双端版本号'
+              : 'Version mismatch. Check both app versions',
+            body:
+              '确认 Windows 与 Android 都是同一发布版本。\n' +
+              'Make sure Windows and Android are running the same LAN Audio release.',
+          };
+        }
+        return null;
+      }
+
+      function renderFirewallGuidance(errorText) {
+        const panel = document.getElementById('firewallGuide');
+        const guidance = firewallGuidanceForMessage(errorText);
+        if (!guidance) {
+          panel.style.display = 'none';
+          document.getElementById('firewallGuideTitle').textContent = '';
+          document.getElementById('firewallGuideBody').textContent = '';
+          return;
+        }
+        panel.style.display = 'block';
+        document.getElementById('firewallGuideTitle').textContent = guidance.title;
+        document.getElementById('firewallGuideBody').textContent = guidance.body;
+      }
+
+      function setErrorText(value) {
+        const text = value || '';
+        document.getElementById('errorText').textContent = text;
+        renderFirewallGuidance(text);
+      }
+
       function runtimeSnapshot(snapshot) {
         return snapshot?.service_snapshot || {};
       }
@@ -1102,8 +1186,7 @@
         document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
-        document.getElementById('errorText').textContent =
-          snapshot.error_message || humanizeNegotiationError(runtime.last_error);
+        setErrorText(snapshot.error_message || humanizeNegotiationError(runtime.last_error));
         const banner = document.getElementById('updateBanner');
         if (snapshot.update_banner?.latest_version) {
           banner.style.display = 'block';
@@ -1234,7 +1317,7 @@
           const snapshot = await tauriInvoke('get_desktop_snapshot');
           renderSnapshot(snapshot);
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 
@@ -1283,7 +1366,7 @@
           await navigator.clipboard.writeText(state.snapshot.connect_address);
           document.getElementById('statusSubline').textContent = t('copied');
         } catch {
-          document.getElementById('errorText').textContent = state.snapshot.connect_address;
+          setErrorText(state.snapshot.connect_address);
         }
       }
 
@@ -1292,7 +1375,7 @@
           const path = await tauriInvoke('export_support_bundle');
           document.getElementById('statusSubline').textContent = trf('exportDiagDone', { path });
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 
@@ -1300,7 +1383,7 @@
         try {
           await tauriInvoke('open_release_page');
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 

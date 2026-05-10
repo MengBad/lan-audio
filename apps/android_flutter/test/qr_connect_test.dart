@@ -14,4 +14,16 @@ void main() {
   test('parseLanAudioUri rejects unrelated schemes', () {
     expect(parseLanAudioUri('https://example.com'), isNull);
   });
+
+  test('firewall guidance covers connection refused and timeout', () {
+    final refused =
+        firewallGuidanceForMessage('java.net.ConnectException: ECONNREFUSED');
+    final timeout =
+        firewallGuidanceForMessage('SocketTimeoutException: timed out');
+
+    expect(refused, isNotNull);
+    expect(refused!.body, contains('Windows Firewall steps'));
+    expect(timeout, isNotNull);
+    expect(timeout!.body, contains('TCP+UDP port 39991'));
+  });
 }

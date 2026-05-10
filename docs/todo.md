@@ -28,6 +28,7 @@
 - [x] TASK-V16-303 Rollback path continuous testing completed: protocol tests with `legacy_` prefix cover PCM16 payload round-trip, `legacy_las1` header parsing, and legacy hello to v2 ack compatibility; `scripts/validate_local.ps1` now runs `cargo test -p lan_audio_protocol -- legacy`.
 - [x] TASK-V16-401 QR connection entry completed: Desktop generates an SVG QR for `lan-audio://<ip>:<port>` via the `qrcode` crate and shows it while the service is running; Android adds `mobile_scanner` based scan entry points, parses the `lan-audio://` scheme, fills the target host, and starts playback automatically.
 - [x] TASK-V16-402 Android diagnostics support bundle completed: Android exports a zipped support bundle with `snapshot.json`, `device_info.json`, `recent_log.txt`, and `README.txt`, then opens the system share sheet from the advanced/settings panel.
+- [x] TASK-V16-403 Firewall guidance UX completed: Android and Desktop surface expandable, bilingual troubleshooting steps for `ConnectionRefused`, `Timeout`, and version/auth mismatch style connection failures.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -62,6 +63,7 @@
 
 - [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
 - [x] Android support bundle code path compiles locally; zip generation includes snapshot, device info, recent logcat, and README; share sheet path is wired but not manually shared per scope
+- [x] Firewall guidance covers ConnectionRefused and Timeout UI paths on Android and Desktop
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -174,8 +176,8 @@
 - [ ] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
-- [ ] Firewall guidance UX
-- [x] Structured support bundle export (desktop diagnostics snapshot first; Android-side bundle still pending)
+- [x] Firewall guidance UX
+- [x] Structured support bundle export (desktop and Android support bundles)
 
 ## v1.4 FORCE_RELEASE Notes
 

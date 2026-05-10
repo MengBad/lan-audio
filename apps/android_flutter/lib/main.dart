@@ -80,6 +80,59 @@ QrConnectionTarget? parseLanAudioUri(String? raw) {
   return QrConnectionTarget(host: host, wsPort: wsPort, udpPort: udpPort);
 }
 
+FirewallGuidance? firewallGuidanceForMessage(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final message = raw.toLowerCase();
+  if (message.contains('connection refused') ||
+      message.contains('econnrefused') ||
+      message.contains('refused')) {
+    return const FirewallGuidance(
+      titleZh: 'PC 端服务未启动或端口被防火墙拦截',
+      titleEn: 'PC service is not running or the port is blocked',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('timeout') ||
+      message.contains('timed out') ||
+      message.contains('etimedout')) {
+    return const FirewallGuidance(
+      titleZh: '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991',
+      titleEn:
+          'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('auth') ||
+      message.contains('version') ||
+      message.contains('incompatible')) {
+    return const FirewallGuidance(
+      titleZh: '版本不兼容，请检查双端版本号',
+      titleEn: 'Version mismatch. Check both app versions',
+      body: '确认 Windows 与 Android 都是同一发布版本。\n'
+          'Make sure Windows and Android are running the same LAN Audio release.',
+    );
+  }
+  return null;
+}
+
+class FirewallGuidance {
+  const FirewallGuidance({
+    required this.titleZh,
+    required this.titleEn,
+    required this.body,
+  });
+
+  final String titleZh;
+  final String titleEn;
+  final String body;
+}
+
 class DiscoveryServer {
   DiscoveryServer({
     required this.serverId,
@@ -1219,6 +1272,37 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Widget _buildFirewallGuidancePanel(String message) {
+    final guidance = firewallGuidanceForMessage(message);
+    if (guidance == null) return const SizedBox.shrink();
+    return Container(
+      key: const Key('firewall_guidance_panel'),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color.fromRGBO(14, 165, 233, 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color.fromRGBO(14, 165, 233, 0.24)),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        title: Text(
+          tr(guidance.titleZh, guidance.titleEn),
+          style: AudioConsoleType.body(color: AudioConsoleColors.text),
+        ),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              guidance.body,
+              style: AudioConsoleType.body(color: AudioConsoleColors.text2),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _scheduleSilentUpdateCheck() {
     _checkForUpdate(silentDelayMs: 5000, showNoUpdateHint: false);
   }
@@ -1497,6 +1581,8 @@ class _DebugPageState extends State<DebugPage> {
                     AudioConsoleType.monoMeta(color: AudioConsoleColors.error),
               ),
             ),
+          if (_lastErrorMessage != null)
+            _buildFirewallGuidancePanel(_lastErrorMessage!),
           const SizedBox(height: 8),
           if (_showLegacyMainDebugContent) ...[
             Text(
