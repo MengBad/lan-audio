@@ -2,14 +2,43 @@
 
 ## Release State
 
-- Latest release: `v1.3`
+- Latest release: `v1.7`
 - Release gate: `allow_release`
+- FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Verified device: `5391d451` (`Xiaomi 24129PN74C`)
 - Verified scenarios:
-  - `USB + synthetic`
+  - `USB direct`
   - `WiFi + windows_loopback`
+  - `2 Android clients`
+- Latency probe:
+  - `low_latency p95=64ms`
+  - `balanced p95=185ms`
+  - `high_quality p95=505ms`
+- Known issue:
+  - Desktop per-device disconnect command is deferred to v1.8.
+
+## v1.7 Final Release Gate (`2026-05-10`)
+
+- [x] TASK-V17-101 PlaybackSessionController trim
+- [x] TASK-V17-102 USB direct stable acceptance
+- [x] TASK-V17-103 Android power-saving background guidance
+- [x] TASK-V17-201 Android 3-band EQ
+- [x] TASK-V17-202 loudness normalization
+- [x] TASK-V17-203 multi-device streaming
+- [x] TASK-V17-301 mDNS LAN discovery
+- [x] TASK-V17-302 smart reconnect
+- [x] TASK-V17-303 connection history and favorites
+- [x] TASK-V17-401 contributor documentation
+- [x] TASK-V17-402 protocol coverage reporting
+- [x] TASK-V17-403 changelog normalization
+- [x] Theme 1 gate passed
+- [x] Theme 2 gate passed
+- [x] Theme 3 gate passed
+- [x] Theme 4 gate passed
+- [x] `docs/todo.md` synchronized for v1.7
+- Release conclusion: `pass`; standard release, non-FORCE_RELEASE.
 
 ## v1.7 Theme 1 Playback Core Debt (`2026-05-10`)
 
@@ -312,7 +341,16 @@
   - Added protocol-layer tests for `NegotiationError`, v2 header codec/flag round trips, legacy/v2 handshake distinction, and mode profile boundary values.
   - CI now generates `lan_audio_protocol` LCOV coverage with `cargo llvm-cov` and uploads through `codecov/codecov-action@v4`.
   - README now includes the Codecov badge.
-  - Manual follow-up: configure `CODECOV_TOKEN` in GitHub repository secrets.
+  - `CODECOV_TOKEN` is configured in GitHub repository secrets.
 - TASK-V17-403 changelog:
   - Added Keep a Changelog style `CHANGELOG.md` covering v1.5, v1.6, and v1.7.
   - `scripts/release.ps1` now warns when the current version is missing from `CHANGELOG.md`; the warning does not block release.
+- Theme 4 gate status:
+  - [x] `CONTRIBUTING.md` complete
+  - [x] Three issue templates created
+  - [x] Pull request template created
+  - [x] CI coverage report visible through Codecov after `CODECOV_TOKEN` configuration
+  - [x] README contains Codecov badge
+  - [x] CHANGELOG contains v1.5, v1.6, and v1.7
+  - [x] `scripts/release.ps1` contains CHANGELOG check
+- Theme 4 conclusion: `pass`; manual gate approved before v1.7 release finalization.

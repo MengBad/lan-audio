@@ -159,7 +159,7 @@ $tauriJson = Get-Content -Raw $tauriPath | ConvertFrom-Json
 $tauriJson.version = $semver
 Write-Utf8NoBom -Path $tauriPath -Content ($tauriJson | ConvertTo-Json -Depth 20)
 
-Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/pubspec.yaml') -Pattern '^version:\s*\d+\.\d+\.\d+\+\d+$' -Replacement ("version: $semver+$androidCode")
+Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/pubspec.yaml') -Pattern '^version:\s*\d+\.\d+(?:\.\d+)?\+\d+\r?$' -Replacement ("version: $semver+$androidCode")
 
 $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
 $localProps = Get-Content -Raw $localPropsPath

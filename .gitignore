@@ -35,9 +35,20 @@ tmp_lan_audio_home.png
 # Generated validation artifacts
 artifacts/baseline/
 artifacts/contracts/
+artifacts/latency/
+artifacts/phase3/
 artifacts/reports/
+artifacts/ui_baseline/
 artifacts/validate/
 
 # Android crash dumps
 *.hprof
 apps/android_flutter/android/.gradle/
+apps/android_flutter/android/.kotlin/
+
+# Local release signing material
+*.jks
+*.b64.txt
+
+# Local Codex prompt scratch files
+docs/codex-v1.7-prompt.md

@@ -226,7 +226,11 @@ try {
 
         $apkRoot = Join-Path $repoRoot 'apps/android_flutter/build/app/outputs/flutter-apk'
         Get-ChildItem -LiteralPath $apkRoot -Filter '*-release.apk' | ForEach-Object {
-            $target = Join-Path $androidDist ("lan-audio-android-$version-$($_.Name)")
+            if ($_.Name -notmatch '^app-(.+)-release\.apk$') {
+                throw "Unexpected APK name: $($_.Name)"
+            }
+            $abi = $Matches[1]
+            $target = Join-Path $androidDist ("lan-audio-android-$abi-v$version.apk")
             Copy-Artifact -Source $_.FullName -Destination $target
         }
     }
@@ -237,7 +241,7 @@ try {
         }
 
         $exeSource = Join-Path $repoRoot 'target/release/lan_audio_desktop.exe'
-        $exeTarget = Join-Path $windowsDist "lan-audio-desktop-$version.exe"
+        $exeTarget = Join-Path $windowsDist "lan-audio-desktop-v$version.exe"
         Copy-Artifact -Source $exeSource -Destination $exeTarget
     }
 

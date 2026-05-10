@@ -159,9 +159,12 @@ jobs:
       - name: Collect Android APKs
         run: |
           mkdir -p ../../dist/release/android
+          VERSION="${{ needs.resolve.outputs.version }}"
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
             base="$(basename "$apk")"
-            cp "$apk" "../../dist/release/android/lan-audio-android-${{ needs.resolve.outputs.tag }}-$base"
+            abi="${base#app-}"
+            abi="${abi%-release.apk}"
+            cp "$apk" "../../dist/release/android/lan-audio-android-${abi}-v${VERSION}.apk"
           done
 
       - name: Upload Android APKs
@@ -212,10 +215,10 @@ jobs:
           {
             echo "## LAN Audio ${{ needs.resolve.outputs.tag }}"
             echo
-            echo "- Protocol v2 status: recommended default path remains \`windows_loopback + v2_header + opus\`"
-            echo "- Default path: \`windows_loopback + v2_header + opus\`"
-            echo "- Rollback path: \`legacy_las1 + pcm16\` (\`--force-rollback\` or UI safe mode)"
-            echo "- Codec status: \`opus stable\` on the recommended V2 path"
+            echo "- Main path: \`windows_loopback + v2_header + opus\`"
+            echo "- Rollback path: \`legacy_las1 + pcm16\` (permanently retained; \`--force-rollback\` or UI safe mode)"
+            echo "- Codec status: \`opus stable\` on the recommended v2 path"
+            echo "- APK signing: fixed release keystore; supports in-place upgrade installs"
             echo
 
             echo "## What Changed"
@@ -225,8 +228,11 @@ jobs:
                 echo "- $line"
               done <<< "$fixes_input"
             else
-              echo "- No manual fix summary was provided for this run."
-              echo "- See the generated release notes below for commit and PR details."
+              echo "- Playback core debt cleared with extracted state machine and jitter coordinator."
+              echo "- Android power-saving guidance added for background playback restrictions."
+              echo "- Android 3-band EQ, loudness normalization, and multi-device streaming up to 4 clients."
+              echo "- mDNS nearby-device discovery, smart reconnect, and connection history/favorites."
+              echo "- Contributor docs, issue/PR templates, protocol coverage reporting, and changelog."
             fi
             echo
 
@@ -238,7 +244,8 @@ jobs:
               done <<< "$verified_scope_input"
             else
               echo "- Verified device: \`5391d451\` (\`Xiaomi 24129PN74C\`)"
-              echo "- Verified scenarios: \`USB + synthetic\`, \`WiFi + windows_loopback\`"
+              echo "- Verified scenarios: \`USB direct\`, \`WiFi + windows_loopback\`, \`2 Android clients\`"
+              echo "- Latency probe: \`low_latency p95=64ms\`, \`balanced p95=185ms\`, \`high_quality p95=505ms\`"
             fi
             echo
 
@@ -249,8 +256,7 @@ jobs:
                 echo "- $line"
               done <<< "$known_limitations_input"
             else
-              echo "- Android runtime and desktop refactor follow-up remains ongoing after \`${{ needs.resolve.outputs.tag }}\`."
-              echo "- Rollback path must stay available for diagnostics and controlled fallback."
+              echo "- Desktop per-device disconnect command is deferred to v1.8."
             fi
             echo
 

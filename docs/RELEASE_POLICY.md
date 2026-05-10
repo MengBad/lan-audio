@@ -2,8 +2,9 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.3`
+- Latest shipped release: `v1.7`
 - Current tracked gate decision: `allow_release`
+- FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 
@@ -100,6 +101,24 @@ A release is allowed only when all of the following are true:
 - there are no critical bugs
 - there are no blocking failure codes
 
+## v1.7 Release Record
+
+`v1.7` is a standard release, not a FORCE_RELEASE.
+
+- Date: `2026-05-10`
+- Theme 1 gate: passed
+- Theme 2 gate: passed
+- Theme 3 gate: passed
+- Theme 4 gate: passed
+- Latency probe: `low_latency p95=64ms`, `balanced p95=185ms`, `high_quality p95=505ms`
+- Known issue: desktop per-device disconnect command is deferred to v1.8.
+- Required release assets:
+  - `lan-audio-android-arm64-v8a-v1.7.apk`
+  - `lan-audio-android-armeabi-v7a-v1.7.apk`
+  - `lan-audio-android-x86_64-v1.7.apk`
+  - `lan-audio-desktop-v1.7.exe`
+  - `SHA256SUMS.txt`
+
 ## Rollback Rule
 
 The release process must not weaken or hide the rollback path.
@@ -127,6 +146,9 @@ Release notes should include:
 - current Protocol v2 status
 - default main path
 - rollback path
+- latency probe values
+- v1.7 feature list
 - verified scope
 - known limitations
+- APK signing note
 - rollback method

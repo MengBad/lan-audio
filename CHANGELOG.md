@@ -31,8 +31,7 @@ The format follows Keep a Changelog, and this project uses `v<major.minor>` rele
 
 ### Known Limitations
 
-- Desktop per-device disconnect command is deferred until a stable per-client command contract exists.
-- `CODECOV_TOKEN` must be configured manually in GitHub repository secrets for coverage upload.
+- Desktop per-device disconnect command is deferred to v1.8 until a stable per-client command contract exists.
 
 ## [1.6.0] - 2026-05-10
 

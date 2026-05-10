@@ -88,7 +88,7 @@ try {
     }
 
     Invoke-Step -Name 'Git add' -Action {
-        git add VERSION AGENTS.md .cargo README.md CHANGELOG.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
+        git add VERSION AGENTS.md .gitignore .cargo README.md README.zh-CN.md CONTRIBUTING.md CHANGELOG.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
     }
 
     $staged = git diff --cached --name-only
