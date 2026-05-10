@@ -40,6 +40,10 @@ artifacts/actions-signing-*/
 output/
 
 # Android crash dumps
+local.properties
+*.jks
+*.keystore
+*.b64.txt
 *.hprof
 apps/android_flutter/android/.gradle/
 apps/android_flutter/android/local.properties

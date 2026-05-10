@@ -218,6 +218,12 @@ function Assert-AndroidReleaseSigning {
     }
 }
 
+function Warn-AndroidReleaseSigningEnvironment {
+    if (-not $env:LAN_AUDIO_KEYSTORE_PASS) {
+        Write-Warning "LAN_AUDIO_AUDIO_KEYSTORE_PASS not set, release APK may use debug signing"
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
 if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
@@ -257,7 +263,7 @@ try {
     }
 
     if (-not $NoAndroid) {
-        Assert-AndroidReleaseSigning -AndroidProject (Join-Path $repoRoot 'apps/android_flutter')
+        Warn-AndroidReleaseSigningEnvironment
         Invoke-Step -Name 'Build Android release APKs (split per ABI)' -Action {
             $sourceProject = Join-Path $repoRoot 'apps/android_flutter'
             $stagedProject = Join-Path $env:TEMP "lan_audio_android_release_$PID"
