@@ -42,6 +42,15 @@ jobs:
         run: cargo check
       - name: cargo test -p lan_audio_protocol -p lan_audio_server
         run: cargo test -p lan_audio_protocol -p lan_audio_server
+      - name: Install cargo llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov --package lan_audio_protocol --lcov --output-path lcov.info
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   rust-desktop:
     name: Desktop crate check

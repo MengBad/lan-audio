@@ -308,3 +308,8 @@
   - Added root `CONTRIBUTING.md` with environment requirements, local run steps, commit rules, architecture notes, and primary/rollback path guidance.
   - Added GitHub issue templates for bug reports, feature requests, and connection issues.
   - Added pull request template with validation and rollback checklist.
+- TASK-V17-402 CI coverage:
+  - Added protocol-layer tests for `NegotiationError`, v2 header codec/flag round trips, legacy/v2 handshake distinction, and mode profile boundary values.
+  - CI now generates `lan_audio_protocol` LCOV coverage with `cargo llvm-cov` and uploads through `codecov/codecov-action@v4`.
+  - README now includes the Codecov badge.
+  - Manual follow-up: configure `CODECOV_TOKEN` in GitHub repository secrets.

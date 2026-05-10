@@ -1,5 +1,7 @@
 # LAN Audio
 
+[![codecov](https://codecov.io/gh/MengBad/lan-audio/branch/main/graph/badge.svg)](https://codecov.io/gh/MengBad/lan-audio)
+
 LAN Audio turns a Windows PC into an audio sender and an Android phone into a network speaker.
 
 It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is built around a Rust server, a Flutter Android client, and a Tauri desktop app.
