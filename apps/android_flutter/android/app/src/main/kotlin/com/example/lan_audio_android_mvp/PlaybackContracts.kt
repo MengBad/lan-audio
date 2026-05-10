@@ -395,6 +395,7 @@ data class StableServiceSnapshot(
     val playbackBackend: String = "audiotrack_stable",
     val connectedClientCount: Int = 0,
     val metrics: StableServiceMetrics = StableServiceMetrics(),
+    val lastError: Map<String, Any?>? = null,
 ) {
     fun toMap(): Map<String, Any?> {
         return mapOf(
@@ -415,6 +416,7 @@ data class StableServiceSnapshot(
             "transport_mode" to transportMode,
             "playback_backend" to playbackBackend,
             "connected_client_count" to connectedClientCount,
+            "last_error" to lastError,
             "metrics" to mapOf(
                 "buffered_ms" to metrics.bufferedMs,
                 "underrun" to metrics.underrun,

@@ -22,6 +22,7 @@ class PlaybackServiceSnapshot {
     required this.playbackBackend,
     required this.connectedClientCount,
     required this.metrics,
+    required this.lastError,
   });
 
   final String transport;
@@ -42,6 +43,7 @@ class PlaybackServiceSnapshot {
   final String playbackBackend;
   final int connectedClientCount;
   final Map<String, dynamic> metrics;
+  final String? lastError;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
     final normalized = map.map(
@@ -77,6 +79,7 @@ class PlaybackServiceSnapshot {
             (key, value) => MapEntry('$key', value),
           ) ??
               const <String, dynamic>{},
+      lastError: _humanizeNegotiationError(normalized['last_error']),
     );
   }
 
@@ -100,7 +103,28 @@ class PlaybackServiceSnapshot {
       'playback_backend': playbackBackend,
       'connected_client_count': connectedClientCount,
       'metrics': metrics,
+      'last_error': lastError,
     };
+  }
+
+  static String? _humanizeNegotiationError(Object? value) {
+    if (value == null) return null;
+    if (value is! Map) return '$value';
+    final normalized = value.map((key, item) => MapEntry('$key', item));
+    switch (normalized['type']) {
+      case 'unsupported_codec':
+        return 'Unsupported codec: offered=${normalized['offered']}, required=${normalized['required']}';
+      case 'unsupported_data_plane':
+        return 'Unsupported data plane: offered=${normalized['offered']}';
+      case 'version_mismatch':
+        return 'Protocol version mismatch: local=${normalized['local']}, remote=${normalized['remote']}';
+      case 'timeout':
+        return 'Negotiation timed out after ${normalized['elapsed_ms']}ms';
+      case 'rejected':
+        return 'Negotiation rejected: ${normalized['reason']}';
+      default:
+        return '$normalized';
+    }
   }
 }
 

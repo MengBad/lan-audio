@@ -37,9 +37,18 @@ artifacts/reports/
 artifacts/ui_baseline/
 artifacts/validate/
 artifacts/actions-signing-*/
+artifacts/latency/run_logs/
+artifacts/latency/snapshots/
+artifacts/phase3/
 output/
 
 # Android crash dumps
+apps/android_flutter/.flutter-plugins-dependencies
+apps/android_flutter/android/.kotlin/
+local.properties
+*.jks
+*.keystore
+*.b64.txt
 *.hprof
 apps/android_flutter/android/.gradle/
 apps/android_flutter/android/local.properties

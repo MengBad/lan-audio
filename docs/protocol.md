@@ -1,4 +1,8 @@
-﻿# Protocol v2 Draft
+中文摘要：本文档记录 LAN Audio 的 Protocol v2 设计、运行时 snapshot contract、主路径与回滚路径约束。当前推荐主路径保持 `windows_loopback + v2_header + opus`，永久维护回滚路径 `legacy_las1 + pcm16`，并通过能力协商、模式同步和结构化错误来支撑后续演进。
+
+---
+
+# Protocol v2 Draft
 
 ## Release Update (`2026-04-24`)
 

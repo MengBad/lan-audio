@@ -5,6 +5,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'audio/background_playback_service.dart';
 import 'ui/audio_console_status.dart';
@@ -36,6 +37,102 @@ class LanAudioApp extends StatelessWidget {
   }
 }
 
+class QrScannerPage extends StatefulWidget {
+  const QrScannerPage({super.key});
+
+  @override
+  State<QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<QrScannerPage> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan LAN Audio QR')),
+      body: MobileScanner(
+        onDetect: (capture) {
+          if (_handled) return;
+          for (final barcode in capture.barcodes) {
+            final raw = barcode.rawValue;
+            final target = parseLanAudioUri(raw);
+            if (target != null) {
+              _handled = true;
+              Navigator.of(context).pop(target);
+              return;
+            }
+          }
+        },
+      ),
+    );
+  }
+}
+
+QrConnectionTarget? parseLanAudioUri(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || uri.scheme != 'lan-audio') return null;
+  final host = uri.host;
+  if (host.isEmpty) return null;
+  final wsPort = uri.hasPort ? uri.port : 39991;
+  final udpPort = int.tryParse(uri.queryParameters['udp'] ?? '') ?? 39992;
+  return QrConnectionTarget(host: host, wsPort: wsPort, udpPort: udpPort);
+}
+
+FirewallGuidance? firewallGuidanceForMessage(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final message = raw.toLowerCase();
+  if (message.contains('connection refused') ||
+      message.contains('econnrefused') ||
+      message.contains('refused')) {
+    return const FirewallGuidance(
+      titleZh: 'PC 端服务未启动或端口被防火墙拦截',
+      titleEn: 'PC service is not running or the port is blocked',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('timeout') ||
+      message.contains('timed out') ||
+      message.contains('etimedout')) {
+    return const FirewallGuidance(
+      titleZh: '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991',
+      titleEn:
+          'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('auth') ||
+      message.contains('version') ||
+      message.contains('incompatible')) {
+    return const FirewallGuidance(
+      titleZh: '版本不兼容，请检查双端版本号',
+      titleEn: 'Version mismatch. Check both app versions',
+      body: '确认 Windows 与 Android 都是同一发布版本。\n'
+          'Make sure Windows and Android are running the same LAN Audio release.',
+    );
+  }
+  return null;
+}
+
+class FirewallGuidance {
+  const FirewallGuidance({
+    required this.titleZh,
+    required this.titleEn,
+    required this.body,
+  });
+
+  final String titleZh;
+  final String titleEn;
+  final String body;
+}
+
 class DiscoveryServer {
   DiscoveryServer({
     required this.serverId,
@@ -52,6 +149,18 @@ class DiscoveryServer {
   final int wsPort;
   final int udpPort;
   final DateTime lastSeen;
+}
+
+class QrConnectionTarget {
+  QrConnectionTarget({
+    required this.host,
+    required this.wsPort,
+    required this.udpPort,
+  });
+
+  final String host;
+  final int wsPort;
+  final int udpPort;
 }
 
 enum PlaybackState {
@@ -289,7 +398,9 @@ class _DebugPageState extends State<DebugPage> {
       _audioLog = snapshot.state;
       _wsLog = jsonEncode(snapshot.toMap());
 
-      if (_wsConnected || _playbackState != PlaybackState.stopped) {
+      if (snapshot.lastError != null) {
+        _lastErrorMessage = snapshot.lastError;
+      } else if (_wsConnected || _playbackState != PlaybackState.stopped) {
         _lastErrorMessage = null;
       }
     });
@@ -526,6 +637,24 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Future<void> _scanQrAndConnect() async {
+    final target = await Navigator.of(context).push<QrConnectionTarget>(
+      MaterialPageRoute(builder: (_) => const QrScannerPage()),
+    );
+    if (target == null) return;
+    _manualHostController.text = target.host;
+    setState(() {
+      _connectMode = ConnectMode.manual;
+      _selectedServerId = null;
+    });
+    await _connectToHost(
+      host: target.host,
+      wsPort: target.wsPort,
+      udpPort: target.udpPort,
+      serverName: 'qr:${target.host}',
+    );
+  }
+
   Future<void> _connectQuickRecent() async {
     final host = _mostRecentHost();
     if (host == null) return;
@@ -540,6 +669,28 @@ class _DebugPageState extends State<DebugPage> {
       udpPort: udpPort,
       serverName: serverName,
     );
+  }
+
+  Future<void> _exportAndroidSupportBundle() async {
+    try {
+      final path = await _platformChannel
+          .invokeMethod<String>('exportAndroidSupportBundle');
+      if (!mounted) return;
+      setState(() {
+        _status = tr('诊断报告已导出', 'Diagnostics exported');
+        _lastErrorMessage = path == null
+            ? null
+            : tr('诊断包已生成并打开分享面板',
+                'Support bundle created and share sheet opened');
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _runtimeState = 'error';
+        _lastErrorMessage =
+            '${tr('导出诊断报告失败', 'Export diagnostics failed')}: $e';
+      });
+    }
   }
 
   Future<void> _connectToHost({
@@ -974,6 +1125,13 @@ class _DebugPageState extends State<DebugPage> {
                     : tr('扫描局域网', 'Scan LAN'),
               ),
             ),
+            OutlinedButton.icon(
+              key: const Key('connection_qr_scan_action'),
+              onPressed:
+                  _isConnecting ? null : () => runAndClose(_scanQrAndConnect),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: Text(tr('扫码连接', 'Scan QR')),
+            ),
             if (recentHost != null)
               OutlinedButton.icon(
                 key: const Key('connection_recent_action'),
@@ -1030,6 +1188,13 @@ class _DebugPageState extends State<DebugPage> {
                   ),
           icon: const Icon(Icons.system_update),
           label: Text(tr('检查更新', 'Check Update')),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          key: const Key('advanced_export_support_bundle_action'),
+          onPressed: _exportAndroidSupportBundle,
+          icon: const Icon(Icons.ios_share),
+          label: Text(tr('导出诊断报告', 'Export Diagnostics')),
         ),
         const SizedBox(height: 14),
         _buildDebugMetricsPanel(),
@@ -1100,6 +1265,37 @@ class _DebugPageState extends State<DebugPage> {
               style: AudioConsoleType.debugConsole(color: Colors.greenAccent),
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFirewallGuidancePanel(String message) {
+    final guidance = firewallGuidanceForMessage(message);
+    if (guidance == null) return const SizedBox.shrink();
+    return Container(
+      key: const Key('firewall_guidance_panel'),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color.fromRGBO(14, 165, 233, 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color.fromRGBO(14, 165, 233, 0.24)),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        title: Text(
+          tr(guidance.titleZh, guidance.titleEn),
+          style: AudioConsoleType.body(color: AudioConsoleColors.text),
+        ),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              guidance.body,
+              style: AudioConsoleType.body(color: AudioConsoleColors.text2),
             ),
           ),
         ],
@@ -1310,6 +1506,13 @@ class _DebugPageState extends State<DebugPage> {
             hint: tr('点击管理连接目标', 'Tap to manage connection'),
             onTap: () => _showConnectionSheet(servers),
           ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('qr_scan_connect_action'),
+            onPressed: _isConnecting ? null : _scanQrAndConnect,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: Text(tr('扫码连接', 'Scan QR to Connect')),
+          ),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -1378,6 +1581,8 @@ class _DebugPageState extends State<DebugPage> {
                     AudioConsoleType.monoMeta(color: AudioConsoleColors.error),
               ),
             ),
+          if (_lastErrorMessage != null)
+            _buildFirewallGuidancePanel(_lastErrorMessage!),
           const SizedBox(height: 8),
           if (_showLegacyMainDebugContent) ...[
             Text(

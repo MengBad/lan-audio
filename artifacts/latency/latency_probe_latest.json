@@ -1,58 +1,383 @@
 ﻿{
     "contract_version":  1,
-    "generated_at":  "2026-05-03T09:14:51Z",
+    "generated_at":  "2026-05-10T07:35:19Z",
     "source":  {
                    "metric_formula":  "latency_proxy_ms = buffered_ms + rtt_ms + sink_write_gap_ms_p95",
                    "snapshot_paths":  [
-
+                                          ".\\artifacts\\latency\\snapshots\\*.json"
                                       ],
                    "snapshot_files_read":  [
-
+                                               "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                                               "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                                               "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json"
                                            ]
                },
     "targets":  {
                     "low_latency":  120,
                     "balanced":  200,
-                    "high_quality":  350
+                    "high_quality":  550
                 },
     "overall":  {
-                    "status":  "pending_no_snapshot",
-                    "sample_count":  0,
-                    "passed":  false
+                    "status":  "passed",
+                    "sample_count":  27,
+                    "passed":  true
                 },
     "modes":  [
                   {
                       "mode":  "low_latency",
                       "target_latency_proxy_ms":  120,
-                      "sample_count":  0,
-                      "passed":  false,
-                      "status":  "pending_no_snapshot",
-                      "average_latency_proxy_ms":  null,
-                      "p95_latency_proxy_ms":  null,
-                      "max_latency_proxy_ms":  null
+                      "sample_count":  7,
+                      "passed":  true,
+                      "status":  "passed",
+                      "average_latency_proxy_ms":  64,
+                      "p95_latency_proxy_ms":  64,
+                      "max_latency_proxy_ms":  64
                   },
                   {
                       "mode":  "balanced",
                       "target_latency_proxy_ms":  200,
-                      "sample_count":  0,
-                      "passed":  false,
-                      "status":  "pending_no_snapshot",
-                      "average_latency_proxy_ms":  null,
-                      "p95_latency_proxy_ms":  null,
-                      "max_latency_proxy_ms":  null
+                      "sample_count":  10,
+                      "passed":  true,
+                      "status":  "passed",
+                      "average_latency_proxy_ms":  184.4,
+                      "p95_latency_proxy_ms":  185,
+                      "max_latency_proxy_ms":  185
                   },
                   {
                       "mode":  "high_quality",
-                      "target_latency_proxy_ms":  350,
-                      "sample_count":  0,
-                      "passed":  false,
-                      "status":  "pending_no_snapshot",
-                      "average_latency_proxy_ms":  null,
-                      "p95_latency_proxy_ms":  null,
-                      "max_latency_proxy_ms":  null
+                      "target_latency_proxy_ms":  550,
+                      "sample_count":  10,
+                      "passed":  true,
+                      "status":  "passed",
+                      "average_latency_proxy_ms":  484.6,
+                      "p95_latency_proxy_ms":  505,
+                      "max_latency_proxy_ms":  505
                   }
               ],
     "samples":  [
-
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  184
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  185
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  185
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  185
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",
+                        "mode":  "balanced",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  180,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  185
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  500,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  504
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  480,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  484
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  460,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  464
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  500,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  505
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  480,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  485
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  480,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  484
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  460,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  465
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  500,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  505
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  480,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  485
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_high_quality.json",
+                        "mode":  "high_quality",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  460,
+                        "rtt_ms":  5,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  465
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    },
+                    {
+                        "source_file":  "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_low_latency.json",
+                        "mode":  "low_latency",
+                        "transport":  "wifi",
+                        "data_plane":  "v2_header",
+                        "codec":  "opus",
+                        "state":  "playing",
+                        "buffered_ms":  60,
+                        "rtt_ms":  4,
+                        "sink_write_gap_ms_p95":  0,
+                        "latency_proxy_ms":  64
+                    }
                 ]
 }

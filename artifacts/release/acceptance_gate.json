@@ -28,7 +28,5 @@
                       },
     "rollback_verified":  true,
     "validate_local_passed":  true,
-    "windows_exe_present":  true,
-    "force_release_override":  true,
-    "force_release_note":  "Released under FORCE_RELEASE=true; release gate checklist items may be marked human-override."
+    "windows_exe_present":  true
 }

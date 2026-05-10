@@ -2,13 +2,15 @@
 
 ## Current Release State
 
-- Latest shipped release before the hotfix tag: `v1.4`
-- Current release target: `v1.4.1`
+- Latest shipped release before the v1.6 standard release: `v1.5`
+- Current release target: `v1.6`
 - Current tracked gate decision: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Release mode for `v1.4`: `FORCE_RELEASE=true` with human-override notes recorded in release-tracked docs and artifacts
 - Release mode for `v1.4.1`: normal hotfix release after local packaging and GitHub Actions signing verification
+- Release mode for `v1.5`: `FORCE_RELEASE=true`; long-run gate is human-overridden using the passed latency probe evidence (`low_latency=64ms`, `balanced=185ms`, `high_quality=505ms`)
+- Release mode for `v1.6`: standard release (`FORCE_RELEASE=false`) after Phase 1, Phase 2, Phase 3, and Phase 4 gates passed; known issues remain explicitly documented instead of being converted to passed items.
 
 Release decisions are artifact-driven. The source of truth is:
 
@@ -65,21 +67,27 @@ Outputs:
 
 Release APKs must be signed with a stable release keystore. Debug signing is only for debug builds and must not be used for GitHub Release artifacts.
 
-Local release packaging requires these entries in `apps/android_flutter/android/local.properties`:
+Release APKs use a fixed keystore so Android can install later releases over earlier releases without requiring an uninstall. The keystore file must never be committed to git.
 
-- `lanAudio.releaseStoreFile`
-- `lanAudio.releaseStorePassword`
-- `lanAudio.releaseKeyAlias`
-- `lanAudio.releaseKeyPassword`
+Local release packaging requires these environment variables:
 
-GitHub Actions uses repository secrets to recreate the same keystore identity on every run:
+- `LAN_AUDIO_KEYSTORE_PATH`
+- `LAN_AUDIO_KEYSTORE_PASS`
+- `LAN_AUDIO_KEY_ALIAS`
+- `LAN_AUDIO_KEY_PASS`
 
-- `LAN_AUDIO_ANDROID_RELEASE_KEYSTORE_BASE64`
-- `LAN_AUDIO_ANDROID_RELEASE_STORE_PASSWORD`
-- `LAN_AUDIO_ANDROID_RELEASE_KEY_ALIAS`
-- `LAN_AUDIO_ANDROID_RELEASE_KEY_PASSWORD`
+GitHub Actions injects the keystore through the `LAN_AUDIO_KEYSTORE_B64` Repository Secret, decodes it as `lan-audio-release.jks`, then passes the four signing environment variables into the Android release build step. `package_release.ps1` warns when the variables are missing so local debug workflows are not blocked, but release APK signing is only considered valid when all four values are provided and point at the fixed release keystore.
 
 Compatibility boundary: the shipped `v1.4` APKs were built through a path that used the build machine debug signing identity. If an installed APK was signed by a different debug key than the fixed release key, Android will require a one-time uninstall before installing `v1.4.1`. From `v1.4.1` onward, APKs are expected to support normal signed overwrite upgrades as long as the same keystore is retained.
+
+## Android 签名
+
+- Release APK 使用固定 keystore 签名（`lan-audio-release.jks`）。
+- keystore 文件不进 git，`.gitignore` 已拦截 `*.jks`、`*.keystore` 和 `*.b64.txt`。
+- GitHub Actions 通过 `LAN_AUDIO_KEYSTORE_B64` Repository Secret 注入 keystore，并在构建前解码。
+- 本地发版需设置四个环境变量：`LAN_AUDIO_KEYSTORE_PATH` / `LAN_AUDIO_KEYSTORE_PASS` / `LAN_AUDIO_KEY_ALIAS` / `LAN_AUDIO_KEY_PASS`。
+- keystore 有效期 100 年，alias: `lan-audio`。
+- 丢失 keystore 后用户必须卸载重装，请妥善备份。
 
 ## Release Entry
 
@@ -164,6 +172,9 @@ Release notes should include:
 - current Protocol v2 status
 - default main path
 - rollback path
+- latency probe measured values
+- UI redesign summary, including Audio Console Dark
+- human-override marker when FORCE_RELEASE is used
 - verified scope
 - known limitations
 - rollback method

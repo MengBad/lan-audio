@@ -218,6 +218,12 @@ function Assert-AndroidReleaseSigning {
     }
 }
 
+function Warn-AndroidReleaseSigningEnvironment {
+    if (-not $env:LAN_AUDIO_KEYSTORE_PASS) {
+        Write-Warning "LAN_AUDIO_AUDIO_KEYSTORE_PASS not set, release APK may use debug signing"
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
 if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
@@ -257,7 +263,7 @@ try {
     }
 
     if (-not $NoAndroid) {
-        Assert-AndroidReleaseSigning -AndroidProject (Join-Path $repoRoot 'apps/android_flutter')
+        Warn-AndroidReleaseSigningEnvironment
         Invoke-Step -Name 'Build Android release APKs (split per ABI)' -Action {
             $sourceProject = Join-Path $repoRoot 'apps/android_flutter'
             $stagedProject = Join-Path $env:TEMP "lan_audio_android_release_$PID"
@@ -299,7 +305,11 @@ try {
 
         $apkRoot = Join-Path $repoRoot 'apps/android_flutter/build/app/outputs/flutter-apk'
         Get-ChildItem -LiteralPath $apkRoot -Filter '*-release.apk' | ForEach-Object {
-            $target = Join-Path $androidDist ("lan-audio-android-$version-$($_.Name)")
+            if ($_.Name -notmatch '^app-(.+)-release\.apk$') {
+                throw "Unexpected Android APK name: $($_.Name)"
+            }
+            $abi = $Matches[1]
+            $target = Join-Path $androidDist ("lan-audio-android-$abi-v$version.apk")
             Copy-Artifact -Source $_.FullName -Destination $target
         }
     }
@@ -310,7 +320,7 @@ try {
         }
 
         $exeSource = Join-Path $repoRoot 'target/release/lan_audio_desktop.exe'
-        $exeTarget = Join-Path $windowsDist "lan-audio-desktop-$version.exe"
+        $exeTarget = Join-Path $windowsDist "lan-audio-desktop-v$version.exe"
         Copy-Artifact -Source $exeSource -Destination $exeTarget
     }
 

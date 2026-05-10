@@ -11,15 +11,22 @@ The goal of this project is straightforward: play audio on a Windows PC, send it
 
 ## Current Status
 
-- Current version: `1.4.1`.
+- Current version: `1.6`.
 - The repository contains a Rust LAN server, an Android Flutter client, and a Windows Tauri desktop app.
 - The documented recommended path is `windows_loopback + v2_header + opus`.
 - The maintained rollback path is `legacy_las1 + pcm16`.
-- The `v1.4.1` release candidate is a post-`v1.4` hotfix for Android and Windows console polish, stable metrics rendering, mode-switch UI recovery, and stable release APK signing; it does not change the protocol path.
+- The `v1.6` release is a standard release after all four engineering gates passed, keeping the protocol path stable while adding QR connection, support bundles, guided troubleshooting, rollback discoverability, and fixed Android release signing.
+- Android and Windows UI surfaces now use the Audio Console Dark design direction with DM Sans and IBM Plex Mono.
 - Android MediaSession integration is available with playback state, metadata, MediaStyle controls, play/pause, and stop.
 - Android and Windows update detection are available as silent checks with manual entry points that link to GitHub Releases.
-- Desktop diagnostics snapshot export writes JSON artifacts under `dist/diagnostics/`.
-- Balanced-mode playback buffering has been tuned for better short-run stability during the v1.4.1 follow-up.
+- Desktop diagnostics support bundle export and Android diagnostic zip export are available for issue reports.
+- Desktop can show a QR code for `lan-audio://<ip>:<port>`, and Android can scan it to connect automatically.
+- Rollback mode can be switched from the Windows tray and desktop Advanced Options.
+- Capability negotiation failures are surfaced as readable UI errors instead of opaque logs.
+- Android and Desktop provide guided firewall troubleshooting for refused and timed-out connections.
+- Android release APKs use a fixed keystore signature from `v1.6` onward, supporting normal overwrite upgrades when the same keystore is retained.
+- English and Simplified Chinese documentation are maintained side by side.
+- Balanced-mode playback buffering has been tuned for better short-run stability.
 - Latency revalidation is now systematized through `scripts/export_latency_probe.ps1`, which exports per-mode structured artifacts under `artifacts/latency/`.
 - Local validation, packaging, and release scripts are part of the repository.
 - Current follow-up work is focused on stability, latency tuning, mode strategy, Protocol v2 evolution, and desktop/UI productization.

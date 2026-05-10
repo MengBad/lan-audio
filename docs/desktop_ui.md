@@ -1,3 +1,7 @@
+中文摘要：本文档记录 Windows Tauri 桌面端的产品化 UI 规范，包括 Audio Console Dark 主界面、运行状态、数据面路径、回滚入口、QR 连接入口和诊断导出。桌面端应面向日常操作，而不是只作为开发调试面板。
+
+---
+
 # Windows Desktop UI (Tauri)
 
 ## Scope

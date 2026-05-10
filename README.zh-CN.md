@@ -1,26 +1,39 @@
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
 # LAN Audio
+
 把 Windows 电脑的声音通过局域网传到 Android 手机，让手机充当无线音响。
 
-LAN Audio 是一个面向 Windows 到 Android 音频传输场景的多组件项目，目标是在局域网内把电脑正在播放的声音实时推送到手机播放。仓库当前由 Rust 流媒体后端、Flutter Android 客户端和 Tauri 桌面端组成，并同时维护 Protocol v2 主路径与显式回滚路径。
+LAN Audio 是一个 Windows 到 Android 的实时音频串流项目。仓库由 Rust 流媒体后端、Flutter Android 客户端和 Tauri Windows 桌面端组成，同时维护 Protocol v2 主路径与显式回滚路径。
 
 ## 项目简介
 
-这个项目要解决的问题很直接：电脑正常播放声音时，不依赖额外音频硬件，把声音通过局域网或 USB 辅助网络链路发到 Android 手机，让手机直接出声。当前仓库更偏向开发、测试和受控发布流程，还不是面向普通用户的一键安装成品。
+项目目标很直接：Windows PC 播放音频，通过 LAN 或 USB 辅助网络传输到 Android 设备，再由手机扬声器播放。当前仓库仍偏向开发、测试和受控发布，不是面向普通用户的一键安装成品。
 
 ## 当前状态
 
-- 仓库中已经包含 Rust 服务端、Android Flutter 客户端和 Windows Tauri 桌面端。
-- 当前文档推荐主路径是 `windows_loopback + v2_header + opus`。
-- 当前长期保留的回滚路径是 `legacy_las1 + pcm16`。
-- Android 和 Windows 两侧都已经有本地验证、打包和发版脚本。
-- 当前持续推进的重点仍然是稳定性、延迟优化、模式策略、Protocol v2 演进，以及桌面/UI 产品化。
-- 以现在的成熟度来看，这个项目更适合 Windows + Android 环境下的开发者和测试者使用。
+- 当前版本：`1.6`。
+- 仓库包含 Rust LAN 服务端、Android Flutter 客户端和 Windows Tauri 桌面端。
+- 推荐主路径：`windows_loopback + v2_header + opus`。
+- 永久维护回滚路径：`legacy_las1 + pcm16`。
+- `v1.6` 是四个工程阶段门控通过后的标准发布，保持协议主路径稳定，同时补齐 QR 扫码连接、诊断包导出、故障引导、回滚入口和 Android 固定签名。
+- Android 与 Windows UI 采用 Audio Console Dark 设计，字体为 DM Sans + IBM Plex Mono。
+- Android 已集成 MediaSession，包含播放状态、metadata、MediaStyle 控件、play/pause 和 stop。
+- Android / Windows 均支持静默更新检测，并提供手动入口跳转 GitHub Releases。
+- Desktop 支持结构化 support bundle 导出，Android 支持诊断包 zip 导出并调用系统分享面板。
+- Desktop 主界面显示连接 QR 码，Android 支持扫码解析 `lan-audio://<ip>:<port>` 并自动连接。
+- Android 与 Desktop 均提供 ConnectionRefused / Timeout 防火墙排查引导。
+- Windows 托盘和桌面高级选项均可切换回滚模式。
+- 协商失败会显示可读错误说明，便于判断 codec、data-plane 或版本不兼容问题。
+- Android release APK 从 `v1.6` 起使用固定 keystore 签名，保留相同 keystore 时支持覆盖安装升级。
+- 英文与简体中文文档同步维护。
+- balanced 模式播放缓冲策略已优化，latency probe 通过结构化脚本导出三档实测结果。
+- 本地验证、打包和发布脚本已经纳入仓库。
+- 当前后续工作集中在稳定性、延迟优化、模式策略、Protocol v2 演进和产品化体验。
 
 ## 快速开始
 
-1. 先检查本地工具链：
+1. 检查本地工具链：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\check_env.ps1
@@ -32,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check_env.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource windows_loopback
 ```
 
-如果只是做链路调试，也可以先用合成音源：
+如需使用合成测试音源：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource synthetic
@@ -44,24 +57,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -Audi
 powershell -ExecutionPolicy Bypass -File .\scripts\run_android_client.ps1
 ```
 
-4. 在 Android 端发现或手动输入桌面端地址，连接后开始播放。
+4. 在 Android app 中发现服务端、手动输入地址，或扫描桌面端 QR 码后连接并开始播放。
 
-如果要执行完整的本地验证：
+执行完整本地验证：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
 ```
 
+导出 latency probe 结构化结果：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\export_latency_probe.ps1 -SnapshotPath .\dist\diagnostics\*.json
+```
+
 ## 工作方式
 
 ```text
-Windows 音频采集（windows_loopback / synthetic）
-    -> Rust LAN 服务端
-    -> WebSocket 控制面 + UDP 音频数据
-       或 USB 模式下经 adb reverse 的 localhost TCP 音频数据
-    -> Android 播放服务与客户端界面
-    -> jitter buffer / 原生播放输出
-    -> 手机扬声器
+Windows audio capture (windows_loopback / synthetic)
+    -> Rust LAN server
+    -> WebSocket control + UDP audio
+       or localhost TCP audio over adb reverse in USB mode
+    -> Android playback service and client UI
+    -> jitter buffer / native playback output
+    -> phone speaker
 ```
 
 ## 仓库结构
@@ -74,16 +93,16 @@ apps/
 crates/
   lan_audio_domain/   共享运行时与发布契约
   lan_audio_protocol/ 协议消息与数据包格式
-  lan_audio_server/   音频采集、传输、会话与指标运行时
+  lan_audio_server/   音频采集、传输、会话和指标运行时
 
 docs/               架构、协议、开发、UI、路线图与发布文档
-scripts/            环境检查、本地运行、验证、打包与发版脚本
-artifacts/release/  仓库内跟踪的发布门控与设备验收产物
+scripts/            环境检查、本地运行、验证、打包和发布脚本
+artifacts/release/  发布门控与设备验收工件
 ```
 
 ## 开发说明
 
-这是一个多组件仓库：既有 Rust 后端 crate，也有 Flutter Android 应用和 Tauri 桌面前端。建议先看下面列出的文档入口，再用 `scripts/check_env.ps1` 和 `scripts/validate_local.ps1` 确认工具链状态，再进入具体模块开发。
+这是一个多组件仓库：Rust 后端 crate、Flutter Android app、Tauri 桌面前端都在同一工作区。修改运行时、发布逻辑或 UI 前，建议先阅读下方文档，并运行 `scripts/check_env.ps1` 与 `scripts/validate_local.ps1` 确认工具链状态。
 
 ## 文档入口
 
@@ -100,11 +119,11 @@ artifacts/release/  仓库内跟踪的发布门控与设备验收产物
 
 ## 路线图
 
-- 继续提升推荐主路径下的播放稳定性。
-- 继续压低并稳定端到端延迟。
-- 保持 `low_latency`、`balanced`、`high_quality` 三种模式在桌面端和 Android 端的行为一致。
-- 继续演进 Protocol v2，同时不移除显式回滚路径。
-- 逐步把桌面端和 Android 端做成更易用、可诊断的产品形态。
+- 持续提升推荐 Windows 到 Android 主路径的播放稳定性。
+- 降低并控制端到端延迟。
+- 保持 `low_latency`、`balanced`、`high_quality` 三档策略在桌面端与 Android 端一致。
+- 继续演进 Protocol v2，同时永久保留显式回滚路径。
+- 产品化桌面端与 Android 体验，包括 QR 连接、诊断包导出、回滚模式和防火墙引导。
 
 ## 许可证
 

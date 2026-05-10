@@ -26,6 +26,44 @@ pub const UDP_FLAG_V2_SILENCE: u16 = 1 << 0;
 pub const UDP_FLAG_V2_CONFIG_CHANGED: u16 = 1 << 1;
 pub const UDP_FLAG_V2_DISCONTINUITY: u16 = 1 << 2;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NegotiationError {
+    #[error("unsupported codec: offered={offered:?}, required={required:?}")]
+    UnsupportedCodec {
+        offered: Vec<AudioCodecPreference>,
+        required: AudioCodecPreference,
+    },
+    #[error("unsupported data plane: offered={offered:?}")]
+    UnsupportedDataPlane { offered: Vec<DataPlanePath> },
+    #[error("protocol version mismatch: local={local}, remote={remote}")]
+    VersionMismatch { local: u8, remote: u8 },
+    #[error("negotiation timeout after {elapsed_ms}ms")]
+    Timeout { elapsed_ms: u64 },
+    #[error("negotiation rejected: {reason}")]
+    Rejected { reason: String },
+}
+
+impl NegotiationError {
+    pub fn human_message(&self) -> String {
+        match self {
+            Self::UnsupportedCodec { offered, required } => {
+                format!("Client offered {offered:?}, but {required:?} is required")
+            }
+            Self::UnsupportedDataPlane { offered } => {
+                format!("Client does not support a compatible data plane: {offered:?}")
+            }
+            Self::VersionMismatch { local, remote } => {
+                format!("Protocol version mismatch: local v{local}, remote v{remote}")
+            }
+            Self::Timeout { elapsed_ms } => {
+                format!("Negotiation timed out after {elapsed_ms}ms")
+            }
+            Self::Rejected { reason } => format!("Negotiation rejected: {reason}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataPlanePacketKind {
     LegacyLas1,
@@ -559,6 +597,84 @@ mod tests {
     }
 
     #[test]
+    fn legacy_pcm16_payload_round_trip() {
+        let samples = [-32768i16, -42, 0, 42, 32767];
+        let mut payload = Vec::with_capacity(samples.len() * 2);
+        for sample in samples {
+            payload.extend_from_slice(&sample.to_le_bytes());
+        }
+        let decoded = payload
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, samples);
+    }
+
+    #[test]
+    fn legacy_las1_header_parse_preserves_fields() {
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0b0000_0010,
+            sequence: 42,
+            timestamp_ms: 12_345,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            payload: vec![1, 2, 3, 4],
+        };
+        let encoded = packet.encode();
+        assert_eq!(
+            detect_data_plane_packet_kind(&encoded),
+            DataPlanePacketKind::LegacyLas1
+        );
+        assert_eq!(&encoded[0..4], b"LAS1");
+
+        let decoded = UdpAudioPacket::decode(&encoded).expect("decode legacy LAS1");
+        assert_eq!(decoded.version, 1);
+        assert_eq!(decoded.flags, 0b0000_0010);
+        assert_eq!(decoded.sequence, 42);
+        assert_eq!(decoded.timestamp_ms, 12_345);
+        assert_eq!(decoded.sample_rate, 48_000);
+        assert_eq!(decoded.channels, 2);
+        assert_eq!(decoded.frames_per_packet, 480);
+        assert_eq!(decoded.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn legacy_to_v2_upgrade_handshake_messages_are_compatible() {
+        let legacy = ClientControlMessage::ClientHello {
+            client_name: "legacy-phone".to_string(),
+            udp_port: UDP_AUDIO_PORT,
+            desired_sample_rate: 48_000,
+            channels: 2,
+        };
+        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy hello");
+        let decoded_legacy: ClientControlMessage =
+            serde_json::from_str(&legacy_json).expect("decode legacy hello");
+        assert_eq!(decoded_legacy, legacy);
+
+        let upgraded_ack = ControlMessageV2::HelloAck(HelloAck {
+            protocol_version: PROTOCOL_VERSION_V2,
+            accepted: true,
+            session_id: Uuid::new_v4(),
+            current_audio_mode: AudioMode::Balanced,
+            transport_type: TransportType::Wifi,
+            mode_profile: audio_mode_profile(AudioMode::Balanced),
+            capabilities: ProtocolCapabilities {
+                supports_pcm16: true,
+                supports_modes: true,
+                supports_metrics: true,
+                ..ProtocolCapabilities::default()
+            },
+            message: "legacy_las1 + pcm16 rollback path retained".to_string(),
+        });
+        let ack_json = serde_json::to_string(&upgraded_ack).expect("serialize v2 ack");
+        assert!(ack_json.contains("\"type\":\"hello_ack\""));
+        let decoded_ack: ControlMessageV2 = serde_json::from_str(&ack_json).expect("decode v2 ack");
+        assert_eq!(decoded_ack, upgraded_ack);
+    }
+
+    #[test]
     fn invalid_magic_should_fail() {
         let mut bytes = vec![0; AUDIO_HEADER_LEN];
         bytes[0..4].copy_from_slice(b"BAD!");
@@ -632,6 +748,24 @@ mod tests {
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
         assert_eq!(decoded, caps);
+    }
+
+    #[test]
+    fn negotiation_error_serializes_with_stable_shape() {
+        let err = NegotiationError::UnsupportedCodec {
+            offered: vec![AudioCodecPreference::Pcm16],
+            required: AudioCodecPreference::Opus,
+        };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "unsupported_codec",
+                "offered": ["pcm16"],
+                "required": "opus"
+            })
+        );
+        assert!(err.human_message().contains("Opus"));
     }
 
     #[test]

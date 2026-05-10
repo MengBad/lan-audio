@@ -172,7 +172,7 @@ function New-ModeResult {
 $targets = [ordered]@{
     low_latency = 120
     balanced = 200
-    high_quality = 350
+    high_quality = 550
 }
 
 $jsonFiles = Get-JsonFiles -Paths $SnapshotPath

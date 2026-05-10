@@ -7,8 +7,9 @@ use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
     audio_mode_profile, AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo,
     ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState, ConnectionStateMachine,
-    ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck, ProtocolCapabilities,
-    ServerControlMessage, ServerInfo, SetAudioMode, TransportType, PROTOCOL_VERSION_V2,
+    ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck, NegotiationError,
+    ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode, TransportType,
+    PROTOCOL_VERSION_V2,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -247,6 +248,33 @@ impl SessionServer {
             negotiated_path.data_plane.as_str(),
             negotiated_path.codec.as_str(),
         );
+        if let Some(negotiation_error) = negotiated_path.last_error.clone() {
+            let _ = conn_state.fail(ConnectionState::Closed, FailureCode::NegotiationMismatch);
+            warn!(
+                session = %session_id,
+                error = %negotiation_error,
+                "session negotiation failed"
+            );
+            if v2_session {
+                let hello_ack = ControlMessageV2::HelloAck(HelloAck {
+                    protocol_version: PROTOCOL_VERSION_V2,
+                    accepted: false,
+                    session_id,
+                    current_audio_mode: server_audio_mode,
+                    transport_type: match &self.cfg.transport_mode {
+                        TransportMode::WiFi => TransportType::Wifi,
+                        TransportMode::Usb { .. } => TransportType::Usb,
+                    },
+                    mode_profile: audio_mode_profile(server_audio_mode),
+                    capabilities: default_server_capabilities(),
+                    message: negotiation_error.human_message(),
+                });
+                ws_tx
+                    .send(Message::Text(serde_json::to_string(&hello_ack)?.into()))
+                    .await?;
+            }
+            return Ok(());
+        }
         if let Err(e) = conn_state.transition(ConnectionState::Negotiated) {
             warn!(session = %session_id, error = %e, "state transition to negotiated failed");
         }
@@ -803,10 +831,11 @@ fn check_multi_client_allowed_with_guard(_registry: &ClientRegistryInner) -> boo
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct NegotiatedSessionPath {
     data_plane: DataPlaneFormat,
     codec: CodecSelection,
+    last_error: Option<NegotiationError>,
 }
 
 fn negotiate_session_path(
@@ -819,10 +848,12 @@ fn negotiate_session_path(
         return NegotiatedSessionPath {
             data_plane: DataPlaneFormat::LegacyLas1,
             codec: CodecSelection::Pcm16,
+            last_error: None,
         };
     }
 
     let data_plane = router.active_format();
+    let mut last_error = None;
     let codec = match (router.active_codec(), data_plane) {
         (CodecSelection::Opus, DataPlaneFormat::V2Header)
             if client_capabilities.supports_opus
@@ -830,10 +861,46 @@ fn negotiate_session_path(
         {
             CodecSelection::Opus
         }
-        _ => CodecSelection::Pcm16,
+        (CodecSelection::Opus, DataPlaneFormat::V2Header) if client_capabilities.supports_pcm16 => {
+            CodecSelection::Pcm16
+        }
+        (required, _) => {
+            let offered = offered_codecs(client_capabilities);
+            last_error = Some(NegotiationError::UnsupportedCodec {
+                offered,
+                required: codec_selection_to_preference(required),
+            });
+            CodecSelection::Pcm16
+        }
     };
 
-    NegotiatedSessionPath { data_plane, codec }
+    NegotiatedSessionPath {
+        data_plane,
+        codec,
+        last_error,
+    }
+}
+
+fn offered_codecs(
+    capabilities: &ProtocolCapabilities,
+) -> Vec<lan_audio_protocol::AudioCodecPreference> {
+    let mut offered = Vec::new();
+    if capabilities.supports_pcm16 {
+        offered.push(lan_audio_protocol::AudioCodecPreference::Pcm16);
+    }
+    if capabilities.supports_opus || capabilities.supports_opus_experimental {
+        offered.push(lan_audio_protocol::AudioCodecPreference::Opus);
+    }
+    offered
+}
+
+fn codec_selection_to_preference(
+    selection: CodecSelection,
+) -> lan_audio_protocol::AudioCodecPreference {
+    match selection {
+        CodecSelection::Pcm16 => lan_audio_protocol::AudioCodecPreference::Pcm16,
+        CodecSelection::Opus => lan_audio_protocol::AudioCodecPreference::Opus,
+    }
 }
 
 fn legacy_client_capabilities() -> ProtocolCapabilities {
@@ -1022,6 +1089,7 @@ mod tests {
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::LegacyLas1);
         assert_eq!(negotiated.codec, CodecSelection::Pcm16);
+        assert!(negotiated.last_error.is_none());
     }
 
     #[test]
@@ -1041,6 +1109,7 @@ mod tests {
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Pcm16);
+        assert!(negotiated.last_error.is_none());
     }
 
     #[test]
@@ -1058,6 +1127,7 @@ mod tests {
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Opus);
+        assert!(negotiated.last_error.is_none());
     }
 
     #[test]
@@ -1076,6 +1146,34 @@ mod tests {
 
         assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
         assert_eq!(negotiated.codec, CodecSelection::Opus);
+        assert!(negotiated.last_error.is_none());
+    }
+
+    #[test]
+    fn negotiate_session_path_reports_unsupported_codec_when_no_fallback_exists() {
+        let cfg = ServerConfig {
+            data_plane_format: DataPlaneFormat::V2Header,
+            codec_selection: CodecSelection::Opus,
+            audio_source: AudioSourceKind::WindowsLoopback,
+            ..ServerConfig::default()
+        };
+        let router = DataPlaneRouter::from_config(&cfg);
+        let mut caps = default_server_capabilities();
+        caps.supports_pcm16 = false;
+        caps.supports_opus = false;
+        caps.supports_opus_experimental = false;
+
+        let negotiated = negotiate_session_path(&cfg, &router, true, &caps);
+
+        assert_eq!(negotiated.data_plane, DataPlaneFormat::V2Header);
+        assert_eq!(negotiated.codec, CodecSelection::Pcm16);
+        assert_eq!(
+            negotiated.last_error,
+            Some(NegotiationError::UnsupportedCodec {
+                offered: vec![],
+                required: lan_audio_protocol::AudioCodecPreference::Opus,
+            })
+        );
     }
 
     #[test]
@@ -1142,6 +1240,13 @@ mod tests {
             state: ConnectionState::Streaming,
             rollback_state: lan_audio_protocol::RollbackState::MainPathActive,
             metrics: ServiceMetricsSnapshot::default(),
+            last_error: Some(
+                serde_json::to_value(NegotiationError::UnsupportedCodec {
+                    offered: vec![lan_audio_protocol::AudioCodecPreference::Pcm16],
+                    required: lan_audio_protocol::AudioCodecPreference::Opus,
+                })
+                .unwrap(),
+            ),
         };
 
         assert_eq!(
@@ -1156,6 +1261,11 @@ mod tests {
                 "effective_codec": "opus",
                 "state": "streaming",
                 "rollback_state": "main_path_active",
+                "last_error": {
+                    "type": "unsupported_codec",
+                    "offered": ["pcm16"],
+                    "required": "opus"
+                },
                 "metrics": {
                     "buffered_ms": 0,
                     "underrun": 0,

@@ -1,10 +1,14 @@
-﻿# TODO / Status
+中文摘要：本文档是 LAN Audio 当前工程状态和发布门控记录。v1.6 目标是把主路径 `windows_loopback + v2_header + opus`、回滚路径 `legacy_las1 + pcm16`、真机验收、诊断、测试和产品化补全项统一跟踪到可发布状态。
+
+---
+
+# TODO / Status
 
 ## Release State
 
-- Latest release: `v1.4.1`
-- Current release target: `v1.5`
-- Release mode: `v1.4` used `FORCE_RELEASE=true`; `v1.4.1` target is a normal hotfix release
+- Latest release: `v1.6`
+- Current release target: `v1.6`
+- Release mode: standard (`FORCE_RELEASE=false`)
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
@@ -12,6 +16,64 @@
 - Verified scenarios:
   - `USB + synthetic`
   - `WiFi + windows_loopback`
+  - `v1.6 Android foreground install/metrics`: passed on `5391d451` (`2026-05-09`)
+  - `v1.6 Android background/power matrix`: known_issue on `5391d451` (`2026-05-09`); foreground playback starts and reports metrics, but background/power scenarios can fall back to `buffering` with `rx_frames_per_sec=0.0`
+  - `v1.6 QR code connection`: passed by manual end-to-end validation (`2026-05-10`)
+
+## v1.6 Engineering Completion Plan
+
+- [known_issue] TASK-V16-101 Android `PlaybackSessionController` split is partially extracted only. Completed safe extraction for `PlaybackBufferPolicy`, `PlaybackPacingEngine`, `PlaybackLatencyGuard`, and `PlaybackMetricsCollector`; the main controller remains 1847 lines, so the `<400` line coordination target needs a deeper follow-up that can move playout/decode/session state ownership without changing the Oboe callback path.
+- [x] TASK-V16-102 Android foreground service lifecycle is now guarded by an explicit internal state machine: `IDLE -> CONNECTING -> PLAYING -> STOPPING -> IDLE`, with transient `ERROR -> IDLE`; `ACTION_START` is accepted only from `IDLE`, `ACTION_STOP` is a safe no-op in `IDLE`, MediaSession play/pause never starts playback, and `onTaskRemoved` routes through stop.
+- [known_issue] TASK-V16-103 Android power/background real-device matrix executed on `5391d451` on 2026-05-09. Foreground install and connection passed on `windows_loopback + v2_header + opus` (`playback=playing`, `rx_frames_per_sec≈50`, `dropped_late_frames=0/0`). Background/power matrix remains incomplete: after screen-off/Home/battery-saver cycling, playback can remain in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen can recover after restarting the PC sender, but the first reopen attempt stayed in `buffering` with `recent=start_ignored_state:playing`. Mitigation for now: stop/restart the PC sender and reconnect from Android after a force-stop or aggressive power-management event.
+- [x] TASK-V16-201 Desktop Tauri entrypoint split completed: `lib.rs` is now registration/startup only, with command handlers in `commands.rs`, shared app state and snapshot types in `state.rs`, and service lifecycle orchestration in `orchestrator.rs`.
+- [x] TASK-V16-202 Rollback/safe-mode discoverability completed: tray menu now exposes rollback/recommended path switching, the desktop UI has a bottom `Advanced Options` section showing the active path, rollback toggle, and diagnostics export, and rollback switching requires confirmation.
+- [x] TASK-V16-203 Desktop diagnostics support bundle completed: new `export_support_bundle` Tauri command writes `snapshot.json`, `system_info.json`, `recent_events.json`, and `README.txt` under `dist/diagnostics/support-bundle-<timestamp>/`; the legacy JSON snapshot command remains available for compatibility.
+- [known_issue] TASK-V16-301 USB direct real-device acceptance attempted on `5391d451` on 2026-05-09. Desktop `usb` transport config creates adb reverse entries for `tcp:39991` and `tcp:39992`, but the Android debug start path did not reach a stable USB session: MIUI blocked one cached debug broadcast, and the foreground service later remained in `CONNECTING` with a stale `ws_failure:Failed to connect to /10.0.0.185:39991`. No 10-minute underrun/silence-fill sample was produced. Current status: transport plumbing is partially present, but USB direct remains a known issue pending a first-class UI/debug start path reset.
+- [x] TASK-V16-302 Capability negotiation errors completed: shared `NegotiationError` now covers unsupported codec/data-plane, version mismatch, timeout, and explicit rejection; server negotiation rejects clients with no compatible codec fallback and returns a readable failure; shared snapshots can carry `last_error`; Android and Desktop UI parsing now surfaces readable negotiation errors.
+- [x] TASK-V16-303 Rollback path continuous testing completed: protocol tests with `legacy_` prefix cover PCM16 payload round-trip, `legacy_las1` header parsing, and legacy hello to v2 ack compatibility; `scripts/validate_local.ps1` now runs `cargo test -p lan_audio_protocol -- legacy`.
+- [x] TASK-V16-401 QR connection entry completed: Desktop generates an SVG QR for `lan-audio://<ip>:<port>` via the `qrcode` crate and shows it while the service is running; Android adds `mobile_scanner` based scan entry points, parses the `lan-audio://` scheme, fills the target host, and starts playback automatically.
+- [x] TASK-V16-402 Android diagnostics support bundle completed: Android exports a zipped support bundle with `snapshot.json`, `device_info.json`, `recent_log.txt`, and `README.txt`, then opens the system share sheet from the advanced/settings panel.
+- [x] TASK-V16-403 Firewall guidance UX completed: Android and Desktop surface expandable, bilingual troubleshooting steps for `ConnectionRefused`, `Timeout`, and version/auth mismatch style connection failures.
+- [x] TASK-V16-404 Chinese documentation sync completed: `README.zh-CN.md` is aligned with the v1.5/v1.6 feature set, and `docs/protocol.md`, `docs/desktop_ui.md`, and `docs/todo.md` include Chinese summary blocks.
+- [x] TASK-V16-501 Release prep completed: version metadata and docs synchronized to `v1.6`; Android fixed release keystore signing is documented and wired for GitHub Actions/local packaging.
+
+### v1.6 Phase 1 Gate (`2026-05-09`)
+
+- [x] `flutter analyze` passed with no issues
+- [x] `flutter test` passed
+- [x] `android/gradlew.bat assembleDebug` passed
+- [x] Real-device debug install and foreground metric snapshot verification passed on `5391d451`; local debug install required full uninstall because the previously installed package used a different signing key and higher versionCode
+- [known_issue] Android power/background validation did not pass cleanly: Home/screen-off/battery-saver cycling can leave playback in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen recovered only after restarting the PC sender
+- [x] `docs/todo.md` updated with Phase 1 status
+
+### v1.6 Phase 2 Gate (`2026-05-09`)
+
+- [x] `cargo fmt --all -- --check` passed
+- [x] `cargo check` passed
+- [x] `cargo check -p lan_audio_desktop` passed
+- [x] `cargo test -p lan_audio_protocol -p lan_audio_server` passed
+- [x] Desktop rollback controls compile and the runtime-path config test verifies `legacy_las1 + pcm16` / `v2_header + opus` snapshot inputs
+- [x] Desktop support bundle export implemented with all required files
+- [x] `docs/todo.md` updated with Phase 2 status
+
+### v1.6 Phase 3 Gate (`2026-05-09`)
+
+- [known_issue] USB direct 验收（2026-05-09）:
+  - 连接建立：adb reverse established for `tcp:39991` and `tcp:39992`; app session did not complete
+  - 延迟 p95：N/A（no stable USB playback sample; WiFi balanced baseline remains 185ms）
+  - 10min 长稳：underrun=N/A, silence_fill=N/A
+  - 结论：known_issue（desktop USB transport and TCP data-plane hooks exist, but Android debug start/session reset is not robust enough for acceptance on `5391d451`）
+- [x] `NegotiationError` enum implemented with protocol/server tests
+- [x] Legacy rollback protocol tests added and wired into `scripts/validate_local.ps1`
+
+### v1.6 Phase 4 Gate (`2026-05-10`)
+
+- [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
+- [x] QR code end-to-end connection verified manually
+- [x] Android support bundle code path compiles locally; zip generation includes snapshot, device info, recent logcat, and README; share sheet path is wired but not manually shared per scope
+- [x] Firewall guidance covers ConnectionRefused and Timeout UI paths on Android and Desktop
+- [x] README.zh-CN.md aligned with README.md feature coverage; protocol, desktop UI, and todo docs have Chinese summaries
+- [x] Android release signing fixed to use a stable keystore so APK upgrades can overwrite install without uninstalling, as long as the keystore is retained
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -27,7 +89,7 @@
 ## v1.4 Release Gate
 
 - [human-override] TASK-V14-001 `v1.3.6` acceptance evidence recorded
-- [human-override] TASK-V14-002 main-path `windows_loopback + v2_header + opus` 30+ minute long-run passes
+- [x] TASK-V14-002 main-path `windows_loopback + v2_header + opus` latency probe completed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
 - [human-override] TASK-V14-003 USB validation recorded
 - [x] TASK-V14-010 MediaSession verified on `5391d451`
 - [x] TASK-V14-011 Android update check verified on `5391d451`
@@ -53,6 +115,21 @@
 - [x] `.hprof` and `tmp_test/` ignore rules recorded in root `.gitignore`
 - [x] Android and Windows update checker repository paths corrected to `MengBad/lan-audio`
 
+## v1.5 Forced Release (`2026-05-09`)
+
+- [x] Version metadata advanced to `1.5`
+- [human-override] Main-path long-run gate accepted by operator; latency probe is the replacement evidence
+- [x] Latency probe passed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
+- [x] Audio Console Dark UI redesign merged, including DM Sans + IBM Plex Mono typography
+- [x] Android MediaSession integration shipped
+- [x] Android and Windows update detection shipped
+- [x] Desktop diagnostics snapshot export shipped
+- [x] Android balanced buffering strategy shipped
+- [x] Mode-switch transient/concurrency recovery shipped
+- [x] Android toolchain upgraded to AGP 8.7.3 and Kotlin 2.1.0
+- [x] Local validation passed before release
+- [x] Release notes must include `human-override`, main path `windows_loopback + v2_header + opus`, rollback path `legacy_las1 + pcm16`, latency probe values, and UI redesign summary
+
 ## Completed In The v1.3 Cycle
 
 - [x] Domain-owned contracts moved into `crates/lan_audio_domain`
@@ -70,9 +147,9 @@
 - [x] Post-`v1.4` release-flow fix: Android release APK signing no longer uses the per-machine debug keystore; release builds now require a stable release keystore locally and in GitHub Actions.
 - [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
 - [x] Latency revalidation is systematized through `scripts/export_latency_probe.ps1`; it exports per-mode `low_latency / balanced / high_quality` latency proxy results to `artifacts/latency/latency_probe_latest.json`.
-- [ ] Refactor Android runtime internals without breaking the shared snapshot contract
-- [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
-- [ ] Improve post-release diagnostics and operator-facing troubleshooting flow
+- [known_issue] Refactor Android runtime internals without breaking the shared snapshot contract (v1.6 partial extraction landed; full controller split still pending)
+- [x] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
+- [x] Improve post-release diagnostics and operator-facing troubleshooting flow
 - [ ] Keep rollback path exercised as mainline changes land
 
 ## Protocol / Transport Follow-Up
@@ -84,32 +161,33 @@
 
 ## Android Follow-Up
 
-- [ ] Continue real-device validation under background and power-saving conditions
+- [known_issue] Continue real-device validation under background and power-saving conditions (2026-05-09 `5391d451`: foreground metrics passed; background/power cycling can stall at `buffering` with `rx_frames_per_sec=0.0`)
 - [ ] Improve buffering and underrun diagnostics
-- [ ] Reduce runtime complexity in playback/session coordination
+- [known_issue] Reduce runtime complexity in playback/session coordination (policy/pacing/guard/metrics helpers extracted; controller still needs deeper split)
 - [ ] Preserve Oboe callback path as the maintained playback direction
 - [x] MediaSession integration (`PlaybackState`, metadata, `MediaStyle`, `PLAY_PAUSE`, `STOP`)
 - [x] Android update detection (silent startup check + manual settings entry + SnackBar jump to Release page)
 
 ## Desktop Follow-Up
 
-- [ ] Simplify service lifecycle ownership
-- [x] Improve diagnostics export (`dist/diagnostics/` desktop JSON snapshot export)
+- [x] Simplify service lifecycle ownership
+- [x] Improve diagnostics export (`dist/diagnostics/` desktop support bundle plus legacy JSON snapshot export)
 - [x] Structured latency probe/export (`artifacts/latency/` JSON artifact from diagnostics snapshots)
 - [x] Windows update detection (silent startup check + tray manual check + in-window banner)
-- [ ] Improve rollback / safe-mode discoverability
-- [ ] Keep desktop state rendering contract-driven
+- [x] Improve rollback / safe-mode discoverability
+- [x] Keep desktop state rendering contract-driven
 
 ## Later Backlog
 
-- [ ] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off
+- [x] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off: low_latency 64ms / balanced 185ms / high_quality 505ms
 - [ ] Android runtime refactor without breaking the shared snapshot contract
-- [ ] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
-- [ ] QR-based connection entry
+- [x] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
+- [x] `legacy_las1 + pcm16` is a permanent maintenance path and must not be removed; every local validation run includes the `cargo test -p lan_audio_protocol -- legacy` guard.
+- [x] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
-- [ ] Firewall guidance UX
-- [x] Structured support bundle export (desktop diagnostics snapshot first; Android-side bundle still pending)
+- [x] Firewall guidance UX
+- [x] Structured support bundle export (desktop and Android support bundles)
 
 ## v1.4 FORCE_RELEASE Notes
 
