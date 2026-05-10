@@ -4,13 +4,14 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import androidx.core.content.FileProvider
+import android.os.Build
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -18,11 +19,10 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import android.util.Log
-import org.json.JSONObject
-import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -31,11 +31,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : FlutterActivity() {
     private companion object {
         const val PREFS_NAME = "lan_audio_prefs"
         const val KEY_FIRST_USE_HINT_CONSUMED = "first_use_hint_consumed"
+        const val KEY_CONNECT_HISTORY_JSON = "connect_history_json"
+        const val NSD_SERVICE_TYPE = "_lan-audio._tcp"
         val ACTIVE_PLAYBACK_STATES = setOf(
             "handshaking",
             "negotiated",
@@ -62,10 +65,15 @@ class MainActivity : FlutterActivity() {
     @Volatile private var writerStoppedSignal: CountDownLatch? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    @Volatile private var pendingPowerGuideRequest: Boolean = false
+    private var nsdManager: NsdManager? = null
+    private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
+    private val nsdServices = ConcurrentHashMap<String, Map<String, Any>>()
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(logTag, "onCreate action=${intent?.action} extras=${intent?.extras?.keySet()?.joinToString(",") ?: ""}")
+        consumePowerGuideIntent(intent)
         logLifecycle("onCreate")
         val handledDebug = handleDebugCommand(intent)
         if (!handledDebug) {
@@ -83,6 +91,7 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         Log.i(logTag, "onNewIntent action=${intent.action} extras=${intent.extras?.keySet()?.joinToString(",") ?: ""}")
+        consumePowerGuideIntent(intent)
         logLifecycle("onNewIntent")
         handleDebugCommand(intent)
     }
@@ -104,6 +113,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         logLifecycle("onDestroy no service stop issued from activity lifecycle")
+        stopNsdDiscovery()
         uiScope.coroutineContext.cancel()
         super.onDestroy()
     }
@@ -139,6 +149,33 @@ class MainActivity : FlutterActivity() {
                             preferences().edit().putBoolean(KEY_FIRST_USE_HINT_CONSUMED, consumed).apply()
                             result.success(null)
                         }
+                        "getDeviceManufacturer" -> {
+                            result.success(Build.MANUFACTURER ?: "")
+                        }
+                        "getConnectHistory" -> {
+                            result.success(preferences().getString(KEY_CONNECT_HISTORY_JSON, "") ?: "")
+                        }
+                        "setConnectHistory" -> {
+                            val raw = (call.arguments as? Map<*, *>)?.get("json") as? String ?: "[]"
+                            preferences().edit().putString(KEY_CONNECT_HISTORY_JSON, raw).apply()
+                            result.success(null)
+                        }
+                        "consumePowerGuideRequest" -> {
+                            val requested = pendingPowerGuideRequest
+                            pendingPowerGuideRequest = false
+                            result.success(requested)
+                        }
+                        "startNsdDiscovery" -> {
+                            startNsdDiscovery()
+                            result.success(null)
+                        }
+                        "stopNsdDiscovery" -> {
+                            stopNsdDiscovery()
+                            result.success(null)
+                        }
+                        "getNsdDiscoveredServices" -> {
+                            result.success(nsdServices.values.toList())
+                        }
                         "checkForAppUpdate" -> {
                             val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                             val delayMs = (args["delayMs"] as? Number)?.toLong() ?: 0L
@@ -146,7 +183,10 @@ class MainActivity : FlutterActivity() {
                                 if (delayMs > 0) {
                                     delay(delayMs)
                                 }
-                                val update = UpdateChecker.checkForUpdate(currentVersionName())
+                                val currentVersion = currentVersionName()
+                                val update = withContext(Dispatchers.IO) {
+                                    UpdateChecker.checkForUpdate(currentVersion)
+                                }
                                 if (update == null) {
                                     result.success(null)
                                 } else {
@@ -172,10 +212,6 @@ class MainActivity : FlutterActivity() {
                                 // silent ignore
                             }
                             result.success(null)
-                        }
-                        "exportAndroidSupportBundle" -> {
-                            val path = exportAndroidSupportBundle()
-                            result.success(path)
                         }
                         else -> result.notImplemented()
                     }
@@ -259,6 +295,107 @@ class MainActivity : FlutterActivity() {
     private fun preferences() =
         applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    private fun startNsdDiscovery() {
+        stopNsdDiscovery()
+        nsdServices.clear()
+        val manager = applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
+        nsdManager = manager
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {
+                Log.i(logTag, "NSD discovery started type=$serviceType")
+            }
+
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (!serviceInfo.serviceType.contains(NSD_SERVICE_TYPE)) {
+                    return
+                }
+                resolveNsdService(serviceInfo)
+            }
+
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                val key = serviceInfo.serviceName
+                nsdServices.remove(key)
+                Log.i(logTag, "NSD service lost ${serviceInfo.serviceName}")
+            }
+
+            override fun onDiscoveryStopped(serviceType: String) {
+                Log.i(logTag, "NSD discovery stopped type=$serviceType")
+            }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(logTag, "NSD start failed type=$serviceType error=$errorCode")
+                stopNsdDiscovery()
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(logTag, "NSD stop failed type=$serviceType error=$errorCode")
+            }
+        }
+        nsdDiscoveryListener = listener
+        manager.discoverServices(NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+    }
+
+    private fun stopNsdDiscovery() {
+        val manager = nsdManager
+        val listener = nsdDiscoveryListener
+        nsdDiscoveryListener = null
+        if (manager != null && listener != null) {
+            try {
+                manager.stopServiceDiscovery(listener)
+            } catch (_: Throwable) {
+                // Discovery may already be stopped by the platform.
+            }
+        }
+    }
+
+    private fun resolveNsdService(serviceInfo: NsdServiceInfo) {
+        val manager = nsdManager ?: return
+        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                Log.w(logTag, "NSD resolve failed name=${info.serviceName} error=$errorCode")
+            }
+
+            override fun onServiceResolved(resolved: NsdServiceInfo) {
+                val host = resolved.host ?: return
+                val ipv4 = ipv4Address(host) ?: return
+                val port = resolved.port.takeIf { it > 0 } ?: 39991
+                val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    resolved.attributes["version"]?.toString(Charsets.UTF_8) ?: ""
+                } else {
+                    ""
+                }
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    resolved.attributes["mode"]?.toString(Charsets.UTF_8) ?: ""
+                } else {
+                    ""
+                }
+                val key = "${ipv4.hostAddress}:$port"
+                nsdServices[key] = mapOf(
+                    "serverId" to "mdns-$key",
+                    "serverName" to resolved.serviceName,
+                    "host" to (ipv4.hostAddress ?: ""),
+                    "wsPort" to port,
+                    "udpPort" to 39992,
+                    "version" to version,
+                    "mode" to mode,
+                )
+                Log.i(logTag, "NSD service resolved ${resolved.serviceName} ${ipv4.hostAddress}:$port")
+            }
+        })
+    }
+
+    private fun ipv4Address(address: InetAddress): Inet4Address? =
+        when (address) {
+            is Inet4Address -> address
+            else -> null
+        }
+
+    private fun consumePowerGuideIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(PlaybackActions.EXTRA_OPEN_POWER_GUIDE, false) == true) {
+            pendingPowerGuideRequest = true
+        }
+    }
+
     private fun currentVersionName(): String {
         return try {
             val packageInfo = packageManager.getPackageInfo(packageName, 0)
@@ -266,73 +403,6 @@ class MainActivity : FlutterActivity() {
         } catch (_: PackageManager.NameNotFoundException) {
             "0.0.0"
         }
-    }
-
-    private fun exportAndroidSupportBundle(): String {
-        val exportedAt = System.currentTimeMillis()
-        val outputDir = File(cacheDir, "support-bundles")
-        outputDir.mkdirs()
-        val bundle = File(outputDir, "android-support-bundle-$exportedAt.zip")
-        val snapshot = PlaybackEventBus.snapshotMap()
-        ZipOutputStream(bundle.outputStream().buffered()).use { zip ->
-            zip.writestr("snapshot.json", JSONObject(snapshot).toString(2))
-            zip.writestr("device_info.json", JSONObject(deviceInfo()).toString(2))
-            zip.writestr("recent_log.txt", recentLanAudioLog())
-            zip.writestr(
-                "README.txt",
-                "LAN Audio Android support bundle\n\nAttach this zip when filing an issue. It contains the current playback snapshot, device information, and recent lan_audio logcat lines.\n",
-            )
-        }
-        val uri = FileProvider.getUriForFile(
-            this,
-            "$packageName.fileprovider",
-            bundle,
-        )
-        val share = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        startActivity(Intent.createChooser(share, "Share LAN Audio diagnostics"))
-        return bundle.absolutePath
-    }
-
-    private fun deviceInfo(): Map<String, Any?> {
-        return mapOf(
-            "android_version" to Build.VERSION.RELEASE,
-            "sdk_int" to Build.VERSION.SDK_INT,
-            "manufacturer" to Build.MANUFACTURER,
-            "model" to Build.MODEL,
-            "device" to Build.DEVICE,
-            "abis" to Build.SUPPORTED_ABIS.toList(),
-            "audio_mode" to (getSystemService(Context.AUDIO_SERVICE) as AudioManager).mode,
-            "app_version" to currentVersionName(),
-        )
-    }
-
-    private fun recentLanAudioLog(): String {
-        return try {
-            val process = ProcessBuilder(
-                "logcat",
-                "-d",
-                "-t",
-                "200",
-                "-s",
-                "lan_audio_activity",
-                "lan_audio_service",
-                "lan_audio_session",
-                "lan_audio_debug",
-            ).redirectErrorStream(true).start()
-            process.inputStream.bufferedReader().use { it.readText() }
-        } catch (t: Throwable) {
-            "logcat unavailable: ${t.message}\n"
-        }
-    }
-
-    private fun ZipOutputStream.writestr(name: String, content: String) {
-        putNextEntry(ZipEntry(name))
-        write(content.toByteArray(Charsets.UTF_8))
-        closeEntry()
     }
 
     private fun logLifecycle(name: String) {
@@ -426,6 +496,30 @@ class MainActivity : FlutterActivity() {
                 }
                 Log.i(logTag, "MethodChannel setAudioMode received mode=$mode reason=$reason")
                 PlaybackForegroundService.setAudioMode(applicationContext, mode, reason)
+                result.success(null)
+            }
+
+            "setEqSettings" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val settings = PlaybackEqSettings(
+                    enabled = args["enabled"] == true,
+                    lowDb = (args["lowDb"] as? Number)?.toInt() ?: 0,
+                    midDb = (args["midDb"] as? Number)?.toInt() ?: 0,
+                    highDb = (args["highDb"] as? Number)?.toInt() ?: 0,
+                ).clamped()
+                Log.i(
+                    logTag,
+                    "MethodChannel setEqSettings received enabled=${settings.enabled} low=${settings.lowDb} mid=${settings.midDb} high=${settings.highDb}",
+                )
+                PlaybackForegroundService.setEqSettings(applicationContext, settings)
+                result.success(null)
+            }
+
+            "setLoudnessNormalization" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val enabled = args["enabled"] == true
+                Log.i(logTag, "MethodChannel setLoudnessNormalization received enabled=$enabled")
+                PlaybackForegroundService.setLoudnessNormalization(applicationContext, enabled)
                 result.success(null)
             }
 

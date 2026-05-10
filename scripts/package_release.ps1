@@ -8,21 +8,6 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Test-ForceReleaseMode {
-    $value = [Environment]::GetEnvironmentVariable('FORCE_RELEASE')
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $false
-    }
-
-    switch ($value.Trim().ToLowerInvariant()) {
-        '1' { return $true }
-        'true' { return $true }
-        'yes' { return $true }
-        'on' { return $true }
-        default { return $false }
-    }
-}
-
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -173,57 +158,6 @@ function Update-ReleaseGateForArtifacts {
     Set-Content -LiteralPath $GatePath -Value $gateJson -Encoding utf8
 }
 
-function Assert-AndroidReleaseSigning {
-    param(
-        [Parameter(Mandatory = $true)][string]$AndroidProject
-    )
-
-    $localPropsPath = Join-Path $AndroidProject 'android/local.properties'
-    if (-not (Test-Path $localPropsPath)) {
-        throw "Android release signing requires android/local.properties."
-    }
-
-    $props = @{}
-    Get-Content -LiteralPath $localPropsPath | ForEach-Object {
-        $line = $_.Trim()
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
-            return
-        }
-        $idx = $line.IndexOf('=')
-        if ($idx -le 0) {
-            return
-        }
-        $props[$line.Substring(0, $idx)] = $line.Substring($idx + 1)
-    }
-
-    foreach ($key in @(
-        'lanAudio.releaseStoreFile',
-        'lanAudio.releaseStorePassword',
-        'lanAudio.releaseKeyAlias',
-        'lanAudio.releaseKeyPassword'
-    )) {
-        if (-not $props.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$props[$key])) {
-            throw "Android release signing is incomplete: missing $key in apps/android_flutter/android/local.properties"
-        }
-    }
-
-    $storeFile = [string]$props['lanAudio.releaseStoreFile']
-    if ([System.IO.Path]::IsPathRooted($storeFile)) {
-        $storePath = $storeFile
-    } else {
-        $storePath = Join-Path (Join-Path $AndroidProject 'android/app') $storeFile
-    }
-    if (-not (Test-Path $storePath)) {
-        throw "Android release keystore not found: $storePath"
-    }
-}
-
-function Warn-AndroidReleaseSigningEnvironment {
-    if (-not $env:LAN_AUDIO_KEYSTORE_PASS) {
-        Write-Warning "LAN_AUDIO_AUDIO_KEYSTORE_PASS not set, release APK may use debug signing"
-    }
-}
-
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $version = (Get-Content -Raw (Join-Path $repoRoot 'VERSION')).Trim()
 if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
@@ -231,12 +165,7 @@ if ($version -notmatch '^\d+\.\d+(?:\.\d+)?$') {
 }
 
 $gatePath = Join-Path $repoRoot 'artifacts/release/acceptance_gate.json'
-$forceRelease = Test-ForceReleaseMode
-if ($forceRelease) {
-    Write-Warning 'FORCE_RELEASE=true detected; packaging gate enforcement is bypassed.'
-} else {
-    Assert-PackagingGate -GatePath $gatePath
-}
+Assert-PackagingGate -GatePath $gatePath
 
 $distRoot = Join-Path $repoRoot 'dist/release'
 $androidDist = Join-Path $distRoot 'android'
@@ -249,13 +178,6 @@ try {
     }
     New-Item -ItemType Directory -Force $androidDist, $windowsDist | Out-Null
 
-    $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
-    if (-not (Test-Path $localPropsPath)) {
-        Invoke-Step -Name 'Prepare android/local.properties' -Action {
-            powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/write_local_properties.ps1')
-        }
-    }
-
     if (-not $SkipValidate) {
         Invoke-Step -Name 'Run local validation' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/validate_local.ps1')
@@ -263,7 +185,6 @@ try {
     }
 
     if (-not $NoAndroid) {
-        Warn-AndroidReleaseSigningEnvironment
         Invoke-Step -Name 'Build Android release APKs (split per ABI)' -Action {
             $sourceProject = Join-Path $repoRoot 'apps/android_flutter'
             $stagedProject = Join-Path $env:TEMP "lan_audio_android_release_$PID"
@@ -306,7 +227,7 @@ try {
         $apkRoot = Join-Path $repoRoot 'apps/android_flutter/build/app/outputs/flutter-apk'
         Get-ChildItem -LiteralPath $apkRoot -Filter '*-release.apk' | ForEach-Object {
             if ($_.Name -notmatch '^app-(.+)-release\.apk$') {
-                throw "Unexpected Android APK name: $($_.Name)"
+                throw "Unexpected APK name: $($_.Name)"
             }
             $abi = $Matches[1]
             $target = Join-Path $androidDist ("lan-audio-android-$abi-v$version.apk")
@@ -325,13 +246,6 @@ try {
     }
 
     Update-ReleaseGateForArtifacts -GatePath $gatePath -AndroidDist $androidDist -WindowsDist $windowsDist
-    if ($forceRelease) {
-        $gate = Get-ReleaseGate -GatePath $gatePath
-        $gate | Add-Member -NotePropertyName force_release_override -NotePropertyValue $true -Force
-        $gate | Add-Member -NotePropertyName force_release_note -NotePropertyValue 'Released under FORCE_RELEASE=true; release gate checklist items may be marked human-override.' -Force
-        $gateJson = $gate | ConvertTo-Json -Depth 8
-        Set-Content -LiteralPath $gatePath -Value $gateJson -Encoding utf8
-    }
 
     $checksumsPath = Join-Path $distRoot 'SHA256SUMS.txt'
     Get-ChildItem -LiteralPath $distRoot -Recurse -File |

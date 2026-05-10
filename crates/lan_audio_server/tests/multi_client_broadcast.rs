@@ -60,14 +60,10 @@ async fn multi_client_broadcast_handles_disconnect_and_rejects_over_limit() {
 
     let mut _c1r = connect_client(cfg.ws_bind.port(), "c1r").await;
     let mut _c4 = connect_client(cfg.ws_bind.port(), "c4").await;
-    let mut _c5 = connect_client(cfg.ws_bind.port(), "c5").await;
-    let mut _c6 = connect_client(cfg.ws_bind.port(), "c6").await;
-    let mut _c7 = connect_client(cfg.ws_bind.port(), "c7").await;
-    let mut _c8 = connect_client(cfg.ws_bind.port(), "c8").await;
 
-    let mut c9 = connect_raw_client(cfg.ws_bind.port(), "c9").await;
-    let ack = wait_for_hello_ack(&mut c9).await;
-    assert!(!ack.accepted, "the 9th client must be rejected");
+    let mut c5 = connect_raw_client(cfg.ws_bind.port(), "c5").await;
+    let ack = wait_for_hello_ack(&mut c5).await;
+    assert!(!ack.accepted, "the 5th client must be rejected");
     assert_eq!(ack.message, "too_many_clients");
 
     service.stop();

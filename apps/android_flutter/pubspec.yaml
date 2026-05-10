@@ -1,7 +1,8 @@
 name: lan_audio_android_mvp
 description: LAN Audio Android debug client MVP.
 publish_to: "none"
-version: 1.6.0+2010600
+version: 1.7.0+3070
+
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
@@ -10,7 +11,6 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  mobile_scanner: 5.2.3
 
 dev_dependencies:
   flutter_test:
@@ -19,16 +19,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  fonts:
-    - family: DM Sans
-      fonts:
-        - asset: assets/fonts/dm_sans/DMSans-Variable.ttf
-          weight: 400
-        - asset: assets/fonts/dm_sans/DMSans-Variable.ttf
-          weight: 500
-    - family: IBM Plex Mono
-      fonts:
-        - asset: assets/fonts/ibm_plex_mono/IBMPlexMono-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/ibm_plex_mono/IBMPlexMono-Medium.ttf
-          weight: 500

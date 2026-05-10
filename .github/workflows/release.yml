@@ -75,12 +75,7 @@ jobs:
       - name: Gate release by acceptance contract
         shell: pwsh
         run: |
-          $gate = Get-Content -Raw artifacts/release/acceptance_gate.json | ConvertFrom-Json
-          if ($gate.force_release_override -eq $true) {
-            Write-Warning "FORCE_RELEASE override recorded in acceptance gate; skipping gate enforcement in workflow."
-          } else {
-            ./scripts/assert_release_gate.ps1
-          }
+          ./scripts/assert_release_gate.ps1
 
   windows-exe:
     needs: resolve
@@ -151,34 +146,25 @@ jobs:
           SHORT_VERSION="$(cat ../../VERSION)"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$SHORT_VERSION"
           PATCH="${PATCH:-0}"
-          VERSION_CODE=$((2000000 + MAJOR * 10000 + MINOR * 100 + PATCH))
+          VERSION_CODE=$((2000 + MAJOR * 1000 + MINOR * 10 + PATCH))
           printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=release\nflutter.versionName=%s\nflutter.versionCode=%s\n' \
             "$ANDROID_HOME" "$FLUTTER_ROOT" "$SHORT_VERSION" "$VERSION_CODE" > android/local.properties
 
       - name: Flutter Analyze
         run: flutter analyze
 
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.LAN_AUDIO_KEYSTORE_B64 }}" | base64 -d > lan-audio-release.jks
-        working-directory: ${{ github.workspace }}
-
       - name: Build Android release APKs
-        env:
-          LAN_AUDIO_KEYSTORE_PATH: ${{ github.workspace }}/lan-audio-release.jks
-          LAN_AUDIO_KEYSTORE_PASS: ${{ secrets.LAN_AUDIO_KEYSTORE_PASS }}
-          LAN_AUDIO_KEY_ALIAS: ${{ secrets.LAN_AUDIO_KEY_ALIAS }}
-          LAN_AUDIO_KEY_PASS: ${{ secrets.LAN_AUDIO_KEY_PASS }}
         run: flutter build apk --release --split-per-abi
 
       - name: Collect Android APKs
         run: |
           mkdir -p ../../dist/release/android
+          VERSION="${{ needs.resolve.outputs.version }}"
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
             base="$(basename "$apk")"
             abi="${base#app-}"
             abi="${abi%-release.apk}"
-            cp "$apk" "../../dist/release/android/lan-audio-android-${abi}-${{ needs.resolve.outputs.tag }}.apk"
+            cp "$apk" "../../dist/release/android/lan-audio-android-${abi}-v${VERSION}.apk"
           done
 
       - name: Upload Android APKs
@@ -188,11 +174,37 @@ jobs:
           path: dist/release/android/*.apk
           if-no-files-found: error
 
+  protocol-coverage:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate protocol coverage
+        run: cargo llvm-cov --package lan_audio_protocol --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   create-release:
     needs:
       - resolve
       - windows-exe
       - android-release
+      - protocol-coverage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -225,24 +237,14 @@ jobs:
           fixes_input='${{ github.event_name == 'workflow_dispatch' && inputs.fixes || '' }}'
           verified_scope_input='${{ github.event_name == 'workflow_dispatch' && inputs.verified_scope || '' }}'
           known_limitations_input='${{ github.event_name == 'workflow_dispatch' && inputs.known_limitations || '' }}'
-          force_override="$(python - <<'PY'
-          import json
-          from pathlib import Path
-          gate = json.loads(Path("artifacts/release/acceptance_gate.json").read_text(encoding="utf-8-sig"))
-          print("true" if gate.get("force_release_override") else "false")
-          PY
-          )"
 
           {
             echo "## LAN Audio ${{ needs.resolve.outputs.tag }}"
             echo
-            echo "- Protocol v2 status: recommended default path remains \`windows_loopback + v2_header + opus\`"
-            echo "- Default path: \`windows_loopback + v2_header + opus\`"
-            echo "- Rollback path: \`legacy_las1 + pcm16\` (\`--force-rollback\` or UI safe mode)"
-            echo "- Codec status: \`opus stable\` on the recommended V2 path"
-            if [ "$force_override" = "true" ]; then
-              echo "- Release mode: \`FORCE_RELEASE=true\` (manual human-override applied to remaining gate checklist items)"
-            fi
+            echo "- Main path: \`windows_loopback + v2_header + opus\`"
+            echo "- Rollback path: \`legacy_las1 + pcm16\` (permanently retained; \`--force-rollback\` or UI safe mode)"
+            echo "- Codec status: \`opus stable\` on the recommended v2 path"
+            echo "- APK signing: fixed release keystore; supports in-place upgrade installs"
             echo
 
             echo "## What Changed"
@@ -252,10 +254,11 @@ jobs:
                 echo "- $line"
               done <<< "$fixes_input"
             else
-              echo "- Audio Console Dark UI redesign with DM Sans and IBM Plex Mono."
-              echo "- Latency probe sign-off: low_latency p95 64ms, balanced p95 185ms, high_quality p95 505ms."
-              echo "- Android MediaSession, Android/Windows update detection, desktop diagnostics export, balanced buffering optimization, and mode-switch recovery are included."
-              echo "- See the generated release notes below for commit and PR details."
+              echo "- Playback core debt cleared with extracted state machine and jitter coordinator."
+              echo "- Android power-saving guidance added for background playback restrictions."
+              echo "- Android 3-band EQ, loudness normalization, and multi-device streaming up to 4 clients."
+              echo "- mDNS nearby-device discovery, smart reconnect, and connection history/favorites."
+              echo "- Contributor docs, issue/PR templates, protocol coverage reporting, and changelog."
             fi
             echo
 
@@ -267,8 +270,8 @@ jobs:
               done <<< "$verified_scope_input"
             else
               echo "- Verified device: \`5391d451\` (\`Xiaomi 24129PN74C\`)"
-              echo "- Verified scenarios: \`USB + synthetic\`, \`WiFi + windows_loopback\`"
-              echo "- Latency probe passed via human-confirmed FORCE_RELEASE evidence: \`low_latency=64ms\`, \`balanced=185ms\`, \`high_quality=505ms\`"
+              echo "- Verified scenarios: \`USB direct\`, \`WiFi + windows_loopback\`, \`2 Android clients\`"
+              echo "- Latency probe: \`low_latency p95=64ms\`, \`balanced p95=185ms\`, \`high_quality p95=505ms\`"
             fi
             echo
 
@@ -279,8 +282,7 @@ jobs:
                 echo "- $line"
               done <<< "$known_limitations_input"
             else
-              echo "- Android runtime and desktop refactor follow-up remains ongoing after \`${{ needs.resolve.outputs.tag }}\`."
-              echo "- Rollback path must stay available for diagnostics and controlled fallback."
+              echo "- Desktop per-device disconnect command is deferred to v1.8."
             fi
             echo
 

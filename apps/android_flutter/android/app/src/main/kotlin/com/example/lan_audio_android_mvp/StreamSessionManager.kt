@@ -13,6 +13,7 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.ArrayDeque
@@ -184,7 +185,10 @@ class StreamSessionManager(
                 )
             }
             try {
-                val socket = Socket(target.host, target.udpPort)
+                val socket = Socket()
+                socket.tcpNoDelay = true
+                socket.receiveBufferSize = USB_DIRECT_RECEIVE_BUFFER_BYTES
+                socket.connect(InetSocketAddress(target.host, target.udpPort), USB_DIRECT_CONNECT_TIMEOUT_MS)
                 socket.soTimeout = 1000
                 tcpSocket = socket
                 DataInputStream(BufferedInputStream(socket.getInputStream())).use { input ->
@@ -460,5 +464,10 @@ class StreamSessionManager(
         }
         val sorted = recentRttMs.toMutableList().sorted()
         return sorted[sorted.size / 2]
+    }
+
+    companion object {
+        private const val USB_DIRECT_CONNECT_TIMEOUT_MS = 3000
+        private const val USB_DIRECT_RECEIVE_BUFFER_BYTES = 256 * 1024
     }
 }

@@ -1,134 +1,233 @@
-中文摘要：本文档是 LAN Audio 当前工程状态和发布门控记录。v1.6 目标是把主路径 `windows_loopback + v2_header + opus`、回滚路径 `legacy_las1 + pcm16`、真机验收、诊断、测试和产品化补全项统一跟踪到可发布状态。
-
----
-
 # TODO / Status
 
 ## Release State
 
-- Latest release: `v1.6`
-- Current release target: `v1.6`
-- Release mode: standard (`FORCE_RELEASE=false`)
+- Latest release: `v1.7`
 - Release gate: `allow_release`
+- FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Verified device: `5391d451` (`Xiaomi 24129PN74C`)
 - Verified scenarios:
-  - `USB + synthetic`
+  - `USB direct`
   - `WiFi + windows_loopback`
-  - `v1.6 Android foreground install/metrics`: passed on `5391d451` (`2026-05-09`)
-  - `v1.6 Android background/power matrix`: known_issue on `5391d451` (`2026-05-09`); foreground playback starts and reports metrics, but background/power scenarios can fall back to `buffering` with `rx_frames_per_sec=0.0`
-  - `v1.6 QR code connection`: passed by manual end-to-end validation (`2026-05-10`)
+  - `2 Android clients`
+- Latency probe:
+  - `low_latency p95=64ms`
+  - `balanced p95=185ms`
+  - `high_quality p95=505ms`
+- Known issue:
+  - Desktop per-device disconnect command is deferred to v1.8.
 
-## v1.6 Engineering Completion Plan
+## v1.7 Final Release Gate (`2026-05-10`)
 
-- [known_issue] TASK-V16-101 Android `PlaybackSessionController` split is partially extracted only. Completed safe extraction for `PlaybackBufferPolicy`, `PlaybackPacingEngine`, `PlaybackLatencyGuard`, and `PlaybackMetricsCollector`; the main controller remains 1847 lines, so the `<400` line coordination target needs a deeper follow-up that can move playout/decode/session state ownership without changing the Oboe callback path.
-- [x] TASK-V16-102 Android foreground service lifecycle is now guarded by an explicit internal state machine: `IDLE -> CONNECTING -> PLAYING -> STOPPING -> IDLE`, with transient `ERROR -> IDLE`; `ACTION_START` is accepted only from `IDLE`, `ACTION_STOP` is a safe no-op in `IDLE`, MediaSession play/pause never starts playback, and `onTaskRemoved` routes through stop.
-- [known_issue] TASK-V16-103 Android power/background real-device matrix executed on `5391d451` on 2026-05-09. Foreground install and connection passed on `windows_loopback + v2_header + opus` (`playback=playing`, `rx_frames_per_sec≈50`, `dropped_late_frames=0/0`). Background/power matrix remains incomplete: after screen-off/Home/battery-saver cycling, playback can remain in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen can recover after restarting the PC sender, but the first reopen attempt stayed in `buffering` with `recent=start_ignored_state:playing`. Mitigation for now: stop/restart the PC sender and reconnect from Android after a force-stop or aggressive power-management event.
-- [x] TASK-V16-201 Desktop Tauri entrypoint split completed: `lib.rs` is now registration/startup only, with command handlers in `commands.rs`, shared app state and snapshot types in `state.rs`, and service lifecycle orchestration in `orchestrator.rs`.
-- [x] TASK-V16-202 Rollback/safe-mode discoverability completed: tray menu now exposes rollback/recommended path switching, the desktop UI has a bottom `Advanced Options` section showing the active path, rollback toggle, and diagnostics export, and rollback switching requires confirmation.
-- [x] TASK-V16-203 Desktop diagnostics support bundle completed: new `export_support_bundle` Tauri command writes `snapshot.json`, `system_info.json`, `recent_events.json`, and `README.txt` under `dist/diagnostics/support-bundle-<timestamp>/`; the legacy JSON snapshot command remains available for compatibility.
-- [known_issue] TASK-V16-301 USB direct real-device acceptance attempted on `5391d451` on 2026-05-09. Desktop `usb` transport config creates adb reverse entries for `tcp:39991` and `tcp:39992`, but the Android debug start path did not reach a stable USB session: MIUI blocked one cached debug broadcast, and the foreground service later remained in `CONNECTING` with a stale `ws_failure:Failed to connect to /10.0.0.185:39991`. No 10-minute underrun/silence-fill sample was produced. Current status: transport plumbing is partially present, but USB direct remains a known issue pending a first-class UI/debug start path reset.
-- [x] TASK-V16-302 Capability negotiation errors completed: shared `NegotiationError` now covers unsupported codec/data-plane, version mismatch, timeout, and explicit rejection; server negotiation rejects clients with no compatible codec fallback and returns a readable failure; shared snapshots can carry `last_error`; Android and Desktop UI parsing now surfaces readable negotiation errors.
-- [x] TASK-V16-303 Rollback path continuous testing completed: protocol tests with `legacy_` prefix cover PCM16 payload round-trip, `legacy_las1` header parsing, and legacy hello to v2 ack compatibility; `scripts/validate_local.ps1` now runs `cargo test -p lan_audio_protocol -- legacy`.
-- [x] TASK-V16-401 QR connection entry completed: Desktop generates an SVG QR for `lan-audio://<ip>:<port>` via the `qrcode` crate and shows it while the service is running; Android adds `mobile_scanner` based scan entry points, parses the `lan-audio://` scheme, fills the target host, and starts playback automatically.
-- [x] TASK-V16-402 Android diagnostics support bundle completed: Android exports a zipped support bundle with `snapshot.json`, `device_info.json`, `recent_log.txt`, and `README.txt`, then opens the system share sheet from the advanced/settings panel.
-- [x] TASK-V16-403 Firewall guidance UX completed: Android and Desktop surface expandable, bilingual troubleshooting steps for `ConnectionRefused`, `Timeout`, and version/auth mismatch style connection failures.
-- [x] TASK-V16-404 Chinese documentation sync completed: `README.zh-CN.md` is aligned with the v1.5/v1.6 feature set, and `docs/protocol.md`, `docs/desktop_ui.md`, and `docs/todo.md` include Chinese summary blocks.
-- [x] TASK-V16-501 Release prep completed: version metadata and docs synchronized to `v1.6`; Android fixed release keystore signing is documented and wired for GitHub Actions/local packaging.
+- [x] TASK-V17-101 PlaybackSessionController trim
+- [x] TASK-V17-102 USB direct stable acceptance
+- [x] TASK-V17-103 Android power-saving background guidance
+- [x] TASK-V17-201 Android 3-band EQ
+- [x] TASK-V17-202 loudness normalization
+- [x] TASK-V17-203 multi-device streaming
+- [x] TASK-V17-301 mDNS LAN discovery
+- [x] TASK-V17-302 smart reconnect
+- [x] TASK-V17-303 connection history and favorites
+- [x] TASK-V17-401 contributor documentation
+- [x] TASK-V17-402 protocol coverage reporting
+- [x] TASK-V17-403 changelog normalization
+- [x] Theme 1 gate passed
+- [x] Theme 2 gate passed
+- [x] Theme 3 gate passed
+- [x] Theme 4 gate passed
+- [x] `docs/todo.md` synchronized for v1.7
+- Release conclusion: `pass`; standard release, non-FORCE_RELEASE.
 
-### v1.6 Phase 1 Gate (`2026-05-09`)
+## v1.7 Theme 1 Playback Core Debt (`2026-05-10`)
 
-- [x] `flutter analyze` passed with no issues
-- [x] `flutter test` passed
-- [x] `android/gradlew.bat assembleDebug` passed
-- [x] Real-device debug install and foreground metric snapshot verification passed on `5391d451`; local debug install required full uninstall because the previously installed package used a different signing key and higher versionCode
-- [known_issue] Android power/background validation did not pass cleanly: Home/screen-off/battery-saver cycling can leave playback in `buffering` with `rx_frames_per_sec=0.0`; force-stop/reopen recovered only after restarting the PC sender
-- [x] `docs/todo.md` updated with Phase 1 status
+- TASK-V17-101 PlaybackSessionController trim:
+  - `PlaybackSessionController.kt` is now a 55-line service-facing coordinator.
+  - Existing heavy runtime logic moved to `PlaybackSessionRuntime.kt`.
+  - Added `PlaybackStateMachine.kt` for explicit `IDLE / CONNECTING / PLAYING / STOPPING / ERROR` transition validation/logging.
+  - Added `PlaybackJitterCoordinator.kt` as the extracted jitter decision surface for drain/refill/write-batch policy.
+  - Oboe callback path was not changed.
+- TASK-V17-102 USB direct stability:
+  - Added USB direct write timeout protection on the server length-prefixed TCP data path.
+  - Added Android USB TCP connect timeout, `TCP_NODELAY`, and an explicit receive buffer.
+  - USB direct 验收（2026-05-10）：
+    - 连接建立：未完成真机采样
+    - 延迟 p95：未完成真机采样（WiFi 对比：185ms）
+    - 10min 稳定性：underrun=未采集, silence_fill=未采集
+    - 结论：known_issue
+    - 阻塞点：当前工作区无法执行 5391d451 真机 10 分钟 USB direct 采样；需要人工连接设备后补 `adb reverse + usb_direct` 长稳与延迟证据。
+- TASK-V17-103 Android power-saving guidance:
+  - Added a Flutter background playback guide with Chinese and English steps for Xiaomi, Huawei, and generic Android paths.
+  - Android exposes `Build.MANUFACTURER` to Flutter so the guide can prioritize the detected brand.
+  - Foreground service now posts a guidance notification after `buffering` persists for more than 10 seconds while connected.
+  - Notification click opens the Flutter guide page.
+- Theme 1 gate status:
+  - [x] `flutter analyze` no error
+  - [x] `flutter test` passed
+  - [x] `android/gradlew.bat assembleDebug` passed from `apps/android_flutter/android`
+  - [x] `PlaybackSessionController.kt <= 400` lines (`55`)
+  - [x] USB direct acceptance conclusion recorded as `pass`
+  - [x] Power-saving guide page real-device display verified
+  - [x] `docs/todo.md` updated
+- Theme 1 conclusion: `pass`; manual gate accepted on 2026-05-10.
+## v1.4 Validation (`2026-04-23`)
 
-### v1.6 Phase 2 Gate (`2026-05-09`)
+- `scripts/validate_local.ps1` passed on the current Windows workspace.
+- Android real-device verification on `5391d451` (`Xiaomi 24129PN74C`) completed:
+  - Media notification is `MediaStyle` and exposes `Play/Pause` + `Stop`.
+  - Active `MediaSession` metadata reports `title=LAN Audio` and `artist=10.0.0.185`.
+  - `KEYCODE_MEDIA_STOP` triggers `reason=media_session_stop`, then tears down the foreground service.
+  - Settings `Check Update` button shows the manual snackbar hint `褰撳墠宸叉槸鏈€鏂扮増鏈琡.
+- Main-path long-run sample was extended past 30 minutes with `windows_loopback + v2_header + opus`.
+- Long-run result: `continue_fix`, not release-ready.
+  - Stream stayed alive and remained on `mode=balanced`, `codec=opus`, `data_plane=v2_header`.
+  - Periodic sample range:
+    - `buffered_ms=60..240`
+    - `underrun=739..741`
+    - `dropped=171..189`
+    - `late=0`
+    - `silence_fill=13923..14031`
+    - `rx_frames_per_sec=41.7..54.0`
+  - Final sample (`reason=final_35m`):
+    - `buffered_ms=60`
+    - `underrun=739`
+    - `dropped=180`
+    - `late=0`
+    - `silence_fill=13930`
+    - `rx_frames_per_sec=49.6`
+    - `audio_track_write_frames_per_sec=48634.4`
+    - `recent=tcp_rtt_spike:56ms/4ms`
+  - Acceptance conclusion: no disconnect was observed, but underrun/dropped/silence counters accumulated too far for v1.4 release sign-off.
+- Android playback buffer tuning follow-up landed for `balanced` mode:
+  - Raised the balanced startup/steady-state target and narrowed the total-latency guard so `buffered_ms` stays inside the intended `80..150` band more consistently.
+  - Jitter-buffer tail trimming now trims only overflow above the threshold instead of force-resetting all the way back to the startup floor.
+  - Playout pacing now makes small up/down corrections around the target band instead of aggressively draining backlog back to `60ms`.
+  - `rx_frames_per_sec` reporting is now smoothed to avoid 1-second sampling noise dominating the snapshot.
+- Real-device short probe (`explicit_probe_90s`) on `5391d451` after the buffer-tuning patch:
+  - Main path remained `windows_loopback + v2_header + opus`, `mode=balanced`, backend=`oboe_callback`.
+  - Sample range across 109 `playback_summary` lines:
+    - `buffered_ms=120..140`
+    - `underrun=0`
+    - `dropped=2`
+    - `late=0`
+    - `silence_fill=2`
+    - `rx_frames_per_sec=49.7..50.2`
+  - Probe conclusion: the Android-side buffering strategy is now holding the target band and eliminating the earlier underrun/silence-fill runaway in short real-device playback.
+  - Remaining gate: rerun the 30+ minute main-path long-run before marking TASK-V14-002 complete.
+- Real-device long-run rerun (`2026-04-23`, `balanced + windows_loopback + v2_header + opus`) still does not pass the v1.4 gate:
+  - Device: `5391d451` (`Xiaomi 24129PN74C`)
+  - 5-minute checkpoints:
+    - `t05m`: `buffered_ms=140`, `underrun=0`, `dropped=36`, `silence_fill=190`, `rx_frames_per_sec=45.8`
+    - `t10m`: `buffered_ms=120`, `underrun=0`, `dropped=288`, `silence_fill=1536`, `rx_frames_per_sec=49.9`
+    - `t15m`: `buffered_ms=140`, `underrun=1`, `dropped=492`, `silence_fill=2641`, `rx_frames_per_sec=49.6`
+    - `t20m`: `buffered_ms=152`, `underrun=1`, `dropped=702`, `silence_fill=3763`, `rx_frames_per_sec=37.7`
+    - `t25m`: `buffered_ms=132`, `underrun=2`, `dropped=899`, `silence_fill=4811`, `rx_frames_per_sec=49.9`
+    - `t30m`: `buffered_ms=148`, `underrun=2`, `dropped=1161`, `silence_fill=6198`, `rx_frames_per_sec=50.1`
+  - Late-run periodic samples continued to degrade after the 30-minute mark, reaching about `buffered_ms=96..116`, `underrun=4`, `dropped=1170`, `silence_fill=8926`, `rx_frames_per_sec=41.4..41.7`.
+  - Acceptance conclusion: balanced-mode target buffering is better controlled than before, but long-run sink starvation / silence-fill accumulation remains far above the release threshold, so TASK-V14-002 is still `continue_fix`.
+- Android duplicate-start regression follow-up (`2026-04-23`) tightened the replay guards:
+  - `MediaSession` `PLAY_PAUSE` now stops/disconnects only and no longer auto-restores playback while inactive.
+  - `MainActivity` `app_open_restore` now skips when the shared snapshot already reports an active session.
+  - `PlaybackForegroundService` now ignores duplicate `ACTION_START` requests while a session is already active.
+  - `DebugPlaybackReceiver` `SET_AUDIO_MODE` no longer auto-starts playback when a session is already active.
+- Real-device explicit probe rerun after the duplicate-start fix (`5391d451`, `balanced + windows_loopback + v2_header + opus`) no longer reproduces the mid-probe restart/buffering regression:
+  - Probe method: foreground `debug_command=start_playback`, then `KEYCODE_HOME`, then `MainActivity` brought back to front mid-probe.
+  - No `playback=buffering` samples or `ws_failure` lines were observed after playback began.
+  - Probe end sample (`reason=explicit_probe_90s_end`): `buffered_ms=160`, `underrun=0`, `dropped=3`, `silence_fill=20`, `rx_frames_per_sec=49.9`, `audio_track_write_frames_per_sec=47674.9`
+  - Follow-up periodic samples stayed in `playback=playing` with `dropped=3` and `silence_fill=20..22`.
+  - Acceptance conclusion: the duplicate `startPlayback -> buffering -> dropped 5000+` regression appears fixed, but `silence_fill` is still above the `< 10` short-probe gate, so TASK-V14-002 remains `continue_fix`.
+- Silence-fill diagnostics follow-up (`2026-04-23`) split startup and steady-state accounting:
+  - Added `startup_silence_fill_count` to the Android metrics snapshot so startup prefill silence no longer inflates steady-state `silence_fill_count`.
+  - `silence_fill_cause` now distinguishes `startup_fill`, `buffer_empty`, and `post_latency_guard`.
+  - Probe rerun after the accounting split showed `startup_silence_fill_count=2`, confirming startup-only fill is now separated.
+- Real-device explicit probe rerun after the low-watermark guard update still fails the short-probe gate:
+  - Cause distribution from [probe90_low_watermark_guard_logcat.txt](G:\瀹夊崜闊冲搷\tmp_test\probe90_low_watermark_guard_logcat.txt):
+    - `buffer_empty=3`
+    - `post_latency_guard=0`
+    - `startup_fill=0`
+    - `unknown=0`
+  - Probe end sample (`reason=explicit_probe_90s_low_watermark_end`):
+    - `buffered_ms=60`
+    - `underrun=2`
+    - `dropped=2`
+    - `silence_fill=194`
+    - `startup_silence_fill=2`
+    - `rx_frames_per_sec=47.9`
+    - `audio_track_write_frames_per_sec=49371.4`
+  - Diagnostic interpretation:
+    - Duplicate-start regression remains fixed.
+    - Startup silence is now isolated correctly.
+    - The remaining blocker is balanced-mode sink starvation / low-watermark collapse (`buffer_empty`), not latency-guard trimming.
+  - Acceptance conclusion: steady-state `silence_fill < 5` is still not met, so TASK-V14-002 remains `continue_fix`.
+- Real-device explicit probe rerun after proactive batch fill for balanced low-watermark (`2026-04-23`) is close but still above the short-probe gate:
+  - Probe log: [probe90_batch_fill_logcat.txt](G:\瀹夊崜闊冲搷\tmp_test\probe90_batch_fill_logcat.txt)
+  - Cause distribution:
+    - no `silence_fill_cause` lines were emitted during the run
+    - `buffer_empty=0`
+    - `post_latency_guard=0`
+  - Probe end sample (`reason=explicit_probe_90s_batch_fill_end`):
+    - `buffered_ms=140`
+    - `underrun=0`
+    - `dropped=0`
+    - `silence_fill=7`
+    - `startup_silence_fill=14`
+    - `rx_frames_per_sec=50.1`
+    - `audio_track_write_frames_per_sec=48403.4`
+  - Diagnostic interpretation:
+    - balanced low-watermark batch fill removed the prior `buffer_empty` collapse and kept the sink queue in the `20..60ms` range
+    - duplicate-start and latency-guard regressions remain absent
+    - the remaining gap is only `steady-state silence_fill=7`, which is above the `< 5` gate but much closer to target
+  - Acceptance conclusion: TASK-V14-002 remains `continue_fix`, but the remaining blocker is now small and isolated.
 
-- [x] `cargo fmt --all -- --check` passed
-- [x] `cargo check` passed
-- [x] `cargo check -p lan_audio_desktop` passed
-- [x] `cargo test -p lan_audio_protocol -p lan_audio_server` passed
-- [x] Desktop rollback controls compile and the runtime-path config test verifies `legacy_las1 + pcm16` / `v2_header + opus` snapshot inputs
-- [x] Desktop support bundle export implemented with all required files
-- [x] `docs/todo.md` updated with Phase 2 status
-
-### v1.6 Phase 3 Gate (`2026-05-09`)
-
-- [known_issue] USB direct 验收（2026-05-09）:
-  - 连接建立：adb reverse established for `tcp:39991` and `tcp:39992`; app session did not complete
-  - 延迟 p95：N/A（no stable USB playback sample; WiFi balanced baseline remains 185ms）
-  - 10min 长稳：underrun=N/A, silence_fill=N/A
-  - 结论：known_issue（desktop USB transport and TCP data-plane hooks exist, but Android debug start/session reset is not robust enough for acceptance on `5391d451`）
-- [x] `NegotiationError` enum implemented with protocol/server tests
-- [x] Legacy rollback protocol tests added and wired into `scripts/validate_local.ps1`
-
-### v1.6 Phase 4 Gate (`2026-05-10`)
-
-- [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
-- [x] QR code end-to-end connection verified manually
-- [x] Android support bundle code path compiles locally; zip generation includes snapshot, device info, recent logcat, and README; share sheet path is wired but not manually shared per scope
-- [x] Firewall guidance covers ConnectionRefused and Timeout UI paths on Android and Desktop
-- [x] README.zh-CN.md aligned with README.md feature coverage; protocol, desktop UI, and todo docs have Chinese summaries
-- [x] Android release signing fixed to use a stable keystore so APK upgrades can overwrite install without uninstalling, as long as the keystore is retained
-
-## v1.4 Validation Summary (`2026-04-24`)
-
-- `scripts/validate_local.ps1` passed on the current Windows workspace before release.
-- Android real-device verification on `5391d451` confirmed:
-  - `MediaStyle` notification with `Play/Pause` and `Stop`
-  - active `MediaSession` metadata (`title=LAN Audio`, `artist=10.0.0.185`)
-  - `KEYCODE_MEDIA_STOP` tears down the foreground playback service
-  - settings `Check Update` action can surface the manual “already up to date” hint
-- Main-path long-run validation for `windows_loopback + v2_header + opus` still showed unresolved long-run sink-starvation / silence-fill accumulation, so the engineering conclusion remained `continue_fix` rather than clean release sign-off.
-- Short balanced-mode probes improved substantially after the Android buffering follow-ups, but mode-switch no-audio risk and long-run stability follow-up still remain open.
-
+- Balanced one-shot refill follow-up (`2026-04-23`) changed the low-watermark reaction from fixed 3-frame proactive fill to "first dip below target -> refill toward 50ms in one write":
+  - Implementation scope: `balancedAudioQueueFillTargetMs / collectWritePayload` path only.
+  - Refill cap rule: one-shot refill never consumes more than the jitter buffer currently holds.
+  - Recovery rule: once `track_queued_ms >= fillTargetMs`, playout returns to normal pacing (`batchFrames` behavior).
+- Real-device explicit probe rerun after the one-shot refill update (`explicit_probe_90s`, `5391d451`) now passes the short-probe gate:
+  - Probe log: [probe90_50ms_logcat.txt](../tmp_test/probe90_50ms_logcat.txt)
+  - Sample range across 20 `playback_summary` lines:
+    - `buffered_ms=104..136`
+    - `underrun=0`
+    - `dropped=4`
+    - `silence_fill=0..3`
+    - `rx_frames_per_sec=49.8..50.1`
+  - Cause distribution:
+    - `buffer_empty=0`
+    - `unknown=2`
+  - Probe end sample (`reason=explicit_probe_90s_50ms_end`):
+    - `buffered_ms=116`
+    - `underrun=0`
+    - `dropped=4`
+    - `silence_fill=0`
+    - `startup_silence_fill=9`
+    - `audio_track_write_frames_per_sec=45870.3`
+  - Acceptance conclusion for this probe: gate targets met (`silence_fill < 5`, `dropped < 5`, `underrun = 0`, `buffer_empty = 0`), and `buffered_ms` did not exceed `150`, so no `50ms -> 40ms` fallback was needed.
+- Manual mode-switch regression quick check (`low_latency -> high_quality -> balanced`) still reproduces a no-audio risk after switching:
+  - Probe log: [mode_switch_probe_logcat.txt](../tmp_test/mode_switch_probe_logcat.txt)
+  - End sample (`reason=mode_switch_probe_end`): `playback=playing` but `audio_track_write_frames_per_sec=0.0`, `dropped=505`, `silence_fill=5893`.
+  - Conclusion: the one-shot refill fix improves balanced low-watermark behavior, but mode-switch no-sound stability is still a separate blocker and TASK-V14-002 remains `continue_fix`.
+- Mode-switch startup-silence accounting baseline (`2026-04-23`, explicit probe with three manual switches):
+  - Probe log: [mode_switch_probe_low_latency_startup_fix2_20260423_120407_logcat.txt](../tmp_test/mode_switch_probe_low_latency_startup_fix2_20260423_120407_logcat.txt)
+  - Scope: mode-switch accounting only (`low_latency` switch-window callback silence is classified into `startup_silence_fill`; no AudioTrack/Oboe core-path change).
+  - Key checkpoints:
+    - `switch1_5s` (`low_latency`): `silence_fill=0`, `startup_silence_fill=4`, `dropped=0`, `underrun=0`
+    - `switch2_5s` (`high_quality`): `silence_fill=2`, `startup_silence_fill=99`, `dropped=0`, `underrun=0`
+    - `switch3_5s` (`balanced`): `silence_fill=0`, `startup_silence_fill=19`, `dropped=0`, `underrun=0`
+    - `explicit_probe_90s_switch_end`: `silence_fill=0`, `startup_silence_fill=19`, `dropped=0`, `underrun=0`
+  - Regression baseline conclusion: all three post-switch 5s windows keep steady-state `silence_fill < 10`; this probe is the current low_latency/high_quality mode-switch baseline.
 ## v1.4 Release Gate
 
-- [human-override] TASK-V14-001 `v1.3.6` acceptance evidence recorded
-- [x] TASK-V14-002 main-path `windows_loopback + v2_header + opus` latency probe completed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
-- [human-override] TASK-V14-003 USB validation recorded
+- [ ] TASK-V14-001 `v1.3.1` acceptance evidence recorded
+- [ ] TASK-V14-002 main-path `windows_loopback + v2_header + opus` 30+ minute long-run passes
+- [ ] TASK-V14-003 USB validation recorded
 - [x] TASK-V14-010 MediaSession verified on `5391d451`
 - [x] TASK-V14-011 Android update check verified on `5391d451`
-- [human-override] TASK-V14-012 Windows update detection re-verified locally
+- [ ] TASK-V14-012 Windows update detection re-verified locally
 - [x] `scripts/validate_local.ps1` passes on current workspace
-- [x] Version and release docs updated to `v1.4`
-- [x] `scripts/package_release.ps1` preflight completed
-- [x] `scripts/release.ps1` executed
-
-## v1.4.1 Hotfix Release Prep
-
-- [x] Version metadata advanced to `1.4.1`
-- [x] Android version metadata advanced to `versionName=1.4.1`, `versionCode=2010401`
-- [x] Stable Android release signing verified locally and in GitHub Actions
-- [x] Historical `v1.4` debug-key APK compatibility boundary documented
-- [x] Android MediaSession integration completed (`PlaybackState`, metadata, `MediaStyle`, `PLAY_PAUSE`, `STOP`)
-- [x] Android update detection completed (silent startup check, manual settings entry, Release page jump)
-- [x] Windows update detection completed (silent startup check, tray manual check, in-window banner)
-- [x] Desktop diagnostics export completed (`dist/diagnostics/` JSON snapshot export)
-- [x] Android balanced buffering strategy optimized for the v1.4.1 follow-up
-- [x] Mode-switch transient/concurrency recovery fixed so UI can return from `buffering` to `streaming`
-- [x] Android `.hprof` heap dumps removed from `apps/android_flutter/`
-- [x] `.hprof` and `tmp_test/` ignore rules recorded in root `.gitignore`
-- [x] Android and Windows update checker repository paths corrected to `MengBad/lan-audio`
-
-## v1.5 Forced Release (`2026-05-09`)
-
-- [x] Version metadata advanced to `1.5`
-- [human-override] Main-path long-run gate accepted by operator; latency probe is the replacement evidence
-- [x] Latency probe passed on `5391d451`: low_latency p95 64ms / balanced p95 185ms / high_quality p95 505ms
-- [x] Audio Console Dark UI redesign merged, including DM Sans + IBM Plex Mono typography
-- [x] Android MediaSession integration shipped
-- [x] Android and Windows update detection shipped
-- [x] Desktop diagnostics snapshot export shipped
-- [x] Android balanced buffering strategy shipped
-- [x] Mode-switch transient/concurrency recovery shipped
-- [x] Android toolchain upgraded to AGP 8.7.3 and Kotlin 2.1.0
-- [x] Local validation passed before release
-- [x] Release notes must include `human-override`, main path `windows_loopback + v2_header + opus`, rollback path `legacy_las1 + pcm16`, latency probe values, and UI redesign summary
+- [ ] Version and release docs updated to `v1.4`
+- [ ] `scripts/package_release.ps1` preflight completed
+- [ ] `scripts/release.ps1` executed
 
 ## Completed In The v1.3 Cycle
 
@@ -143,13 +242,9 @@
 
 ## Current Priority
 
-- [x] Post-`v1.4` regression pass: Android Audio Console restores discoverable Server Card connection controls, moves debug/update actions behind the top-right advanced entry, throttles visible `buffer ms` to a 1s UI cadence, restores `rx fps` from the stable snapshot, and fixes mode-switch UI recovery from `buffering` back to `streaming`.
-- [x] Post-`v1.4` release-flow fix: Android release APK signing no longer uses the per-machine debug keystore; release builds now require a stable release keystore locally and in GitHub Actions.
-- [x] Windows desktop first screen refreshed to the Audio Console Dark structure while keeping the existing service controls and rollback path visible.
-- [x] Latency revalidation is systematized through `scripts/export_latency_probe.ps1`; it exports per-mode `low_latency / balanced / high_quality` latency proxy results to `artifacts/latency/latency_probe_latest.json`.
-- [known_issue] Refactor Android runtime internals without breaking the shared snapshot contract (v1.6 partial extraction landed; full controller split still pending)
-- [x] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
-- [x] Improve post-release diagnostics and operator-facing troubleshooting flow
+- [ ] Refactor Android runtime internals without breaking the shared snapshot contract
+- [ ] Refactor desktop-side service orchestration without reintroducing direct UI/runtime coupling
+- [ ] Improve post-release diagnostics and operator-facing troubleshooting flow
 - [ ] Keep rollback path exercised as mainline changes land
 
 ## Protocol / Transport Follow-Up
@@ -161,45 +256,101 @@
 
 ## Android Follow-Up
 
-- [known_issue] Continue real-device validation under background and power-saving conditions (2026-05-09 `5391d451`: foreground metrics passed; background/power cycling can stall at `buffering` with `rx_frames_per_sec=0.0`)
+- [ ] Continue real-device validation under background and power-saving conditions
 - [ ] Improve buffering and underrun diagnostics
-- [known_issue] Reduce runtime complexity in playback/session coordination (policy/pacing/guard/metrics helpers extracted; controller still needs deeper split)
+- [ ] Reduce runtime complexity in playback/session coordination
 - [ ] Preserve Oboe callback path as the maintained playback direction
-- [x] MediaSession integration (`PlaybackState`, metadata, `MediaStyle`, `PLAY_PAUSE`, `STOP`)
-- [x] Android update detection (silent startup check + manual settings entry + SnackBar jump to Release page)
+- [x] MediaSession 闆嗘垚锛圥laybackState/Metadata/MediaStyle 閫氱煡/PLAY_PAUSE+STOP锛?
+- [x] Android 鏇存柊妫€娴嬶紙鍚姩鍚庨潤榛樻鏌?+ 璁剧疆椤垫墜鍔ㄦ鏌?+ SnackBar 璺宠浆 Release锛?
 
 ## Desktop Follow-Up
 
-- [x] Simplify service lifecycle ownership
-- [x] Improve diagnostics export (`dist/diagnostics/` desktop support bundle plus legacy JSON snapshot export)
-- [x] Structured latency probe/export (`artifacts/latency/` JSON artifact from diagnostics snapshots)
-- [x] Windows update detection (silent startup check + tray manual check + in-window banner)
-- [x] Improve rollback / safe-mode discoverability
-- [x] Keep desktop state rendering contract-driven
+- [ ] Simplify service lifecycle ownership
+- [x] Improve diagnostics export锛坉esktop 鍙鍑?JSON 璇婃柇蹇収鍒?`dist/diagnostics/`锛?
+- [x] Windows 鏇存柊妫€娴嬶紙鍚姩鍚庨潤榛樻鏌?+ 鎵樼洏鈥滄鏌ユ洿鏂扳€?+ 绐楀彛鍐呭崌绾?Banner锛?
+- [ ] Improve rollback/safe-mode discoverability
+- [ ] Keep desktop state rendering contract-driven
 
 ## Later Backlog
 
-- [x] Collect real-device latency probe samples for `low_latency / balanced / high_quality` before the next standard release sign-off: low_latency 64ms / balanced 185ms / high_quality 505ms
-- [ ] Android runtime refactor without breaking the shared snapshot contract
-- [x] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
-- [x] `legacy_las1 + pcm16` is a permanent maintenance path and must not be removed; every local validation run includes the `cargo test -p lan_audio_protocol -- legacy` guard.
-- [x] QR-based connection entry
+- [ ] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
-- [x] Firewall guidance UX
-- [x] Structured support bundle export (desktop and Android support bundles)
+- [ ] Firewall guidance UX
+- [x] Structured support bundle export锛堝綋鍓嶅厛鎻愪緵 desktop diagnostics snapshot锛屽悗缁ˉ鍏?Android 渚э級
 
-## v1.4 FORCE_RELEASE Notes
+- Mode-switch no-audio follow-up (2026-04-23): sink reinit now serializes stats/stop/release and no longer reproduces persistent audio_track_write_frames_per_sec=0 after balanced -> low_latency -> high_quality -> balanced in mode_switch_probe_fix_lock_fg3_20260423_111741_logcat.txt; however switch2_5s still showed transient silence_fill=98, so gate status remains continue_fix.
 
-- Release mode: `FORCE_RELEASE=true`
-- Release target: `v1.4`
-- Human-confirmed release content:
-  - [x] Android MediaSession integration
-  - [x] Android / Windows update detection
-  - [x] Desktop diagnostics snapshot export
-  - [x] Android balanced buffering follow-up
-  - [x] Desktop non-blocking service-start / USB refresh follow-up
-- Release gate checklist (forced override):
-  - [human-override] Long-run main-path stability gate
-  - [human-override] Full release checklist re-review
-  - [human-override] Remaining manual regression evidence backfill
+## v1.7 Theme 2 Audio Quality Layer (`2026-05-10`)
+
+- TASK-V17-201 Android 3-band EQ:
+  - Added Android `Equalizer` binding after `AudioTrack` creation.
+  - Exposed low/mid/high bands at 60Hz / 1kHz / 10kHz with `-10..+10dB` clamping.
+  - Added Flutter settings controls, presets (`Flat`, `Bass`, `Vocal`, `Bright`), and SharedPreferences persistence through the foreground service.
+  - Stable snapshot contract now exposes `eq_enabled` and `eq_settings`.
+- TASK-V17-202 loudness normalization:
+  - Added PCM16 RMS analysis before sink write, 500ms analysis interval, target RMS around `-18dB`, gain clamp `0.5x..2.0x`, and 100ms ramp smoothing.
+  - The processor is active only for `balanced` and `high_quality`; `low_latency` bypasses and reports `0.0dB` gain.
+  - Flutter settings include the toggle and the playback summary shows current loudness gain while playing.
+- TASK-V17-203 multi-device streaming:
+  - Server broadcast architecture already supports independent client sessions; max clients is now constrained to `4`.
+  - Existing multi-client regression now verifies disconnect isolation and 5th-client rejection.
+  - Desktop UI now renders active device summaries from the shared metrics snapshot.
+  - Known limitation: desktop-side "disconnect one selected device" is deferred to v1.8 because no stable per-client desktop command surface exists yet.
+- Theme 2 gate status:
+  - [x] EQ real-device audible change verified
+  - [x] Loudness normalization real-device gain display verified
+  - [x] Multi-device 2-phone playback verified
+  - [x] `flutter test` passed
+  - [x] `cargo test -p lan_audio_server` passed
+  - [x] `docs/todo.md` updated
+- Theme 2 conclusion: `pass`; manual gate approved before Theme 3.
+
+## v1.7 Theme 3 Connection Experience (`2026-05-10`)
+
+- TASK-V17-301 mDNS LAN discovery:
+  - Windows/server side registers `_lan-audio._tcp.local.` with service name `LAN Audio @ <server_name>`, port `39991`, and TXT records `version=1.7`, `mode=<current_mode>`.
+  - Android uses `NsdManager` to discover `_lan-audio._tcp`, keeps IPv4 results only, and feeds the Flutter nearby-device list through `lan_audio/platform`.
+  - Flutter keeps UDP beacon discovery and LAN probe as fallback, shows nearby devices with IP and TCP probe latency, and exposes manual IPv4 entry under Advanced.
+- TASK-V17-302 smart reconnect:
+  - Foreground playback service now retries network disconnects with exponential backoff `1s -> 2s -> 4s -> 8s -> 16s`.
+  - User stop cancels reconnect; reconnect success restores the existing target/mode/codec path.
+  - Stable snapshot now exposes `reconnect_attempts` and `reconnect_delay_ms`; UI shows `Reconnecting (#N, delay)` during recovery.
+  - Five failed retries enter `error` state with `reconnect_exhausted`.
+- TASK-V17-303 connection history and favorites:
+  - Added `ConnectHistory` model (`ip`, `port`, `hostname`, `last_connected`, `connect_count`, `is_favorite`, `last_latency_ms`).
+  - Android persists history JSON in SharedPreferences, capped at 10 entries.
+  - Flutter shows favorites first, then recent history; tap connects, long press toggles favorite/delete/edit name, and right-swipe deletes.
+- Theme 3 gate status:
+  - [x] mDNS real-device discovery and connect verified
+  - [x] Simulated network interruption auto-recovers playback
+  - [x] Connection history persists after app restart
+  - [x] `flutter test` passed
+  - [x] `cargo test -p lan_audio_server` passed
+  - [x] `android/gradlew.bat assembleDebug` passed
+  - [x] `docs/todo.md` updated
+- Theme 3 conclusion: `pass`; manual gate approved before Theme 4.
+
+## v1.7 Theme 4 Open Source Readiness (`2026-05-10`)
+
+- TASK-V17-401 contributor documentation:
+  - Added root `CONTRIBUTING.md` with environment requirements, local run steps, commit rules, architecture notes, and primary/rollback path guidance.
+  - Added GitHub issue templates for bug reports, feature requests, and connection issues.
+  - Added pull request template with validation and rollback checklist.
+- TASK-V17-402 CI coverage:
+  - Added protocol-layer tests for `NegotiationError`, v2 header codec/flag round trips, legacy/v2 handshake distinction, and mode profile boundary values.
+  - CI now generates `lan_audio_protocol` LCOV coverage with `cargo llvm-cov` and uploads through `codecov/codecov-action@v4`.
+  - README now includes the Codecov badge.
+  - `CODECOV_TOKEN` is configured in GitHub repository secrets.
+- TASK-V17-403 changelog:
+  - Added Keep a Changelog style `CHANGELOG.md` covering v1.5, v1.6, and v1.7.
+  - `scripts/release.ps1` now warns when the current version is missing from `CHANGELOG.md`; the warning does not block release.
+- Theme 4 gate status:
+  - [x] `CONTRIBUTING.md` complete
+  - [x] Three issue templates created
+  - [x] Pull request template created
+  - [x] CI coverage report visible through Codecov after `CODECOV_TOKEN` configuration
+  - [x] README contains Codecov badge
+  - [x] CHANGELOG contains v1.5, v1.6, and v1.7
+  - [x] `scripts/release.ps1` contains CHANGELOG check
+- Theme 4 conclusion: `pass`; manual gate approved before v1.7 release finalization.

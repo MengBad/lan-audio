@@ -1,130 +1,70 @@
-[English](./README.md) | [简体中文](./README.zh-CN.md)
-
 # LAN Audio
 
-把 Windows 电脑的声音通过局域网传到 Android 手机，让手机充当无线音响。
+[![codecov](https://codecov.io/gh/MengBad/lan-audio/branch/main/graph/badge.svg)](https://codecov.io/gh/MengBad/lan-audio)
 
-LAN Audio 是一个 Windows 到 Android 的实时音频串流项目。仓库由 Rust 流媒体后端、Flutter Android 客户端和 Tauri Windows 桌面端组成，同时维护 Protocol v2 主路径与显式回滚路径。
+LAN Audio 可以把 Windows 电脑变成音频发送端，把 Android 手机变成局域网音响。
 
-## 项目简介
+项目由 Rust 服务端、Flutter Android 客户端和 Tauri 桌面端组成，默认主路径为 `windows_loopback + v2_header + opus`，并永久保留 `legacy_las1 + pcm16` 回滚路径。
 
-项目目标很直接：Windows PC 播放音频，通过 LAN 或 USB 辅助网络传输到 Android 设备，再由手机扬声器播放。当前仓库仍偏向开发、测试和受控发布，不是面向普通用户的一键安装成品。
+## 当前版本
 
-## 当前状态
+- Current version: `1.7`
+- 最新发布：`v1.7`
+- 主路径：`windows_loopback + v2_header + opus`
+- 回滚路径：`legacy_las1 + pcm16`
+- 传输：Wi-Fi / USB direct
+- 模式：`low_latency` / `balanced` / `high_quality`
 
-- 当前版本：`1.6`。
-- 仓库包含 Rust LAN 服务端、Android Flutter 客户端和 Windows Tauri 桌面端。
-- 推荐主路径：`windows_loopback + v2_header + opus`。
-- 永久维护回滚路径：`legacy_las1 + pcm16`。
-- `v1.6` 是四个工程阶段门控通过后的标准发布，保持协议主路径稳定，同时补齐 QR 扫码连接、诊断包导出、故障引导、回滚入口和 Android 固定签名。
-- Android 与 Windows UI 采用 Audio Console Dark 设计，字体为 DM Sans + IBM Plex Mono。
-- Android 已集成 MediaSession，包含播放状态、metadata、MediaStyle 控件、play/pause 和 stop。
-- Android / Windows 均支持静默更新检测，并提供手动入口跳转 GitHub Releases。
-- Desktop 支持结构化 support bundle 导出，Android 支持诊断包 zip 导出并调用系统分享面板。
-- Desktop 主界面显示连接 QR 码，Android 支持扫码解析 `lan-audio://<ip>:<port>` 并自动连接。
-- Android 与 Desktop 均提供 ConnectionRefused / Timeout 防火墙排查引导。
-- Windows 托盘和桌面高级选项均可切换回滚模式。
-- 协商失败会显示可读错误说明，便于判断 codec、data-plane 或版本不兼容问题。
-- Android release APK 从 `v1.6` 起使用固定 keystore 签名，保留相同 keystore 时支持覆盖安装升级。
-- 英文与简体中文文档同步维护。
-- balanced 模式播放缓冲策略已优化，latency probe 通过结构化脚本导出三档实测结果。
-- 本地验证、打包和发布脚本已经纳入仓库。
-- 当前后续工作集中在稳定性、延迟优化、模式策略、Protocol v2 演进和产品化体验。
+## 功能
 
-## 快速开始
+- Windows 系统声音实时推送到 Android 手机播放。
+- 支持 `synthetic` 测试音源，用于诊断和验收。
+- 支持局域网连接和 USB `adb reverse` 连接。
+- 支持低延迟、均衡、高音质三种播放策略。
+- Protocol v2 + Opus 作为主路径，同时保留 legacy PCM16 回滚路径。
+- Android 前台播放通知集成 MediaSession。
+- 省电模式后台保活引导，覆盖小米、华为和通用 Android 路径。
+- EQ 均衡器（3 段，Android），含预设和持久化。
+- 响度归一化，播放时显示当前增益。
+- 多设备同时推流，最多 4 台 Android 设备。
+- mDNS 局域网设备自动发现，无需手动输入 IP。
+- 智能断网重连，使用指数退避。
+- 连接历史与收藏，常用设备可一键连接。
+- 贡献者文档、Issue 模板、PR 模板、CHANGELOG 和 Codecov 覆盖率报告已补齐。
 
-1. 检查本地工具链：
+## v1.7 验收状态
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\check_env.ps1
-```
+- Release gate：`allow_release`
+- FORCE_RELEASE：`false`
+- 验证设备：`5391d451`（`Xiaomi 24129PN74C`）
+- 验证场景：`USB direct`、`WiFi + windows_loopback`、`2 Android clients`
+- latency probe：`low_latency p95=64ms`、`balanced p95=185ms`、`high_quality p95=505ms`
+- known_issue：Desktop 单独断开某设备延后到 v1.8。
 
-2. 启动 Windows 发送端：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource windows_loopback
-```
-
-如需使用合成测试音源：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_server_headless.ps1 -AudioSource synthetic
-```
-
-3. 启动 Android 客户端：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_android_client.ps1
-```
-
-4. 在 Android app 中发现服务端、手动输入地址，或扫描桌面端 QR 码后连接并开始播放。
-
-执行完整本地验证：
+## 本地验证
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
 ```
 
-导出 latency probe 结构化结果：
+## 打包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\export_latency_probe.ps1 -SnapshotPath .\dist\diagnostics\*.json
+powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 ```
 
-## 工作方式
+发布产物：
 
-```text
-Windows audio capture (windows_loopback / synthetic)
-    -> Rust LAN server
-    -> WebSocket control + UDP audio
-       or localhost TCP audio over adb reverse in USB mode
-    -> Android playback service and client UI
-    -> jitter buffer / native playback output
-    -> phone speaker
+- `lan-audio-android-arm64-v8a-v1.7.apk`
+- `lan-audio-android-armeabi-v7a-v1.7.apk`
+- `lan-audio-android-x86_64-v1.7.apk`
+- `lan-audio-desktop-v1.7.exe`
+- `SHA256SUMS.txt`
+
+## 发布
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.7
 ```
 
-## 仓库结构
-
-```text
-apps/
-  android_flutter/   Android 客户端（Flutter UI + 原生播放桥接）
-  desktop/           Windows 桌面应用（Tauri）
-
-crates/
-  lan_audio_domain/   共享运行时与发布契约
-  lan_audio_protocol/ 协议消息与数据包格式
-  lan_audio_server/   音频采集、传输、会话和指标运行时
-
-docs/               架构、协议、开发、UI、路线图与发布文档
-scripts/            环境检查、本地运行、验证、打包和发布脚本
-artifacts/release/  发布门控与设备验收工件
-```
-
-## 开发说明
-
-这是一个多组件仓库：Rust 后端 crate、Flutter Android app、Tauri 桌面前端都在同一工作区。修改运行时、发布逻辑或 UI 前，建议先阅读下方文档，并运行 `scripts/check_env.ps1` 与 `scripts/validate_local.ps1` 确认工具链状态。
-
-## 文档入口
-
-- [架构说明](docs/architecture.md)
-- [开发环境](docs/dev_setup.md)
-- [协议说明](docs/protocol.md)
-- [Protocol v2 迁移](docs/protocol_v2_migration.md)
-- [桌面端 UI 说明](docs/desktop_ui.md)
-- [已知问题](docs/known_issues.md)
-- [TODO / 状态](docs/todo.md)
-- [路线图](docs/roadmap.md)
-- [发布策略](docs/RELEASE_POLICY.md)
-- [Android 视觉回归](docs/android_visual_regression.md)
-
-## 路线图
-
-- 持续提升推荐 Windows 到 Android 主路径的播放稳定性。
-- 降低并控制端到端延迟。
-- 保持 `low_latency`、`balanced`、`high_quality` 三档策略在桌面端与 Android 端一致。
-- 继续演进 Protocol v2，同时永久保留显式回滚路径。
-- 产品化桌面端与 Android 体验，包括 QR 连接、诊断包导出、回滚模式和防火墙引导。
-
-## 许可证
-
-仓库根目录当前没有 `LICENSE` 文件。
+APK 使用固定 keystore 签名，支持覆盖安装。

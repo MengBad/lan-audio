@@ -78,4 +78,10 @@ mod tests {
     fn parse_version_rejects_invalid_text() {
         assert!(parse_version("release-next").is_none());
     }
+
+    #[test]
+    fn update_api_points_to_project_repository() {
+        assert!(LATEST_RELEASE_API.contains("MengBad/lan-audio"));
+        assert!(RELEASE_PAGE_FALLBACK.contains("MengBad/lan-audio"));
+    }
 }

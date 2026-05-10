@@ -9,21 +9,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Test-ForceReleaseMode {
-    $value = [Environment]::GetEnvironmentVariable('FORCE_RELEASE')
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $false
-    }
-
-    switch ($value.Trim().ToLowerInvariant()) {
-        '1' { return $true }
-        'true' { return $true }
-        'yes' { return $true }
-        'on' { return $true }
-        default { return $false }
-    }
-}
-
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -41,12 +26,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $repoRoot
 
 try {
-    $forceRelease = Test-ForceReleaseMode
-    if ($forceRelease) {
-        Write-Warning 'FORCE_RELEASE=true detected; release gate enforcement is bypassed for this run.'
-    } else {
-        powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
-    }
+    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/assert_release_gate.ps1')
 
     if (-not $AllowDirty) {
         $dirty = git status --porcelain
@@ -67,7 +47,7 @@ try {
         }
     }
     else {
-        Invoke-Step -Name 'Bump version (next release number)' -Action {
+        Invoke-Step -Name 'Bump version (minor +1)' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/bump_version.ps1')
         }
     }
@@ -77,6 +57,30 @@ try {
         throw "Unexpected VERSION value after bump: $newVersion"
     }
 
+    $changelogPath = Join-Path $repoRoot 'CHANGELOG.md'
+    if (Test-Path $changelogPath) {
+        $changelogText = Get-Content -Raw $changelogPath
+        $shortVersion = ($newVersion -replace '\.0$', '')
+        $versionPatterns = @(
+            "[$newVersion]",
+            "[$shortVersion]",
+            "[$($newVersion).0]"
+        ) | Select-Object -Unique
+        $hasChangelogEntry = $false
+        foreach ($pattern in $versionPatterns) {
+            if ($changelogText.Contains($pattern)) {
+                $hasChangelogEntry = $true
+                break
+            }
+        }
+        if (-not $hasChangelogEntry) {
+            Write-Warning "CHANGELOG.md does not contain an entry for version $newVersion. Release will continue."
+        }
+    }
+    else {
+        Write-Warning "CHANGELOG.md is missing. Release will continue."
+    }
+
     if (-not $SkipPackage) {
         Invoke-Step -Name 'Build local release artifacts' -Action {
             powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/package_release.ps1') -SkipValidate -Clean
@@ -84,7 +88,7 @@ try {
     }
 
     Invoke-Step -Name 'Git add' -Action {
-        git add .gitignore VERSION AGENTS.md .cargo README.md README.zh-CN.md docs Cargo.toml Cargo.lock crates apps scripts .github/workflows artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
+        git add VERSION AGENTS.md .gitignore .cargo README.md README.zh-CN.md CONTRIBUTING.md CHANGELOG.md docs/RELEASE_POLICY.md docs/todo.md docs/protocol.md docs/protocol_v2_migration.md docs/desktop_ui.md docs/roadmap.md Cargo.toml Cargo.lock crates apps scripts .github/workflows .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md artifacts/release/acceptance_gate.json artifacts/release/device_acceptance.json
     }
 
     $staged = git diff --cached --name-only

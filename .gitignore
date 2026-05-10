@@ -1,6 +1,8 @@
 ﻿# Rust
 /target
 **/*.rs.bk
+Cargo.lock
+
 # Flutter / Dart
 .dart_tool/
 .packages
@@ -33,32 +35,21 @@ tmp_lan_audio_home.png
 # Generated validation artifacts
 artifacts/baseline/
 artifacts/contracts/
+artifacts/latency/
+artifacts/phase3/
 artifacts/reports/
 artifacts/ui_baseline/
 artifacts/validate/
-artifacts/actions-signing-*/
-artifacts/latency/run_logs/
-artifacts/latency/snapshots/
-artifacts/phase3/
-output/
 
 # Android crash dumps
-apps/android_flutter/.flutter-plugins-dependencies
-apps/android_flutter/android/.kotlin/
-local.properties
-*.jks
-*.keystore
-*.b64.txt
 *.hprof
 apps/android_flutter/android/.gradle/
+apps/android_flutter/android/.kotlin/
 apps/android_flutter/android/local.properties
-apps/android_flutter/android/*.jks
-apps/android_flutter/android/*.keystore
-apps/android_flutter/android/release-signing.generated.env
 
-# Local extracted / staging files
-tmp_apk_extract/
+# Local release signing material
+*.jks
+*.b64.txt
 
-# Android heap dumps
-*.hprof
-tmp_test/
+# Local Codex prompt scratch files
+docs/codex-v1.7-prompt.md

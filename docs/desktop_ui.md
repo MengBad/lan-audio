@@ -39,7 +39,7 @@ The first screen keeps four pieces of information visible:
 - Service status
 - Current audio source
 - Local connection address
-- Connected device count
+- Connected device count and active device list (up to 4 clients)
 
 Layout:
 
@@ -74,7 +74,7 @@ Service lifecycle actions should remain non-blocking on the window thread:
 
 - Service status: desktop lifecycle state (`not_started`, `starting`, `running`, `stopping`, `error`)
 - Connected devices: `metrics.active_sessions`
-- Recent clients: `metrics.recent_clients`
+- Recent clients / active device labels: `metrics.recent_clients`; the first `metrics.active_sessions` entries are rendered as the active device list.
 - Local address: runtime IPv4 detection
 - Audio mode: Protocol v2 `current_audio_mode`, synchronized through `set_audio_mode/audio_mode_changed`
 - Mode strategy: `AudioModeProfile` summary, including start/max buffer and batch size
@@ -83,6 +83,7 @@ Service lifecycle actions should remain non-blocking on the window thread:
 - Codec: requested codec and effective codec; Opus is the recommended default on `v2_header`, with PCM16 as rollback
 - Rollback state: recommended path vs safe rollback path must stay explicit and visible
 - Recommended connection: Wi-Fi by default, USB tethering for lower latency testing
+- Multi-device state: desktop shows up to 4 active Android clients with mode and RTT summary; per-device disconnect control is deferred until a stable per-client command contract exists.
 
 ## V2 Product Display
 
@@ -148,6 +149,7 @@ Language defaults should follow the system locale (`zh*` -> Chinese, otherwise E
 
 - QR code connection entry
 - Richer session detail
+- Per-device disconnect command for multi-client sessions
 - More guided USB tethering help
 - Firewall help text
 - Structured diagnostics export (desktop JSON snapshot export is available; Android bundle still pending)

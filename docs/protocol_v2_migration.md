@@ -67,10 +67,15 @@
 - USB 已进入 V2 路线：
   - 当前推荐 USB tethering 作为低延迟连接方式。
   - 已接入 USB localhost 传输模式（`adb reverse` + TCP length-prefixed 数据面）用于 Phase 2 灰度。
+  - v1.7 Theme 1 增加了 USB direct TCP 写超时、Android 连接超时和接收缓冲保护；5391d451 的 10 分钟 USB direct 真机稳定性样本仍未采集，当前结论保持 `known_issue`。
   - USB direct 只作为 `supports_usb_direct_future` 预留，不在当前主路径启用。
 - 产品诊断入口：
   - Android 增加连接帮助折叠区，覆盖同网段、访客网络/AP isolation、扫描/手动地址、USB、后台电池优化。
   - Windows 桌面端展示协议路径、模式策略、codec、灰度状态和推荐连接方式。
+- v1.7 音频质量层：
+  - Android 播放端增加三段 EQ（60Hz / 1kHz / 10kHz），通过稳定 snapshot 暴露 `eq_enabled` / `eq_settings`。
+  - 响度归一化在 PCM 写入前执行 RMS 分析与软件增益，`low_latency` 模式自动旁路。
+  - 服务端广播路径保持 `windows_loopback + v2_header + opus` 主线，最多同时维护 4 个 Android client session。
 - 数据面双栈：
   - 服务端支持配置 `legacy_las1` / `v2_header` 发送格式（桌面默认 `v2_header`）。
   - 服务端发送层已开始通过 `DataPlane` trait 抽象三条路径；`DataPlaneRouter` 会根据 `ServerConfig` 选择 active path，并在 `--force-rollback` 下强制切回 `legacy_las1 + pcm16`。

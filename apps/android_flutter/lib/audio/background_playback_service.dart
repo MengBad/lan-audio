@@ -21,8 +21,12 @@ class PlaybackServiceSnapshot {
     required this.transportMode,
     required this.playbackBackend,
     required this.connectedClientCount,
+    required this.eqEnabled,
+    required this.eqSettings,
+    required this.loudnessNormalizationEnabled,
+    required this.reconnectAttempts,
+    required this.reconnectDelayMs,
     required this.metrics,
-    required this.lastError,
   });
 
   final String transport;
@@ -42,8 +46,12 @@ class PlaybackServiceSnapshot {
   final String transportMode;
   final String playbackBackend;
   final int connectedClientCount;
+  final bool eqEnabled;
+  final Map<String, dynamic> eqSettings;
+  final bool loudnessNormalizationEnabled;
+  final int reconnectAttempts;
+  final int reconnectDelayMs;
   final Map<String, dynamic> metrics;
-  final String? lastError;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
     final normalized = map.map(
@@ -53,7 +61,8 @@ class PlaybackServiceSnapshot {
       transport: '${normalized['transport'] ?? 'wifi'}',
       mode: '${normalized['mode'] ?? 'balanced'}',
       dataPlane: '${normalized['data_plane'] ?? 'legacy_las1'}',
-      activeDataPlane: '${normalized['active_data_plane'] ?? normalized['data_plane'] ?? 'legacy_las1'}',
+      activeDataPlane:
+          '${normalized['active_data_plane'] ?? normalized['data_plane'] ?? 'legacy_las1'}',
       rollbackAvailable: normalized['rollback_available'] == true,
       codec: '${normalized['codec'] ?? 'pcm16'}',
       effectiveCodec: '${normalized['effective_codec'] ?? 'pcm16'}',
@@ -71,15 +80,29 @@ class PlaybackServiceSnapshot {
               const <String, bool>{},
       serverPlatform: normalized['server_platform']?.toString(),
       serverAppVersion: normalized['server_app_version']?.toString(),
-      transportMode: '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
-      playbackBackend: '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
+      transportMode:
+          '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
+      playbackBackend:
+          '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
       connectedClientCount:
           (normalized['connected_client_count'] as num?)?.toInt() ?? 0,
+      eqEnabled: normalized['eq_enabled'] == true,
+      eqSettings: (normalized['eq_settings'] as Map?)?.map(
+            (key, value) => MapEntry('$key', value),
+          ) ??
+          const <String, dynamic>{},
+      loudnessNormalizationEnabled:
+          normalized['loudness_normalization_enabled'] == true,
+      reconnectAttempts: (normalized['reconnect_attempts'] as num?)?.toInt() ??
+          (normalized['reconnectAttempts'] as num?)?.toInt() ??
+          0,
+      reconnectDelayMs: (normalized['reconnect_delay_ms'] as num?)?.toInt() ??
+          (normalized['reconnectDelayMs'] as num?)?.toInt() ??
+          0,
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
-              const <String, dynamic>{},
-      lastError: _humanizeNegotiationError(normalized['last_error']),
+          const <String, dynamic>{},
     );
   }
 
@@ -102,29 +125,13 @@ class PlaybackServiceSnapshot {
       'transport_mode': transportMode,
       'playback_backend': playbackBackend,
       'connected_client_count': connectedClientCount,
+      'eq_enabled': eqEnabled,
+      'eq_settings': eqSettings,
+      'loudness_normalization_enabled': loudnessNormalizationEnabled,
+      'reconnect_attempts': reconnectAttempts,
+      'reconnect_delay_ms': reconnectDelayMs,
       'metrics': metrics,
-      'last_error': lastError,
     };
-  }
-
-  static String? _humanizeNegotiationError(Object? value) {
-    if (value == null) return null;
-    if (value is! Map) return '$value';
-    final normalized = value.map((key, item) => MapEntry('$key', item));
-    switch (normalized['type']) {
-      case 'unsupported_codec':
-        return 'Unsupported codec: offered=${normalized['offered']}, required=${normalized['required']}';
-      case 'unsupported_data_plane':
-        return 'Unsupported data plane: offered=${normalized['offered']}';
-      case 'version_mismatch':
-        return 'Protocol version mismatch: local=${normalized['local']}, remote=${normalized['remote']}';
-      case 'timeout':
-        return 'Negotiation timed out after ${normalized['elapsed_ms']}ms';
-      case 'rejected':
-        return 'Negotiation rejected: ${normalized['reason']}';
-      default:
-        return '$normalized';
-    }
   }
 }
 
@@ -192,6 +199,27 @@ class BackgroundPlaybackService {
       'mode': mode,
       'reason': reason,
     });
+  }
+
+  Future<void> setEqSettings({
+    required bool enabled,
+    required int lowDb,
+    required int midDb,
+    required int highDb,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setEqSettings', <String, dynamic>{
+      'enabled': enabled,
+      'lowDb': lowDb,
+      'midDb': midDb,
+      'highDb': highDb,
+    });
+  }
+
+  Future<void> setLoudnessNormalization(bool enabled) async {
+    await _methodChannel.invokeMethod<void>(
+      'setLoudnessNormalization',
+      <String, dynamic>{'enabled': enabled},
+    );
   }
 
   Future<PlaybackServiceSnapshot> getSnapshot() async {

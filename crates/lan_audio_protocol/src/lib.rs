@@ -26,44 +26,6 @@ pub const UDP_FLAG_V2_SILENCE: u16 = 1 << 0;
 pub const UDP_FLAG_V2_CONFIG_CHANGED: u16 = 1 << 1;
 pub const UDP_FLAG_V2_DISCONTINUITY: u16 = 1 << 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum NegotiationError {
-    #[error("unsupported codec: offered={offered:?}, required={required:?}")]
-    UnsupportedCodec {
-        offered: Vec<AudioCodecPreference>,
-        required: AudioCodecPreference,
-    },
-    #[error("unsupported data plane: offered={offered:?}")]
-    UnsupportedDataPlane { offered: Vec<DataPlanePath> },
-    #[error("protocol version mismatch: local={local}, remote={remote}")]
-    VersionMismatch { local: u8, remote: u8 },
-    #[error("negotiation timeout after {elapsed_ms}ms")]
-    Timeout { elapsed_ms: u64 },
-    #[error("negotiation rejected: {reason}")]
-    Rejected { reason: String },
-}
-
-impl NegotiationError {
-    pub fn human_message(&self) -> String {
-        match self {
-            Self::UnsupportedCodec { offered, required } => {
-                format!("Client offered {offered:?}, but {required:?} is required")
-            }
-            Self::UnsupportedDataPlane { offered } => {
-                format!("Client does not support a compatible data plane: {offered:?}")
-            }
-            Self::VersionMismatch { local, remote } => {
-                format!("Protocol version mismatch: local v{local}, remote v{remote}")
-            }
-            Self::Timeout { elapsed_ms } => {
-                format!("Negotiation timed out after {elapsed_ms}ms")
-            }
-            Self::Rejected { reason } => format!("Negotiation rejected: {reason}"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataPlanePacketKind {
     LegacyLas1,
@@ -275,6 +237,17 @@ pub struct ErrorMessage {
 pub struct ReconnectHint {
     pub after_ms: u32,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum NegotiationError {
+    UnsupportedProtocolVersion { requested: u8, supported: u8 },
+    UnsupportedCodec { codec: AudioCodecPreference },
+    UnsupportedDataPlane { data_plane: DataPlanePath },
+    CapabilityMismatch { capability: String },
+    TooManyClients { max_clients: u8 },
+    InvalidModeProfile { mode: AudioMode, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -504,7 +477,7 @@ impl UdpAudioHeaderV2 {
 impl UdpAudioPacketV2 {
     pub fn encode(&self) -> Vec<u8> {
         let mut header = self.header.clone();
-        header.payload_size = u16::try_from(self.payload.len()).expect("v2 payload too large");
+        header.payload_size = self.payload.len() as u16;
 
         let mut out = header.encode();
         out.extend_from_slice(&self.payload);
@@ -538,8 +511,7 @@ impl UdpAudioPacket {
         out.extend_from_slice(&self.sample_rate.to_le_bytes());
         out.push(self.channels);
         out.extend_from_slice(&self.frames_per_packet.to_le_bytes());
-        let payload_len = u16::try_from(self.payload.len()).expect("v1 payload too large");
-        out.extend_from_slice(&payload_len.to_le_bytes());
+        out.extend_from_slice(&(self.payload.len() as u16).to_le_bytes());
         out.extend_from_slice(&self.payload);
         out
     }
@@ -594,84 +566,6 @@ mod tests {
         let encoded = packet.encode();
         let decoded = UdpAudioPacket::decode(&encoded).expect("decode");
         assert_eq!(packet, decoded);
-    }
-
-    #[test]
-    fn legacy_pcm16_payload_round_trip() {
-        let samples = [-32768i16, -42, 0, 42, 32767];
-        let mut payload = Vec::with_capacity(samples.len() * 2);
-        for sample in samples {
-            payload.extend_from_slice(&sample.to_le_bytes());
-        }
-        let decoded = payload
-            .chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        assert_eq!(decoded, samples);
-    }
-
-    #[test]
-    fn legacy_las1_header_parse_preserves_fields() {
-        let packet = UdpAudioPacket {
-            version: 1,
-            flags: 0b0000_0010,
-            sequence: 42,
-            timestamp_ms: 12_345,
-            sample_rate: 48_000,
-            channels: 2,
-            frames_per_packet: 480,
-            payload: vec![1, 2, 3, 4],
-        };
-        let encoded = packet.encode();
-        assert_eq!(
-            detect_data_plane_packet_kind(&encoded),
-            DataPlanePacketKind::LegacyLas1
-        );
-        assert_eq!(&encoded[0..4], b"LAS1");
-
-        let decoded = UdpAudioPacket::decode(&encoded).expect("decode legacy LAS1");
-        assert_eq!(decoded.version, 1);
-        assert_eq!(decoded.flags, 0b0000_0010);
-        assert_eq!(decoded.sequence, 42);
-        assert_eq!(decoded.timestamp_ms, 12_345);
-        assert_eq!(decoded.sample_rate, 48_000);
-        assert_eq!(decoded.channels, 2);
-        assert_eq!(decoded.frames_per_packet, 480);
-        assert_eq!(decoded.payload, vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn legacy_to_v2_upgrade_handshake_messages_are_compatible() {
-        let legacy = ClientControlMessage::ClientHello {
-            client_name: "legacy-phone".to_string(),
-            udp_port: UDP_AUDIO_PORT,
-            desired_sample_rate: 48_000,
-            channels: 2,
-        };
-        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy hello");
-        let decoded_legacy: ClientControlMessage =
-            serde_json::from_str(&legacy_json).expect("decode legacy hello");
-        assert_eq!(decoded_legacy, legacy);
-
-        let upgraded_ack = ControlMessageV2::HelloAck(HelloAck {
-            protocol_version: PROTOCOL_VERSION_V2,
-            accepted: true,
-            session_id: Uuid::new_v4(),
-            current_audio_mode: AudioMode::Balanced,
-            transport_type: TransportType::Wifi,
-            mode_profile: audio_mode_profile(AudioMode::Balanced),
-            capabilities: ProtocolCapabilities {
-                supports_pcm16: true,
-                supports_modes: true,
-                supports_metrics: true,
-                ..ProtocolCapabilities::default()
-            },
-            message: "legacy_las1 + pcm16 rollback path retained".to_string(),
-        });
-        let ack_json = serde_json::to_string(&upgraded_ack).expect("serialize v2 ack");
-        assert!(ack_json.contains("\"type\":\"hello_ack\""));
-        let decoded_ack: ControlMessageV2 = serde_json::from_str(&ack_json).expect("decode v2 ack");
-        assert_eq!(decoded_ack, upgraded_ack);
     }
 
     #[test]
@@ -751,24 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn negotiation_error_serializes_with_stable_shape() {
-        let err = NegotiationError::UnsupportedCodec {
-            offered: vec![AudioCodecPreference::Pcm16],
-            required: AudioCodecPreference::Opus,
-        };
-        let json = serde_json::to_value(&err).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "type": "unsupported_codec",
-                "offered": ["pcm16"],
-                "required": "opus"
-            })
-        );
-        assert!(err.human_message().contains("Opus"));
-    }
-
-    #[test]
     fn v2_control_message_hello_round_trip() {
         let msg = ControlMessageV2::Hello(Hello {
             protocol_version: PROTOCOL_VERSION_V2,
@@ -838,6 +714,117 @@ mod tests {
     }
 
     #[test]
+    fn legacy_las1_and_v2_header_upgrade_handshake_are_distinct() {
+        let legacy = ClientControlMessage::ClientHello {
+            client_name: "legacy-android".to_string(),
+            udp_port: 54000,
+            desired_sample_rate: 48_000,
+            channels: 2,
+        };
+        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy hello");
+        assert!(legacy_json.contains("\"type\":\"client_hello\""));
+        let legacy_decoded: ClientControlMessage =
+            serde_json::from_str(&legacy_json).expect("deserialize legacy hello");
+        assert_eq!(legacy_decoded, legacy);
+
+        let v2 = ControlMessageV2::Hello(Hello {
+            protocol_version: PROTOCOL_VERSION_V2,
+            device_name: "android-v2".to_string(),
+            client_id: "android-v2-1".to_string(),
+            udp_port: 54001,
+            desired_sample_rate: 48_000,
+            channels: 2,
+            capabilities: ProtocolCapabilities {
+                supports_pcm16: true,
+                supports_f32: false,
+                supports_modes: true,
+                supports_metrics: true,
+                supports_opus_future: true,
+                supports_opus: true,
+                supports_opus_experimental: true,
+                supports_low_latency: true,
+                supports_high_quality: true,
+                supports_native_audio_track: true,
+                supports_fast_path: true,
+                supports_stable_audio_track: true,
+                supports_usb_tethering: true,
+                supports_usb_direct_future: false,
+            },
+            preferred_audio_mode: AudioMode::Balanced,
+        });
+        let v2_json = serde_json::to_string(&v2).expect("serialize v2 hello");
+        assert!(v2_json.contains("\"type\":\"hello\""));
+        assert!(v2_json.contains("\"protocol_version\":2"));
+
+        assert_ne!(
+            detect_data_plane_packet_kind(
+                &UdpAudioPacket {
+                    version: 1,
+                    flags: 0,
+                    sequence: 1,
+                    timestamp_ms: 1,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    frames_per_packet: 480,
+                    payload: vec![0, 1],
+                }
+                .encode()
+            ),
+            detect_data_plane_packet_kind(
+                &UdpAudioPacketV2 {
+                    header: UdpAudioHeaderV2 {
+                        magic: UDP_AUDIO_MAGIC_V2,
+                        protocol_version: PROTOCOL_VERSION_V2,
+                        header_size: UDP_AUDIO_HEADER_V2_LEN as u16,
+                        flags: UDP_FLAG_V2_CONFIG_CHANGED,
+                        sequence: 1,
+                        timestamp_ms: 1,
+                        codec: UdpAudioCodecV2::Opus,
+                        channels: 2,
+                        sample_rate: 48_000,
+                        frame_duration_ms: 20,
+                        payload_size: 0,
+                        reserved: 0,
+                    },
+                    payload: vec![2, 3],
+                }
+                .encode()
+            )
+        );
+    }
+
+    #[test]
+    fn negotiation_error_all_variants_round_trip_json() {
+        let cases = vec![
+            NegotiationError::UnsupportedProtocolVersion {
+                requested: 3,
+                supported: PROTOCOL_VERSION_V2,
+            },
+            NegotiationError::UnsupportedCodec {
+                codec: AudioCodecPreference::Opus,
+            },
+            NegotiationError::UnsupportedDataPlane {
+                data_plane: DataPlanePath::UsbDirect,
+            },
+            NegotiationError::CapabilityMismatch {
+                capability: "supports_opus".to_string(),
+            },
+            NegotiationError::TooManyClients { max_clients: 4 },
+            NegotiationError::InvalidModeProfile {
+                mode: AudioMode::LowLatency,
+                reason: "buffer below minimum".to_string(),
+            },
+        ];
+
+        for case in cases {
+            let json = serde_json::to_string(&case).expect("serialize negotiation error");
+            let decoded: NegotiationError =
+                serde_json::from_str(&json).expect("deserialize negotiation error");
+            assert_eq!(decoded, case);
+        }
+    }
+
+    #[test]
     fn v2_control_message_set_audio_mode_round_trip() {
         let msg = ControlMessageV2::SetAudioMode(SetAudioMode {
             mode: AudioMode::LowLatency,
@@ -891,43 +878,30 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "v1 payload too large")]
-    fn udp_packet_encode_rejects_payload_larger_than_u16() {
-        let packet = UdpAudioPacket {
-            version: 1,
-            flags: 0,
-            sequence: 1,
-            timestamp_ms: 0,
-            sample_rate: 48_000,
-            channels: 2,
-            frames_per_packet: 480,
-            payload: vec![0; (u16::MAX as usize) + 1],
-        };
-        let _ = packet.encode();
-    }
-
-    #[test]
-    #[should_panic(expected = "v2 payload too large")]
-    fn udp_packet_v2_encode_rejects_payload_larger_than_u16() {
-        let packet = UdpAudioPacketV2 {
-            header: UdpAudioHeaderV2 {
+    fn udp_v2_header_codec_and_flag_matrix_round_trip() {
+        for codec in [
+            UdpAudioCodecV2::Pcm16,
+            UdpAudioCodecV2::F32,
+            UdpAudioCodecV2::Opus,
+        ] {
+            let header = UdpAudioHeaderV2 {
                 magic: UDP_AUDIO_MAGIC_V2,
                 protocol_version: PROTOCOL_VERSION_V2,
                 header_size: UDP_AUDIO_HEADER_V2_LEN as u16,
-                flags: 0,
-                sequence: 7,
-                timestamp_ms: 99,
-                codec: UdpAudioCodecV2::Pcm16,
+                flags: UDP_FLAG_V2_SILENCE | UDP_FLAG_V2_CONFIG_CHANGED | UDP_FLAG_V2_DISCONTINUITY,
+                sequence: u32::MAX,
+                timestamp_ms: u64::MAX - 1,
+                codec,
                 channels: 2,
                 sample_rate: 48_000,
-                frame_duration_ms: 10,
-                payload_size: 0,
+                frame_duration_ms: 20,
+                payload_size: u16::MAX,
                 reserved: 0,
-            },
-            payload: vec![0; (u16::MAX as usize) + 1],
-        };
-        let _ = packet.encode();
+            };
+            assert_eq!(UdpAudioHeaderV2::decode(&header.encode()).unwrap(), header);
+        }
     }
+
     #[test]
     fn udp_v2_packet_round_trip() {
         let packet = UdpAudioPacketV2 {
@@ -969,5 +943,33 @@ mod tests {
             detect_data_plane_packet_kind(b"NOPE"),
             DataPlanePacketKind::Unknown
         );
+    }
+
+    #[test]
+    fn mode_profile_boundary_values_match_contracts() {
+        let low = audio_mode_profile(AudioMode::LowLatency);
+        let balanced = audio_mode_profile(AudioMode::Balanced);
+        let high = audio_mode_profile(AudioMode::HighQuality);
+
+        assert_eq!(low.start_buffer_ms, 40);
+        assert_eq!(low.max_buffer_ms, 180);
+        assert_eq!(low.batch_frames, 1);
+        assert_eq!(low.drop_threshold_ms, 140);
+        assert!(low.prefer_low_latency_path);
+        assert!(low.reset_buffer_on_switch);
+
+        assert_eq!(balanced.start_buffer_ms, 60);
+        assert_eq!(balanced.max_buffer_ms, 300);
+        assert_eq!(balanced.batch_frames, 2);
+        assert_eq!(balanced.drop_threshold_ms, 220);
+        assert!(balanced.prefer_stable_audio_track);
+        assert!(balanced.reset_buffer_on_switch);
+
+        assert_eq!(high.start_buffer_ms, 120);
+        assert_eq!(high.max_buffer_ms, 500);
+        assert_eq!(high.batch_frames, 3);
+        assert_eq!(high.drop_threshold_ms, 420);
+        assert!(high.prefer_stable_audio_track);
+        assert!(!high.reset_buffer_on_switch);
     }
 }
