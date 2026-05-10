@@ -1,4 +1,8 @@
-﻿# TODO / Status
+中文摘要：本文档是 LAN Audio 当前工程状态和发布门控记录。v1.6 目标是把主路径 `windows_loopback + v2_header + opus`、回滚路径 `legacy_las1 + pcm16`、真机验收、诊断、测试和产品化补全项统一跟踪到可发布状态。
+
+---
+
+# TODO / Status
 
 ## Release State
 
@@ -29,6 +33,7 @@
 - [x] TASK-V16-401 QR connection entry completed: Desktop generates an SVG QR for `lan-audio://<ip>:<port>` via the `qrcode` crate and shows it while the service is running; Android adds `mobile_scanner` based scan entry points, parses the `lan-audio://` scheme, fills the target host, and starts playback automatically.
 - [x] TASK-V16-402 Android diagnostics support bundle completed: Android exports a zipped support bundle with `snapshot.json`, `device_info.json`, `recent_log.txt`, and `README.txt`, then opens the system share sheet from the advanced/settings panel.
 - [x] TASK-V16-403 Firewall guidance UX completed: Android and Desktop surface expandable, bilingual troubleshooting steps for `ConnectionRefused`, `Timeout`, and version/auth mismatch style connection failures.
+- [x] TASK-V16-404 Chinese documentation sync completed: `README.zh-CN.md` is aligned with the v1.5/v1.6 feature set, and `docs/protocol.md`, `docs/desktop_ui.md`, and `docs/todo.md` include Chinese summary blocks.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -64,6 +69,7 @@
 - [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
 - [x] Android support bundle code path compiles locally; zip generation includes snapshot, device info, recent logcat, and README; share sheet path is wired but not manually shared per scope
 - [x] Firewall guidance covers ConnectionRefused and Timeout UI paths on Android and Desktop
+- [x] README.zh-CN.md aligned with README.md feature coverage; protocol, desktop UI, and todo docs have Chinese summaries
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
@@ -173,7 +179,7 @@
 - [ ] Android runtime refactor without breaking the shared snapshot contract
 - [x] Desktop service orchestration refactor without reintroducing direct UI/runtime coupling
 - [x] `legacy_las1 + pcm16` is a permanent maintenance path and must not be removed; every local validation run includes the `cargo test -p lan_audio_protocol -- legacy` guard.
-- [ ] QR-based connection entry
+- [x] QR-based connection entry
 - [ ] Richer session history
 - [ ] More guided USB help
 - [x] Firewall guidance UX
