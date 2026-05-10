@@ -174,11 +174,37 @@ jobs:
           path: dist/release/android/*.apk
           if-no-files-found: error
 
+  protocol-coverage:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate protocol coverage
+        run: cargo llvm-cov --package lan_audio_protocol --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   create-release:
     needs:
       - resolve
       - windows-exe
       - android-release
+      - protocol-coverage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
