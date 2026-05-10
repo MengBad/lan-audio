@@ -618,6 +618,28 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Future<void> _exportAndroidSupportBundle() async {
+    try {
+      final path = await _platformChannel
+          .invokeMethod<String>('exportAndroidSupportBundle');
+      if (!mounted) return;
+      setState(() {
+        _status = tr('诊断报告已导出', 'Diagnostics exported');
+        _lastErrorMessage = path == null
+            ? null
+            : tr('诊断包已生成并打开分享面板',
+                'Support bundle created and share sheet opened');
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _runtimeState = 'error';
+        _lastErrorMessage =
+            '${tr('导出诊断报告失败', 'Export diagnostics failed')}: $e';
+      });
+    }
+  }
+
   Future<void> _connectToHost({
     required String host,
     required int wsPort,
@@ -1052,7 +1074,8 @@ class _DebugPageState extends State<DebugPage> {
             ),
             OutlinedButton.icon(
               key: const Key('connection_qr_scan_action'),
-              onPressed: _isConnecting ? null : () => runAndClose(_scanQrAndConnect),
+              onPressed:
+                  _isConnecting ? null : () => runAndClose(_scanQrAndConnect),
               icon: const Icon(Icons.qr_code_scanner),
               label: Text(tr('扫码连接', 'Scan QR')),
             ),
@@ -1112,6 +1135,13 @@ class _DebugPageState extends State<DebugPage> {
                   ),
           icon: const Icon(Icons.system_update),
           label: Text(tr('检查更新', 'Check Update')),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          key: const Key('advanced_export_support_bundle_action'),
+          onPressed: _exportAndroidSupportBundle,
+          icon: const Icon(Icons.ios_share),
+          label: Text(tr('导出诊断报告', 'Export Diagnostics')),
         ),
         const SizedBox(height: 14),
         _buildDebugMetricsPanel(),

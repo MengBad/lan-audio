@@ -5,10 +5,12 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -16,6 +18,10 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import android.util.Log
+import org.json.JSONObject
+import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -167,6 +173,10 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
+                        "exportAndroidSupportBundle" -> {
+                            val path = exportAndroidSupportBundle()
+                            result.success(path)
+                        }
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -256,6 +266,73 @@ class MainActivity : FlutterActivity() {
         } catch (_: PackageManager.NameNotFoundException) {
             "0.0.0"
         }
+    }
+
+    private fun exportAndroidSupportBundle(): String {
+        val exportedAt = System.currentTimeMillis()
+        val outputDir = File(cacheDir, "support-bundles")
+        outputDir.mkdirs()
+        val bundle = File(outputDir, "android-support-bundle-$exportedAt.zip")
+        val snapshot = PlaybackEventBus.snapshotMap()
+        ZipOutputStream(bundle.outputStream().buffered()).use { zip ->
+            zip.writestr("snapshot.json", JSONObject(snapshot).toString(2))
+            zip.writestr("device_info.json", JSONObject(deviceInfo()).toString(2))
+            zip.writestr("recent_log.txt", recentLanAudioLog())
+            zip.writestr(
+                "README.txt",
+                "LAN Audio Android support bundle\n\nAttach this zip when filing an issue. It contains the current playback snapshot, device information, and recent lan_audio logcat lines.\n",
+            )
+        }
+        val uri = FileProvider.getUriForFile(
+            this,
+            "$packageName.fileprovider",
+            bundle,
+        )
+        val share = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(share, "Share LAN Audio diagnostics"))
+        return bundle.absolutePath
+    }
+
+    private fun deviceInfo(): Map<String, Any?> {
+        return mapOf(
+            "android_version" to Build.VERSION.RELEASE,
+            "sdk_int" to Build.VERSION.SDK_INT,
+            "manufacturer" to Build.MANUFACTURER,
+            "model" to Build.MODEL,
+            "device" to Build.DEVICE,
+            "abis" to Build.SUPPORTED_ABIS.toList(),
+            "audio_mode" to (getSystemService(Context.AUDIO_SERVICE) as AudioManager).mode,
+            "app_version" to currentVersionName(),
+        )
+    }
+
+    private fun recentLanAudioLog(): String {
+        return try {
+            val process = ProcessBuilder(
+                "logcat",
+                "-d",
+                "-t",
+                "200",
+                "-s",
+                "lan_audio_activity",
+                "lan_audio_service",
+                "lan_audio_session",
+                "lan_audio_debug",
+            ).redirectErrorStream(true).start()
+            process.inputStream.bufferedReader().use { it.readText() }
+        } catch (t: Throwable) {
+            "logcat unavailable: ${t.message}\n"
+        }
+    }
+
+    private fun ZipOutputStream.writestr(name: String, content: String) {
+        putNextEntry(ZipEntry(name))
+        write(content.toByteArray(Charsets.UTF_8))
+        closeEntry()
     }
 
     private fun logLifecycle(name: String) {
