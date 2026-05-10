@@ -12,17 +12,21 @@ LAN Audio 是一个 Windows 到 Android 的实时音频串流项目。仓库由 
 
 ## 当前状态
 
-- 当前版本：`1.5`。
+- 当前版本：`1.6`。
 - 仓库包含 Rust LAN 服务端、Android Flutter 客户端和 Windows Tauri 桌面端。
 - 推荐主路径：`windows_loopback + v2_header + opus`。
 - 永久维护回滚路径：`legacy_las1 + pcm16`。
-- `v1.5` 是人工批准的 FORCE_RELEASE 构建，保持协议主路径稳定，同时交付 Audio Console Dark UI、latency probe 验收、Android/Windows 更新检测、诊断导出、缓冲策略优化和工具链升级。
+- `v1.6` 是四个工程阶段门控通过后的标准发布，保持协议主路径稳定，同时补齐 QR 扫码连接、诊断包导出、故障引导、回滚入口和 Android 固定签名。
 - Android 与 Windows UI 采用 Audio Console Dark 设计，字体为 DM Sans + IBM Plex Mono。
 - Android 已集成 MediaSession，包含播放状态、metadata、MediaStyle 控件、play/pause 和 stop。
 - Android / Windows 均支持静默更新检测，并提供手动入口跳转 GitHub Releases。
 - Desktop 支持结构化 support bundle 导出，Android 支持诊断包 zip 导出并调用系统分享面板。
 - Desktop 主界面显示连接 QR 码，Android 支持扫码解析 `lan-audio://<ip>:<port>` 并自动连接。
 - Android 与 Desktop 均提供 ConnectionRefused / Timeout 防火墙排查引导。
+- Windows 托盘和桌面高级选项均可切换回滚模式。
+- 协商失败会显示可读错误说明，便于判断 codec、data-plane 或版本不兼容问题。
+- Android release APK 从 `v1.6` 起使用固定 keystore 签名，保留相同 keystore 时支持覆盖安装升级。
+- 英文与简体中文文档同步维护。
 - balanced 模式播放缓冲策略已优化，latency probe 通过结构化脚本导出三档实测结果。
 - 本地验证、打包和发布脚本已经纳入仓库。
 - 当前后续工作集中在稳定性、延迟优化、模式策略、Protocol v2 演进和产品化体验。

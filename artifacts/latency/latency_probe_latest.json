@@ -1,10 +1,10 @@
 ﻿{
     "contract_version":  1,
-    "generated_at":  "2026-05-09T04:41:27Z",
+    "generated_at":  "2026-05-10T07:35:19Z",
     "source":  {
                    "metric_formula":  "latency_proxy_ms = buffered_ms + rtt_ms + sink_write_gap_ms_p95",
                    "snapshot_paths":  [
-                                          ".\\artifacts\\latency\\snapshots\\real_device_20260509_*.json"
+                                          ".\\artifacts\\latency\\snapshots\\*.json"
                                       ],
                    "snapshot_files_read":  [
                                                "G:\\安卓音响\\artifacts\\latency\\snapshots\\real_device_20260509_balanced.json",

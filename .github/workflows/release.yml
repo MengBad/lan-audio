@@ -176,7 +176,9 @@ jobs:
           mkdir -p ../../dist/release/android
           for apk in build/app/outputs/flutter-apk/*-release.apk; do
             base="$(basename "$apk")"
-            cp "$apk" "../../dist/release/android/lan-audio-android-${{ needs.resolve.outputs.tag }}-$base"
+            abi="${base#app-}"
+            abi="${abi%-release.apk}"
+            cp "$apk" "../../dist/release/android/lan-audio-android-${abi}-${{ needs.resolve.outputs.tag }}.apk"
           done
 
       - name: Upload Android APKs

@@ -6,10 +6,10 @@
 
 ## Release State
 
-- Latest release: `v1.5`
+- Latest release: `v1.6`
 - Current release target: `v1.6`
 - Release mode: standard (`FORCE_RELEASE=false`)
-- Release gate: `continue_fix`
+- Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Verified device: `5391d451` (`Xiaomi 24129PN74C`)
@@ -18,6 +18,7 @@
   - `WiFi + windows_loopback`
   - `v1.6 Android foreground install/metrics`: passed on `5391d451` (`2026-05-09`)
   - `v1.6 Android background/power matrix`: known_issue on `5391d451` (`2026-05-09`); foreground playback starts and reports metrics, but background/power scenarios can fall back to `buffering` with `rx_frames_per_sec=0.0`
+  - `v1.6 QR code connection`: passed by manual end-to-end validation (`2026-05-10`)
 
 ## v1.6 Engineering Completion Plan
 
@@ -34,6 +35,7 @@
 - [x] TASK-V16-402 Android diagnostics support bundle completed: Android exports a zipped support bundle with `snapshot.json`, `device_info.json`, `recent_log.txt`, and `README.txt`, then opens the system share sheet from the advanced/settings panel.
 - [x] TASK-V16-403 Firewall guidance UX completed: Android and Desktop surface expandable, bilingual troubleshooting steps for `ConnectionRefused`, `Timeout`, and version/auth mismatch style connection failures.
 - [x] TASK-V16-404 Chinese documentation sync completed: `README.zh-CN.md` is aligned with the v1.5/v1.6 feature set, and `docs/protocol.md`, `docs/desktop_ui.md`, and `docs/todo.md` include Chinese summary blocks.
+- [x] TASK-V16-501 Release prep completed: version metadata and docs synchronized to `v1.6`; Android fixed release keystore signing is documented and wired for GitHub Actions/local packaging.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -67,9 +69,11 @@
 ### v1.6 Phase 4 Gate (`2026-05-10`)
 
 - [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
+- [x] QR code end-to-end connection verified manually
 - [x] Android support bundle code path compiles locally; zip generation includes snapshot, device info, recent logcat, and README; share sheet path is wired but not manually shared per scope
 - [x] Firewall guidance covers ConnectionRefused and Timeout UI paths on Android and Desktop
 - [x] README.zh-CN.md aligned with README.md feature coverage; protocol, desktop UI, and todo docs have Chinese summaries
+- [x] Android release signing fixed to use a stable keystore so APK upgrades can overwrite install without uninstalling, as long as the keystore is retained
 
 ## v1.4 Validation Summary (`2026-04-24`)
 
