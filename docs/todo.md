@@ -26,6 +26,7 @@
 - [known_issue] TASK-V16-301 USB direct real-device acceptance attempted on `5391d451` on 2026-05-09. Desktop `usb` transport config creates adb reverse entries for `tcp:39991` and `tcp:39992`, but the Android debug start path did not reach a stable USB session: MIUI blocked one cached debug broadcast, and the foreground service later remained in `CONNECTING` with a stale `ws_failure:Failed to connect to /10.0.0.185:39991`. No 10-minute underrun/silence-fill sample was produced. Current status: transport plumbing is partially present, but USB direct remains a known issue pending a first-class UI/debug start path reset.
 - [x] TASK-V16-302 Capability negotiation errors completed: shared `NegotiationError` now covers unsupported codec/data-plane, version mismatch, timeout, and explicit rejection; server negotiation rejects clients with no compatible codec fallback and returns a readable failure; shared snapshots can carry `last_error`; Android and Desktop UI parsing now surfaces readable negotiation errors.
 - [x] TASK-V16-303 Rollback path continuous testing completed: protocol tests with `legacy_` prefix cover PCM16 payload round-trip, `legacy_las1` header parsing, and legacy hello to v2 ack compatibility; `scripts/validate_local.ps1` now runs `cargo test -p lan_audio_protocol -- legacy`.
+- [x] TASK-V16-401 QR connection entry completed: Desktop generates an SVG QR for `lan-audio://<ip>:<port>` via the `qrcode` crate and shows it while the service is running; Android adds `mobile_scanner` based scan entry points, parses the `lan-audio://` scheme, fills the target host, and starts playback automatically.
 
 ### v1.6 Phase 1 Gate (`2026-05-09`)
 
@@ -55,6 +56,10 @@
   - 结论：known_issue（desktop USB transport and TCP data-plane hooks exist, but Android debug start/session reset is not robust enough for acceptance on `5391d451`）
 - [x] `NegotiationError` enum implemented with protocol/server tests
 - [x] Legacy rollback protocol tests added and wired into `scripts/validate_local.ps1`
+
+### v1.6 Phase 4 Gate (`2026-05-10`)
+
+- [x] QR code implementation compiles locally; end-to-end QR scan connection still awaits manual device confirmation
 
 ## v1.4 Validation Summary (`2026-04-24`)
 

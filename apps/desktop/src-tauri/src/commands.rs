@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lan_audio_protocol::{audio_mode_profile, DataPlanePath, PROTOCOL_VERSION_V2};
 use lan_audio_server::config::{AudioSourceKind, CodecSelection, DataPlaneFormat, TransportMode};
 use lan_audio_server::usb_transport::adb_devices;
+use qrcode::{render::svg, QrCode};
 use serde::Serialize;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
@@ -407,6 +408,20 @@ pub(crate) fn export_support_bundle(state: State<'_, AppState>) -> Result<String
     .map_err(|e| e.to_string())?;
 
     Ok(output_dir.display().to_string())
+}
+
+#[tauri::command]
+pub(crate) fn get_connection_qr_svg(state: State<'_, AppState>) -> Result<String, String> {
+    let snapshot = get_desktop_snapshot(state);
+    let uri = format!("lan-audio://{}:{}", snapshot.local_ip, snapshot.ws_port);
+    let code = QrCode::new(uri.as_bytes()).map_err(|e| e.to_string())?;
+    let svg = code
+        .render::<svg::Color<'_>>()
+        .min_dimensions(180, 180)
+        .dark_color(svg::Color("#e6edf7"))
+        .light_color(svg::Color("transparent"))
+        .build();
+    Ok(svg)
 }
 
 #[tauri::command]

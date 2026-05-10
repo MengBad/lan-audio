@@ -53,6 +53,7 @@ pub fn run() {
             commands::restore_recommended_mode,
             commands::export_diagnostics_report,
             commands::export_support_bundle,
+            commands::get_connection_qr_svg,
             commands::check_for_updates,
             commands::open_release_page
         ])

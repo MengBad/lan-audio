@@ -295,6 +295,30 @@
         gap: 6px;
       }
 
+      .qr-panel {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .qr-code {
+        width: 120px;
+        height: 120px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0b111a;
+        overflow: hidden;
+      }
+
+      .qr-code svg {
+        width: 104px;
+        height: 104px;
+      }
+
       .usb-device {
         display: grid;
         grid-template-columns: 1fr auto;
@@ -407,6 +431,14 @@
           </div>
         </div>
         <div class="error-text" id="errorText"></div>
+        <div class="qr-panel" id="qrPanel" style="display:none;">
+          <div class="qr-code" id="qrCode"></div>
+          <div>
+            <div class="health-title" id="qrTitle"></div>
+            <div class="status-sub" id="qrSubtitle"></div>
+            <div class="address-value" id="qrUriValue"></div>
+          </div>
+        </div>
       </section>
 
       <div class="layout">
@@ -555,6 +587,8 @@
           advancedPath: '当前数据面路径',
           advancedRollback: '回滚路径',
           advancedExport: '诊断报告',
+          qrTitle: '扫码连接',
+          qrSubtitle: 'Android 端扫码后会自动填入并连接。',
           dump: '导出 capture wav（调试）',
           exportDiag: '导出诊断包',
           exportDiagDone: '诊断包已导出：{path}',
@@ -680,6 +714,8 @@
           advancedPath: 'Current data-plane path',
           advancedRollback: 'Rollback path',
           advancedExport: 'Diagnostics report',
+          qrTitle: 'Scan to connect',
+          qrSubtitle: 'Scan from Android to fill and connect automatically.',
           dump: 'Export capture wav (debug)',
           exportDiag: 'Export support bundle',
           exportDiagDone: 'Support bundle exported: {path}',
@@ -789,6 +825,7 @@
         busy: false,
         adbDevices: [],
         lastAdbRefreshAt: 0,
+        qrKey: '',
       };
 
       function t(key) {
@@ -1013,6 +1050,8 @@
         document.getElementById('advancedPathLabel').textContent = t('advancedPath');
         document.getElementById('advancedRollbackLabel').textContent = t('advancedRollback');
         document.getElementById('advancedExportLabel').textContent = t('advancedExport');
+        document.getElementById('qrTitle').textContent = t('qrTitle');
+        document.getElementById('qrSubtitle').textContent = t('qrSubtitle');
         document.getElementById('logSummary').textContent = t('logSummary');
         document.getElementById('groupTx').textContent = t('groupTx');
         document.getElementById('groupCapture').textContent = t('groupCapture');
@@ -1165,7 +1204,28 @@
         document.getElementById('exportDiagBtn').disabled = disabled;
         document.getElementById('updateBannerBtn').disabled = disabled || !snapshot.update_banner?.release_url;
 
+        renderConnectionQr(snapshot);
         renderUsbPanel(snapshot);
+      }
+
+      async function renderConnectionQr(snapshot) {
+        const panel = document.getElementById('qrPanel');
+        const uri = `lan-audio://${snapshot.local_ip}:${snapshot.ws_port}`;
+        document.getElementById('qrUriValue').textContent = uri;
+        if (snapshot.service_status !== 'running') {
+          panel.style.display = 'none';
+          state.qrKey = '';
+          document.getElementById('qrCode').innerHTML = '';
+          return;
+        }
+        panel.style.display = 'grid';
+        if (state.qrKey === uri) return;
+        state.qrKey = uri;
+        try {
+          document.getElementById('qrCode').innerHTML = await tauriInvoke('get_connection_qr_svg');
+        } catch (error) {
+          document.getElementById('qrCode').textContent = String(error);
+        }
       }
 
       async function refresh() {

@@ -5,6 +5,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'audio/background_playback_service.dart';
 import 'ui/audio_console_status.dart';
@@ -36,6 +37,49 @@ class LanAudioApp extends StatelessWidget {
   }
 }
 
+class QrScannerPage extends StatefulWidget {
+  const QrScannerPage({super.key});
+
+  @override
+  State<QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<QrScannerPage> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan LAN Audio QR')),
+      body: MobileScanner(
+        onDetect: (capture) {
+          if (_handled) return;
+          for (final barcode in capture.barcodes) {
+            final raw = barcode.rawValue;
+            final target = parseLanAudioUri(raw);
+            if (target != null) {
+              _handled = true;
+              Navigator.of(context).pop(target);
+              return;
+            }
+          }
+        },
+      ),
+    );
+  }
+}
+
+QrConnectionTarget? parseLanAudioUri(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || uri.scheme != 'lan-audio') return null;
+  final host = uri.host;
+  if (host.isEmpty) return null;
+  final wsPort = uri.hasPort ? uri.port : 39991;
+  final udpPort = int.tryParse(uri.queryParameters['udp'] ?? '') ?? 39992;
+  return QrConnectionTarget(host: host, wsPort: wsPort, udpPort: udpPort);
+}
+
 class DiscoveryServer {
   DiscoveryServer({
     required this.serverId,
@@ -52,6 +96,18 @@ class DiscoveryServer {
   final int wsPort;
   final int udpPort;
   final DateTime lastSeen;
+}
+
+class QrConnectionTarget {
+  QrConnectionTarget({
+    required this.host,
+    required this.wsPort,
+    required this.udpPort,
+  });
+
+  final String host;
+  final int wsPort;
+  final int udpPort;
 }
 
 enum PlaybackState {
@@ -528,6 +584,24 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  Future<void> _scanQrAndConnect() async {
+    final target = await Navigator.of(context).push<QrConnectionTarget>(
+      MaterialPageRoute(builder: (_) => const QrScannerPage()),
+    );
+    if (target == null) return;
+    _manualHostController.text = target.host;
+    setState(() {
+      _connectMode = ConnectMode.manual;
+      _selectedServerId = null;
+    });
+    await _connectToHost(
+      host: target.host,
+      wsPort: target.wsPort,
+      udpPort: target.udpPort,
+      serverName: 'qr:${target.host}',
+    );
+  }
+
   Future<void> _connectQuickRecent() async {
     final host = _mostRecentHost();
     if (host == null) return;
@@ -976,6 +1050,12 @@ class _DebugPageState extends State<DebugPage> {
                     : tr('扫描局域网', 'Scan LAN'),
               ),
             ),
+            OutlinedButton.icon(
+              key: const Key('connection_qr_scan_action'),
+              onPressed: _isConnecting ? null : () => runAndClose(_scanQrAndConnect),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: Text(tr('扫码连接', 'Scan QR')),
+            ),
             if (recentHost != null)
               OutlinedButton.icon(
                 key: const Key('connection_recent_action'),
@@ -1311,6 +1391,13 @@ class _DebugPageState extends State<DebugPage> {
             address: _serverAddress,
             hint: tr('点击管理连接目标', 'Tap to manage connection'),
             onTap: () => _showConnectionSheet(servers),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('qr_scan_connect_action'),
+            onPressed: _isConnecting ? null : _scanQrAndConnect,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: Text(tr('扫码连接', 'Scan QR to Connect')),
           ),
           const SizedBox(height: 12),
           Row(
