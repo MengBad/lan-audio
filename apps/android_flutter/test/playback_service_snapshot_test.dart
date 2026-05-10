@@ -13,6 +13,14 @@ void main() {
       'effective_codec': 'opus',
       'state': 'streaming',
       'rollback_state': 'main_path_active',
+      'eq_enabled': true,
+      'eq_settings': <String, dynamic>{
+        'enabled': true,
+        'low_db': 6,
+        'mid_db': 0,
+        'high_db': 3,
+      },
+      'loudness_normalization_enabled': true,
       'metrics': <String, dynamic>{
         'buffered_ms': 42,
         'underrun': 0,
@@ -22,6 +30,7 @@ void main() {
         'reconnect_count': 4,
         'decode_errors': 5,
         'sink_write_gap_ms_p95': 6,
+        'loudness_gain_db': 2.3,
       },
     });
 
@@ -34,7 +43,29 @@ void main() {
     expect(snapshot.effectiveCodec, 'opus');
     expect(snapshot.state, 'streaming');
     expect(snapshot.rollbackState, 'main_path_active');
+    expect(snapshot.eqEnabled, true);
+    expect(snapshot.eqSettings['low_db'], 6);
+    expect(snapshot.eqSettings['high_db'], 3);
+    expect(snapshot.loudnessNormalizationEnabled, true);
     expect(snapshot.metrics['buffered_ms'], 42);
+    expect(snapshot.metrics['loudness_gain_db'], 2.3);
     expect(snapshot.metrics['sink_write_gap_ms_p95'], 6);
+  });
+
+  test('PlaybackServiceSnapshot round-trips persisted EQ state fields', () {
+    final snapshot = PlaybackServiceSnapshot.fromMap(const <String, dynamic>{
+      'eq_enabled': true,
+      'eq_settings': <String, dynamic>{
+        'enabled': true,
+        'low_db': -10,
+        'mid_db': 4,
+        'high_db': 10,
+      },
+    });
+
+    final mapped = snapshot.toMap();
+    expect(mapped['eq_enabled'], true);
+    expect(mapped['eq_settings'], isA<Map<String, dynamic>>());
+    expect((mapped['eq_settings'] as Map<String, dynamic>)['mid_db'], 4);
   });
 }

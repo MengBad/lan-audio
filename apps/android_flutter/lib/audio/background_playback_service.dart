@@ -21,6 +21,9 @@ class PlaybackServiceSnapshot {
     required this.transportMode,
     required this.playbackBackend,
     required this.connectedClientCount,
+    required this.eqEnabled,
+    required this.eqSettings,
+    required this.loudnessNormalizationEnabled,
     required this.metrics,
   });
 
@@ -41,6 +44,9 @@ class PlaybackServiceSnapshot {
   final String transportMode;
   final String playbackBackend;
   final int connectedClientCount;
+  final bool eqEnabled;
+  final Map<String, dynamic> eqSettings;
+  final bool loudnessNormalizationEnabled;
   final Map<String, dynamic> metrics;
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -73,6 +79,13 @@ class PlaybackServiceSnapshot {
       playbackBackend: '${normalized['playback_backend'] ?? 'audiotrack_stable'}',
       connectedClientCount:
           (normalized['connected_client_count'] as num?)?.toInt() ?? 0,
+      eqEnabled: normalized['eq_enabled'] == true,
+      eqSettings: (normalized['eq_settings'] as Map?)?.map(
+            (key, value) => MapEntry('$key', value),
+          ) ??
+          const <String, dynamic>{},
+      loudnessNormalizationEnabled:
+          normalized['loudness_normalization_enabled'] == true,
       metrics: (normalized['metrics'] as Map?)?.map(
             (key, value) => MapEntry('$key', value),
           ) ??
@@ -99,6 +112,9 @@ class PlaybackServiceSnapshot {
       'transport_mode': transportMode,
       'playback_backend': playbackBackend,
       'connected_client_count': connectedClientCount,
+      'eq_enabled': eqEnabled,
+      'eq_settings': eqSettings,
+      'loudness_normalization_enabled': loudnessNormalizationEnabled,
       'metrics': metrics,
     };
   }
@@ -168,6 +184,27 @@ class BackgroundPlaybackService {
       'mode': mode,
       'reason': reason,
     });
+  }
+
+  Future<void> setEqSettings({
+    required bool enabled,
+    required int lowDb,
+    required int midDb,
+    required int highDb,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setEqSettings', <String, dynamic>{
+      'enabled': enabled,
+      'lowDb': lowDb,
+      'midDb': midDb,
+      'highDb': highDb,
+    });
+  }
+
+  Future<void> setLoudnessNormalization(bool enabled) async {
+    await _methodChannel.invokeMethod<void>(
+      'setLoudnessNormalization',
+      <String, dynamic>{'enabled': enabled},
+    );
   }
 
   Future<PlaybackServiceSnapshot> getSnapshot() async {

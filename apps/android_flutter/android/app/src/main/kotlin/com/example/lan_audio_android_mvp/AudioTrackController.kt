@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.audiofx.Equalizer
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
@@ -18,6 +19,8 @@ import java.util.concurrent.atomic.AtomicLong
 class AudioTrackController : PlaybackAudioSink {
     private val logTag = "lan_audio_track"
     private var audioTrack: AudioTrack? = null
+    private var equalizer: Equalizer? = null
+    private var eqSettings: PlaybackEqSettings = PlaybackEqSettings()
     private var frameBytesPerPacket: Int = 1920
     private var frameDurationMs: Int = 20
     private var audioEncoding: Int = AudioFormat.ENCODING_PCM_16BIT
@@ -108,6 +111,7 @@ class AudioTrackController : PlaybackAudioSink {
             "audio writer init sampleRate=$sampleRate channels=$channels frameSamplesPerChannel=$frameSamplesPerChannel"
         )
         stopWriter("reinit")
+        releaseEqualizer()
         audioTrack?.release()
         writeFrames = 0
         shortWriteCount = 0
@@ -208,6 +212,7 @@ class AudioTrackController : PlaybackAudioSink {
         )
 
         audioTrack = track
+        setupEqualizer(track)
         track.setVolume(AudioTrack.getMaxVolume())
         startWriter()
     }
@@ -230,6 +235,11 @@ class AudioTrackController : PlaybackAudioSink {
     override fun setQueueSoftCapFrames(maxQueuedFrames: Int) {
         val clamped = maxQueuedFrames.coerceIn(4, 96)
         queueFrameSoftCap.set(clamped)
+    }
+
+    override fun setEqSettings(settings: PlaybackEqSettings) {
+        eqSettings = settings.clamped()
+        applyEqualizerSettings()
     }
 
     override fun writePcm16(data: ByteArray, frames: Int) {
@@ -262,6 +272,7 @@ class AudioTrackController : PlaybackAudioSink {
     override fun release() {
         Log.i(logTag, "audio writer release")
         stopWriter("release")
+        releaseEqualizer()
         audioTrack?.release()
         audioTrack = null
     }
@@ -747,6 +758,61 @@ class AudioTrackController : PlaybackAudioSink {
         return builder.build()
     }
 
+    private fun setupEqualizer(track: AudioTrack) {
+        releaseEqualizer()
+        equalizer = try {
+            Equalizer(0, track.audioSessionId).also {
+                applyEqualizerSettings(it)
+            }
+        } catch (t: Throwable) {
+            Log.w(logTag, "equalizer_init_failed: ${t.message}")
+            null
+        }
+    }
+
+    private fun applyEqualizerSettings(eq: Equalizer? = equalizer) {
+        val effect = eq ?: return
+        val settings = eqSettings.clamped()
+        try {
+            val range = effect.bandLevelRange
+            val minLevel = range.getOrNull(0)?.toInt() ?: -1000
+            val maxLevel = range.getOrNull(1)?.toInt() ?: 1000
+            setEqBand(effect, EQ_LOW_FREQ_MHZ, settings.lowDb, minLevel, maxLevel)
+            setEqBand(effect, EQ_MID_FREQ_MHZ, settings.midDb, minLevel, maxLevel)
+            setEqBand(effect, EQ_HIGH_FREQ_MHZ, settings.highDb, minLevel, maxLevel)
+            effect.enabled = settings.enabled
+            Log.i(
+                logTag,
+                "equalizer_applied enabled=${settings.enabled} low=${settings.lowDb} mid=${settings.midDb} high=${settings.highDb}",
+            )
+        } catch (t: Throwable) {
+            Log.w(logTag, "equalizer_apply_failed: ${t.message}")
+        }
+    }
+
+    private fun setEqBand(
+        effect: Equalizer,
+        frequencyMilliHz: Int,
+        gainDb: Int,
+        minLevel: Int,
+        maxLevel: Int,
+    ) {
+        val band = effect.getBand(frequencyMilliHz)
+        val levelMb = (gainDb * 100).coerceIn(minLevel, maxLevel).toShort()
+        effect.setBandLevel(band, levelMb)
+    }
+
+    private fun releaseEqualizer() {
+        try {
+            equalizer?.enabled = false
+            equalizer?.release()
+        } catch (t: Throwable) {
+            Log.w(logTag, "equalizer_release_failed: ${t.message}")
+        } finally {
+            equalizer = null
+        }
+    }
+
     private fun configuredBufferSizeBytes(
         track: AudioTrack,
         channelCount: Int,
@@ -819,6 +885,9 @@ class AudioTrackController : PlaybackAudioSink {
         private const val PREFILL_WAIT_LOG_INTERVAL_MS = 250L
         private const val STARTUP_PENDING_LOG_MS = 1_000L
         private const val DEFAULT_BUFFER_MULTIPLIER = 3
+        private const val EQ_LOW_FREQ_MHZ = 60_000
+        private const val EQ_MID_FREQ_MHZ = 1_000_000
+        private const val EQ_HIGH_FREQ_MHZ = 10_000_000
 
         fun queryNativeOutputSampleRate(): Int {
             return AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC)

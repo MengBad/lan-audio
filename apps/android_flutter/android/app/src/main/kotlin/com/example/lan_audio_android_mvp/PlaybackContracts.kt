@@ -8,6 +8,8 @@ object PlaybackActions {
     const val ACTION_RESTORE_LAST = "lan_audio.action.RESTORE_LAST"
     const val ACTION_SET_OPTIONS = "lan_audio.action.SET_OPTIONS"
     const val ACTION_SET_AUDIO_MODE = "lan_audio.action.SET_AUDIO_MODE"
+    const val ACTION_SET_EQ = "lan_audio.action.SET_EQ"
+    const val ACTION_SET_LOUDNESS = "lan_audio.action.SET_LOUDNESS"
     const val ACTION_DUMP_METRICS = "lan_audio.action.DUMP_METRICS"
 
     const val EXTRA_HOST = "host"
@@ -20,6 +22,12 @@ object PlaybackActions {
     const val EXTRA_AUDIO_MODE = "audio_mode"
     const val EXTRA_REASON = "reason"
     const val EXTRA_TRANSPORT_MODE = "transport_mode"
+    const val EXTRA_OPEN_POWER_GUIDE = "open_power_guide"
+    const val EXTRA_EQ_ENABLED = "eq_enabled"
+    const val EXTRA_EQ_LOW_DB = "eq_low_db"
+    const val EXTRA_EQ_MID_DB = "eq_mid_db"
+    const val EXTRA_EQ_HIGH_DB = "eq_high_db"
+    const val EXTRA_LOUDNESS_ENABLED = "loudness_enabled"
 }
 
 object PlaybackChannels {
@@ -54,6 +62,30 @@ data class PlaybackOptions(
     val frameDurationMs: Int = 10,
     val resetBufferOnSwitch: Boolean = true,
     val pingIntervalMs: Int = 1000,
+)
+
+data class PlaybackEqSettings(
+    val enabled: Boolean = false,
+    val lowDb: Int = 0,
+    val midDb: Int = 0,
+    val highDb: Int = 0,
+) {
+    fun clamped(): PlaybackEqSettings {
+        return copy(
+            lowDb = lowDb.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB),
+            midDb = midDb.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB),
+            highDb = highDb.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB),
+        )
+    }
+
+    companion object {
+        const val MIN_GAIN_DB = -10
+        const val MAX_GAIN_DB = 10
+    }
+}
+
+data class LoudnessNormalizationSettings(
+    val enabled: Boolean = false,
 )
 
 enum class TransportHint {
@@ -244,6 +276,7 @@ data class PlaybackMetrics(
     val reconnectCount: Int = 0,
     val decodeErrors: Int = 0,
     val sinkWriteGapMsP95: Int = 0,
+    val loudnessGainDb: Double = 0.0,
 )
 
 data class PlaybackSnapshot(
@@ -267,6 +300,8 @@ data class PlaybackSnapshot(
     val clientAppVersion: String = "android_flutter",
     val serverPlatform: String? = null,
     val serverAppVersion: String? = null,
+    val eqSettings: PlaybackEqSettings = PlaybackEqSettings(),
+    val loudnessNormalizationEnabled: Boolean = false,
     val metrics: PlaybackMetrics = PlaybackMetrics(),
     val recentLog: String = "",
     val error: Map<String, String>? = null,
@@ -312,6 +347,14 @@ data class PlaybackSnapshot(
             "clientAppVersion" to clientAppVersion,
             "serverPlatform" to serverPlatform,
             "serverAppVersion" to serverAppVersion,
+            "eqEnabled" to eqSettings.enabled,
+            "eqSettings" to mapOf(
+                "enabled" to eqSettings.enabled,
+                "lowDb" to eqSettings.lowDb,
+                "midDb" to eqSettings.midDb,
+                "highDb" to eqSettings.highDb,
+            ),
+            "loudnessNormalizationEnabled" to loudnessNormalizationEnabled,
             "metrics" to mapOf(
                 "sampleRate" to metrics.sampleRate,
                 "channels" to metrics.channels,
@@ -344,6 +387,7 @@ data class PlaybackSnapshot(
                 "reconnectCount" to metrics.reconnectCount,
                 "decodeErrors" to metrics.decodeErrors,
                 "sinkWriteGapMsP95" to metrics.sinkWriteGapMsP95,
+                "loudnessGainDb" to metrics.loudnessGainDb,
             ),
             "recentLog" to recentLog,
             "error" to error,
@@ -372,6 +416,7 @@ data class StableServiceMetrics(
     val startupSilenceFillCount: Int = 0,
     val jitterP95Ms: Int? = null,
     val floorHoldCount: Int = 0,
+    val loudnessGainDb: Double = 0.0,
 )
 
 data class StableServiceSnapshot(
@@ -392,6 +437,9 @@ data class StableServiceSnapshot(
     val transportMode: String = "wifi",
     val playbackBackend: String = "audiotrack_stable",
     val connectedClientCount: Int = 0,
+    val eqEnabled: Boolean = false,
+    val eqSettings: Map<String, Any?> = emptyMap(),
+    val loudnessNormalizationEnabled: Boolean = false,
     val metrics: StableServiceMetrics = StableServiceMetrics(),
 ) {
     fun toMap(): Map<String, Any?> {
@@ -413,6 +461,9 @@ data class StableServiceSnapshot(
             "transport_mode" to transportMode,
             "playback_backend" to playbackBackend,
             "connected_client_count" to connectedClientCount,
+            "eq_enabled" to eqEnabled,
+            "eq_settings" to eqSettings,
+            "loudness_normalization_enabled" to loudnessNormalizationEnabled,
             "metrics" to mapOf(
                 "buffered_ms" to metrics.bufferedMs,
                 "underrun" to metrics.underrun,
@@ -434,6 +485,7 @@ data class StableServiceSnapshot(
                 "startup_silence_fill_count" to metrics.startupSilenceFillCount,
                 "jitter_p95_ms" to metrics.jitterP95Ms,
                 "floor_hold_count" to metrics.floorHoldCount,
+                "loudness_gain_db" to metrics.loudnessGainDb,
             ),
         )
     }
@@ -503,6 +555,14 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
         transportMode = transportMode,
         playbackBackend = playbackBackend,
         connectedClientCount = connectedClientCount,
+        eqEnabled = eqSettings.enabled,
+        eqSettings = mapOf(
+            "enabled" to eqSettings.enabled,
+            "low_db" to eqSettings.lowDb,
+            "mid_db" to eqSettings.midDb,
+            "high_db" to eqSettings.highDb,
+        ),
+        loudnessNormalizationEnabled = loudnessNormalizationEnabled,
         metrics = StableServiceMetrics(
             bufferedMs = metrics.totalBufferedMs,
             underrun = metrics.jitterUnderrun,
@@ -524,6 +584,7 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             startupSilenceFillCount = metrics.startupSilenceFillCount,
             jitterP95Ms = metrics.jitterP95Ms,
             floorHoldCount = metrics.floorHoldCount,
+            loudnessGainDb = metrics.loudnessGainDb,
         ),
     )
 }

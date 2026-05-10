@@ -10,6 +10,7 @@ import 'audio/audio_track_output.dart';
 import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
+import 'power_saving_guide.dart';
 
 const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
 const bool kUseBackgroundPlaybackService = true;
@@ -27,6 +28,9 @@ class LanAudioApp extends StatelessWidget {
       title: 'LAN Audio Android MVP',
       theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
       home: const DebugPage(),
+      routes: {
+        PowerSavingGuidePage.routeName: (_) => const PowerSavingGuidePage(),
+      },
     );
   }
 }
@@ -153,6 +157,12 @@ class _DebugPageState extends State<DebugPage> {
   String _protocolPath = 'legacy_or_v2_auto';
   String _playbackBackend = 'audiotrack_stable';
   String _effectiveCodec = 'pcm16';
+  bool _eqEnabled = false;
+  int _eqLowDb = 0;
+  int _eqMidDb = 0;
+  int _eqHighDb = 0;
+  bool _loudnessNormalizationEnabled = false;
+  double _loudnessGainDb = 0.0;
   bool _experimentalPath = false;
   bool _updateCheckRunning = false;
 
@@ -166,7 +176,8 @@ class _DebugPageState extends State<DebugPage> {
     _acquireMulticastLock();
     _startDiscovery();
     if (kUseBackgroundPlaybackService) {
-      debugPrint('ui_init background playback service enabled; attach events/getSnapshot/setOptions');
+      debugPrint(
+          'ui_init background playback service enabled; attach events/getSnapshot/setOptions');
       _serviceEventsSub =
           _backgroundService.events().listen(_onPlaybackServiceEvent);
       _backgroundService
@@ -179,6 +190,7 @@ class _DebugPageState extends State<DebugPage> {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowFirstUseHint();
+      _maybeOpenPowerGuideFromIntent();
     });
     _scheduleSilentUpdateCheck();
   }
@@ -186,6 +198,23 @@ class _DebugPageState extends State<DebugPage> {
   bool get _isZh => _lang == AppLang.zh;
 
   String tr(String zh, String en) => _isZh ? zh : en;
+
+  Future<void> _maybeOpenPowerGuideFromIntent() async {
+    try {
+      final shouldOpen = await _platformChannel
+              .invokeMethod<bool>('consumePowerGuideRequest') ??
+          false;
+      if (shouldOpen && mounted) {
+        Navigator.of(context).pushNamed(PowerSavingGuidePage.routeName);
+      }
+    } catch (_) {
+      // Platform support is optional on desktop/widget tests.
+    }
+  }
+
+  void _openPowerSavingGuide() {
+    Navigator.of(context).pushNamed(PowerSavingGuidePage.routeName);
+  }
 
   AudioModePreference _audioModeFromWire(String value) {
     switch (value) {
@@ -231,8 +260,7 @@ class _DebugPageState extends State<DebugPage> {
     if (_updateCheckRunning) return;
     _updateCheckRunning = true;
     try {
-      final update =
-          await _platformChannel.invokeMapMethod<String, dynamic>(
+      final update = await _platformChannel.invokeMapMethod<String, dynamic>(
         'checkForAppUpdate',
         {'delayMs': silentDelayMs},
       );
@@ -321,13 +349,13 @@ class _DebugPageState extends State<DebugPage> {
       _serviceTrackQueuedMs =
           (metrics['audio_track_queued_ms'] as num?)?.toInt() ??
               _serviceTrackQueuedMs;
-      _serviceUnderrun = (metrics['underrun'] as num?)?.toInt() ?? _serviceUnderrun;
+      _serviceUnderrun =
+          (metrics['underrun'] as num?)?.toInt() ?? _serviceUnderrun;
       _serviceDropped =
           (metrics['dropped_packets'] as num?)?.toInt() ?? _serviceDropped;
       _serviceLate = (metrics['late_packets'] as num?)?.toInt() ?? _serviceLate;
-      _serviceFloorHoldCount =
-          (metrics['floor_hold_count'] as num?)?.toInt() ??
-              _serviceFloorHoldCount;
+      _serviceFloorHoldCount = (metrics['floor_hold_count'] as num?)?.toInt() ??
+          _serviceFloorHoldCount;
       _serviceUdpPackets =
           (metrics['udp_packets'] as num?)?.toInt() ?? _serviceUdpPackets;
       _serviceUdpBytes =
@@ -340,18 +368,33 @@ class _DebugPageState extends State<DebugPage> {
           (metrics['audio_track_latency_ms'] as num?)?.toInt() ??
               _serviceAudioTrackLatencyMs;
       _currentAudioMode = _audioModeFromWire(snapshot.mode);
-      _protocolVersion =
-          snapshot.protocolVersion ?? (snapshot.dataPlane == 'v2_header' ? 2 : 1);
+      _protocolVersion = snapshot.protocolVersion ??
+          (snapshot.dataPlane == 'v2_header' ? 2 : 1);
       _negotiatedCapabilities = snapshot.negotiatedCapabilities;
       _serverPlatform = snapshot.serverPlatform;
       _serverAppVersion = snapshot.serverAppVersion;
       _modeProfile = snapshot.modeProfile;
-      _connectionPath = snapshot.transport == 'usb' ? 'usb_localhost' : 'lan_ip_wifi_or_usb';
+      _connectionPath =
+          snapshot.transport == 'usb' ? 'usb_localhost' : 'lan_ip_wifi_or_usb';
       _transportMode = snapshot.transportMode;
       _connectedClientCount = snapshot.connectedClientCount;
       _protocolPath = snapshot.dataPlane;
       _playbackBackend = snapshot.playbackBackend;
       _effectiveCodec = snapshot.effectiveCodec;
+      _eqEnabled = snapshot.eqEnabled;
+      _eqLowDb = (snapshot.eqSettings['low_db'] as num?)?.toInt() ??
+          (snapshot.eqSettings['lowDb'] as num?)?.toInt() ??
+          _eqLowDb;
+      _eqMidDb = (snapshot.eqSettings['mid_db'] as num?)?.toInt() ??
+          (snapshot.eqSettings['midDb'] as num?)?.toInt() ??
+          _eqMidDb;
+      _eqHighDb = (snapshot.eqSettings['high_db'] as num?)?.toInt() ??
+          (snapshot.eqSettings['highDb'] as num?)?.toInt() ??
+          _eqHighDb;
+      _loudnessNormalizationEnabled = snapshot.loudnessNormalizationEnabled;
+      _loudnessGainDb =
+          (metrics['loudness_gain_db'] as num?)?.toDouble() ??
+              _loudnessGainDb;
       _experimentalPath = snapshot.dataPlane == 'v2_header';
       _tcpRoundTripMs = (metrics['rtt_ms'] as num?)?.toInt();
       _tcpRoundTripMedianMs = _tcpRoundTripMs;
@@ -908,6 +951,75 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+  Future<void> _setEq({
+    bool? enabled,
+    int? lowDb,
+    int? midDb,
+    int? highDb,
+  }) async {
+    final nextEnabled = enabled ?? _eqEnabled;
+    final nextLow = (lowDb ?? _eqLowDb).clamp(-10, 10).toInt();
+    final nextMid = (midDb ?? _eqMidDb).clamp(-10, 10).toInt();
+    final nextHigh = (highDb ?? _eqHighDb).clamp(-10, 10).toInt();
+    setState(() {
+      _eqEnabled = nextEnabled;
+      _eqLowDb = nextLow;
+      _eqMidDb = nextMid;
+      _eqHighDb = nextHigh;
+    });
+    try {
+      await _backgroundService.setEqSettings(
+        enabled: nextEnabled,
+        lowDb: nextLow,
+        midDb: nextMid,
+        highDb: nextHigh,
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = '${tr('均衡器设置失败', 'EQ update failed')}: $e';
+      });
+    }
+  }
+
+  Future<void> _applyEqPreset(String preset) async {
+    switch (preset) {
+      case 'bass':
+        await _setEq(enabled: true, lowDb: 6, midDb: 0, highDb: 0);
+        return;
+      case 'vocal':
+        await _setEq(enabled: true, lowDb: -2, midDb: 4, highDb: 1);
+        return;
+      case 'bright':
+        await _setEq(enabled: true, lowDb: 0, midDb: 0, highDb: 5);
+        return;
+      default:
+        await _setEq(enabled: false, lowDb: 0, midDb: 0, highDb: 0);
+    }
+  }
+
+  Future<void> _setLoudnessNormalization(bool enabled) async {
+    setState(() {
+      _loudnessNormalizationEnabled = enabled;
+      if (!enabled) {
+        _loudnessGainDb = 0.0;
+      }
+    });
+    try {
+      await _backgroundService.setLoudnessNormalization(enabled);
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status =
+            '${tr('响度归一化设置失败', 'Loudness normalization update failed')}: $e';
+      });
+    }
+  }
+
   void _handleUdpPacket(Uint8List bytes) {
     final packet = LasPacket.parse(bytes);
     if (packet == null) {
@@ -1128,8 +1240,9 @@ class _DebugPageState extends State<DebugPage> {
   int get _uiBufferedMs =>
       kUseBackgroundPlaybackService ? _serviceBufferedMs : _jitter.bufferedMs;
 
-  int get _uiJitterBufferedMs =>
-      kUseBackgroundPlaybackService ? _serviceJitterBufferedMs : _jitter.bufferedMs;
+  int get _uiJitterBufferedMs => kUseBackgroundPlaybackService
+      ? _serviceJitterBufferedMs
+      : _jitter.bufferedMs;
 
   int get _uiTrackQueuedMs =>
       kUseBackgroundPlaybackService ? _serviceTrackQueuedMs : 0;
@@ -1164,6 +1277,47 @@ class _DebugPageState extends State<DebugPage> {
 
   int? get _uiAudioTrackLatencyMs =>
       kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
+
+  Widget _eqSlider({
+    required String label,
+    required int value,
+    required ValueChanged<int> onChanged,
+  }) {
+    return SizedBox(
+      width: 86,
+      height: 190,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, textAlign: TextAlign.center),
+          const SizedBox(height: 4),
+          Text(
+            '${value >= 0 ? '+' : ''}$value dB',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          Expanded(
+            child: RotatedBox(
+              quarterTurns: -1,
+              child: Slider(
+                min: -10,
+                max: 10,
+                divisions: 20,
+                value: value.toDouble(),
+                onChanged: (next) => onChanged(next.round()),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _eqPresetButton(String label, String preset) {
+    return OutlinedButton(
+      onPressed: () => _applyEqPreset(preset),
+      child: Text(label),
+    );
+  }
 
   Widget _metricTile(String label, String value) {
     return Container(
@@ -1560,10 +1714,87 @@ class _DebugPageState extends State<DebugPage> {
                         tr('策略', 'Strategy'),
                         '${_modeProfile['startBufferMs'] ?? '-'} / ${_modeProfile['maxBufferMs'] ?? '-'} ms',
                       ),
+                      _metricTile(
+                        tr('响度增益', 'Loudness gain'),
+                        _playbackState == PlaybackState.playing
+                            ? '${_loudnessGainDb >= 0 ? '+' : ''}${_loudnessGainDb.toStringAsFixed(1)} dB'
+                            : '-',
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text('${tr('音频日志', 'Audio log')}: $_audioLog'),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          tr('均衡器', 'Equalizer'),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      Switch(
+                        value: _eqEnabled,
+                        onChanged: (value) => _setEq(enabled: value),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _eqPresetButton(tr('平直', 'Flat'), 'flat'),
+                      _eqPresetButton(tr('低音增强', 'Bass'), 'bass'),
+                      _eqPresetButton(tr('人声清晰', 'Vocal'), 'vocal'),
+                      _eqPresetButton(tr('高频亮丽', 'Bright'), 'bright'),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(tr('响度归一化', 'Loudness normalization')),
+                    subtitle: Text(tr(
+                      'balanced/high_quality 生效，low_latency 自动旁路',
+                      'Active in balanced/high_quality; bypassed in low_latency',
+                    )),
+                    value: _loudnessNormalizationEnabled,
+                    onChanged: _setLoudnessNormalization,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _eqSlider(
+                        label: tr('低频\n60Hz', 'Low\n60Hz'),
+                        value: _eqLowDb,
+                        onChanged: (value) => _setEq(lowDb: value),
+                      ),
+                      _eqSlider(
+                        label: tr('中频\n1kHz', 'Mid\n1kHz'),
+                        value: _eqMidDb,
+                        onChanged: (value) => _setEq(midDb: value),
+                      ),
+                      _eqSlider(
+                        label: tr('高频\n10kHz', 'High\n10kHz'),
+                        value: _eqHighDb,
+                        onChanged: (value) => _setEq(highDb: value),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -1633,6 +1864,11 @@ class _DebugPageState extends State<DebugPage> {
                       ],
                     ),
                   ),
+                  OutlinedButton(
+                    onPressed: _openPowerSavingGuide,
+                    child: Text(tr('后台播放', 'Background')),
+                  ),
+                  const SizedBox(width: 8),
                   OutlinedButton(
                     onPressed: _updateCheckRunning
                         ? null
@@ -1724,6 +1960,82 @@ class _DebugPageState extends State<DebugPage> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class PowerSavingGuidePage extends StatefulWidget {
+  const PowerSavingGuidePage({super.key});
+
+  static const routeName = '/power-saving-guide';
+
+  @override
+  State<PowerSavingGuidePage> createState() => _PowerSavingGuidePageState();
+}
+
+class _PowerSavingGuidePageState extends State<PowerSavingGuidePage> {
+  static const MethodChannel _platformChannel =
+      MethodChannel('lan_audio/platform');
+
+  String _manufacturer = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadManufacturer();
+  }
+
+  Future<void> _loadManufacturer() async {
+    try {
+      final manufacturer =
+          await _platformChannel.invokeMethod<String>('getDeviceManufacturer');
+      if (mounted) {
+        setState(() => _manufacturer = manufacturer ?? '');
+      }
+    } catch (_) {
+      // Keep generic instructions when native platform data is unavailable.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locale =
+        PlatformDispatcher.instance.locale.languageCode.toLowerCase();
+    final isZh = locale.startsWith('zh');
+    final steps = orderedPowerSavingGuideSteps(_manufacturer);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isZh ? '后台播放' : 'Background playback'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            isZh
+                ? 'LAN Audio 被省电模式限制时，请按下面步骤允许后台播放。'
+                : 'If battery saver limits LAN Audio, allow background playback with the steps below.',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          if (_manufacturer.isNotEmpty)
+            Text(
+              isZh
+                  ? '已识别设备品牌：$_manufacturer'
+                  : 'Detected manufacturer: $_manufacturer',
+              style: const TextStyle(color: Colors.black54),
+            ),
+          if (_manufacturer.isNotEmpty) const SizedBox(height: 12),
+          for (final step in steps) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.battery_saver),
+              title: Text(step.zh),
+              subtitle: Text(step.en),
+            ),
+            const Divider(height: 1),
+          ],
         ],
       ),
     );

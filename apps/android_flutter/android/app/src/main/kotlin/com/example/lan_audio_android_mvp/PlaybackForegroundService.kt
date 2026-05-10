@@ -35,10 +35,13 @@ class PlaybackForegroundService : MediaSessionService() {
     private var explicitStopRequested = false
     private var lastNotificationAtMs = 0L
     private var lastNotificationKey = ""
+    private var bufferingSinceMs = 0L
+    private var lastPowerGuideNotificationAtMs = 0L
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
         updateMediaSession(snapshot)
         updateNotification(snapshot)
+        maybeNotifyPowerSavingRestriction(snapshot)
     }
 
     override fun onCreate() {
@@ -46,6 +49,10 @@ class PlaybackForegroundService : MediaSessionService() {
         Log.i(logTag, "onCreate")
         ensureNotificationChannel()
         sessionController = PlaybackSessionController(applicationContext, stateStore)
+        val persistedEqSettings = loadPersistedEqSettings()
+        val persistedLoudnessEnabled = loadPersistedLoudnessEnabled()
+        sessionController.setEqSettings(persistedEqSettings)
+        sessionController.setLoudnessNormalization(persistedLoudnessEnabled)
         player = ExoPlayer.Builder(this).build().apply {
             playWhenReady = false
             repeatMode = Player.REPEAT_MODE_OFF
@@ -60,7 +67,14 @@ class PlaybackForegroundService : MediaSessionService() {
             })
         }
         stateStore.addListener(storeListener)
-        stateStore.set(PlaybackSnapshot(serviceState = "idle", recentLog = "service_created"))
+        stateStore.set(
+            PlaybackSnapshot(
+                serviceState = "idle",
+                eqSettings = persistedEqSettings,
+                loudnessNormalizationEnabled = persistedLoudnessEnabled,
+                recentLog = "service_created",
+            ),
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -160,6 +174,23 @@ class PlaybackForegroundService : MediaSessionService() {
                 val mode = intent.getStringExtra(PlaybackActions.EXTRA_AUDIO_MODE) ?: "balanced"
                 val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "ui_request"
                 sessionController.setAudioMode(mode, reason)
+            }
+
+            PlaybackActions.ACTION_SET_EQ -> {
+                val settings = PlaybackEqSettings(
+                    enabled = intent.getBooleanExtra(PlaybackActions.EXTRA_EQ_ENABLED, false),
+                    lowDb = intent.getIntExtra(PlaybackActions.EXTRA_EQ_LOW_DB, 0),
+                    midDb = intent.getIntExtra(PlaybackActions.EXTRA_EQ_MID_DB, 0),
+                    highDb = intent.getIntExtra(PlaybackActions.EXTRA_EQ_HIGH_DB, 0),
+                ).clamped()
+                persistEqSettings(settings)
+                sessionController.setEqSettings(settings)
+            }
+
+            PlaybackActions.ACTION_SET_LOUDNESS -> {
+                val enabled = intent.getBooleanExtra(PlaybackActions.EXTRA_LOUDNESS_ENABLED, false)
+                persistLoudnessEnabled(enabled)
+                sessionController.setLoudnessNormalization(enabled)
             }
 
             PlaybackActions.ACTION_DUMP_METRICS -> {
@@ -369,6 +400,50 @@ class PlaybackForegroundService : MediaSessionService() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun maybeNotifyPowerSavingRestriction(snapshot: PlaybackSnapshot) {
+        val now = SystemClock.elapsedRealtime()
+        val isBuffering = snapshot.playbackState == "buffering" &&
+            snapshot.serviceState == "running" &&
+            snapshot.connectionState == "connected"
+        if (!isBuffering) {
+            bufferingSinceMs = 0L
+            return
+        }
+        if (bufferingSinceMs == 0L) {
+            bufferingSinceMs = now
+            return
+        }
+        if (now - bufferingSinceMs < POWER_GUIDE_BUFFERING_TIMEOUT_MS) {
+            return
+        }
+        if (now - lastPowerGuideNotificationAtMs < POWER_GUIDE_NOTIFICATION_COOLDOWN_MS) {
+            return
+        }
+        lastPowerGuideNotificationAtMs = now
+
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            putExtra(PlaybackActions.EXTRA_OPEN_POWER_GUIDE, true)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        } ?: return
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            POWER_GUIDE_REQUEST_CODE,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("LAN Audio 被省电模式限制")
+            .setContentText("点击查看后台播放解决方案")
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(POWER_GUIDE_NOTIFICATION_ID, notification)
+        Log.w(logTag, "power saving guidance notification shown after buffering timeout")
+    }
+
     private fun acquirePlaybackLocks() {
         if (wakeLock?.isHeld != true) {
             val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -487,6 +562,39 @@ class PlaybackForegroundService : MediaSessionService() {
         return prefs.getBoolean(KEY_AUTO_RESTORE, false) && !prefs.getString(KEY_HOST, null).isNullOrBlank()
     }
 
+    private fun loadPersistedEqSettings(): PlaybackEqSettings {
+        val prefs = getSharedPreferences(PREFS_QUALITY_NAME, Context.MODE_PRIVATE)
+        return PlaybackEqSettings(
+            enabled = prefs.getBoolean(KEY_EQ_ENABLED, false),
+            lowDb = prefs.getInt(KEY_EQ_LOW_DB, 0),
+            midDb = prefs.getInt(KEY_EQ_MID_DB, 0),
+            highDb = prefs.getInt(KEY_EQ_HIGH_DB, 0),
+        ).clamped()
+    }
+
+    private fun persistEqSettings(settings: PlaybackEqSettings) {
+        val clamped = settings.clamped()
+        getSharedPreferences(PREFS_QUALITY_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_EQ_ENABLED, clamped.enabled)
+            .putInt(KEY_EQ_LOW_DB, clamped.lowDb)
+            .putInt(KEY_EQ_MID_DB, clamped.midDb)
+            .putInt(KEY_EQ_HIGH_DB, clamped.highDb)
+            .apply()
+    }
+
+    private fun loadPersistedLoudnessEnabled(): Boolean {
+        return getSharedPreferences(PREFS_QUALITY_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_LOUDNESS_ENABLED, false)
+    }
+
+    private fun persistLoudnessEnabled(enabled: Boolean) {
+        getSharedPreferences(PREFS_QUALITY_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_LOUDNESS_ENABLED, enabled)
+            .apply()
+    }
+
     private fun schedulePlaybackRestore(reason: String) {
         try {
             val intent = Intent(this, PlaybackForegroundService::class.java)
@@ -510,16 +618,26 @@ class PlaybackForegroundService : MediaSessionService() {
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "lan_audio_playback"
         private const val NOTIFICATION_ID = 2591
+        private const val POWER_GUIDE_NOTIFICATION_ID = 2593
+        private const val POWER_GUIDE_REQUEST_CODE = 2594
         private const val NOTIFICATION_UPDATE_MIN_INTERVAL_MS = 1000L
+        private const val POWER_GUIDE_BUFFERING_TIMEOUT_MS = 10_000L
+        private const val POWER_GUIDE_NOTIFICATION_COOLDOWN_MS = 10 * 60 * 1000L
         private const val RESTORE_REQUEST_CODE = 2592
         private const val RESTORE_DELAY_MS = 2500L
         private const val PREFS_NAME = "lan_audio_playback_restore"
+        private const val PREFS_QUALITY_NAME = "lan_audio_playback_quality"
         private const val KEY_HOST = "host"
         private const val KEY_WS_PORT = "ws_port"
         private const val KEY_UDP_PORT = "udp_port"
         private const val KEY_SERVER_NAME = "server_name"
         private const val KEY_TRANSPORT_MODE = "transport_mode"
         private const val KEY_AUTO_RESTORE = "auto_restore"
+        private const val KEY_EQ_ENABLED = "eq_enabled"
+        private const val KEY_EQ_LOW_DB = "eq_low_db"
+        private const val KEY_EQ_MID_DB = "eq_mid_db"
+        private const val KEY_EQ_HIGH_DB = "eq_high_db"
+        private const val KEY_LOUDNESS_ENABLED = "loudness_enabled"
 
         fun startPlayback(context: Context, target: PlaybackTarget) {
             val intent = Intent(context, PlaybackForegroundService::class.java)
@@ -573,6 +691,24 @@ class PlaybackForegroundService : MediaSessionService() {
                 .setAction(PlaybackActions.ACTION_SET_AUDIO_MODE)
                 .putExtra(PlaybackActions.EXTRA_AUDIO_MODE, mode)
                 .putExtra(PlaybackActions.EXTRA_REASON, reason)
+            context.startService(intent)
+        }
+
+        fun setEqSettings(context: Context, settings: PlaybackEqSettings) {
+            val clamped = settings.clamped()
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_SET_EQ)
+                .putExtra(PlaybackActions.EXTRA_EQ_ENABLED, clamped.enabled)
+                .putExtra(PlaybackActions.EXTRA_EQ_LOW_DB, clamped.lowDb)
+                .putExtra(PlaybackActions.EXTRA_EQ_MID_DB, clamped.midDb)
+                .putExtra(PlaybackActions.EXTRA_EQ_HIGH_DB, clamped.highDb)
+            context.startService(intent)
+        }
+
+        fun setLoudnessNormalization(context: Context, enabled: Boolean) {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_SET_LOUDNESS)
+                .putExtra(PlaybackActions.EXTRA_LOUDNESS_ENABLED, enabled)
             context.startService(intent)
         }
 

@@ -14,6 +14,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -22,7 +23,7 @@ use crate::config::{CodecSelection, DataPlaneFormat, ServerConfig, TransportMode
 use crate::data_plane::DataPlaneRouter;
 use crate::metrics::Metrics;
 
-pub const MAX_CLIENTS: usize = 8;
+pub const MAX_CLIENTS: usize = 4;
 
 #[derive(Clone)]
 pub struct SessionServer {
@@ -919,12 +920,18 @@ pub async fn write_length_prefixed_frame(
     payload: &[u8],
 ) -> anyhow::Result<()> {
     let mut guard = writer.lock().await;
-    guard
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .await?;
-    guard.write_all(payload).await?;
+    timeout(USB_DIRECT_WRITE_TIMEOUT, async {
+        guard
+            .write_all(&(payload.len() as u32).to_be_bytes())
+            .await?;
+        guard.write_all(payload).await
+    })
+    .await
+    .context("usb direct frame write timeout")??;
     Ok(())
 }
+
+const USB_DIRECT_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 mod tests {

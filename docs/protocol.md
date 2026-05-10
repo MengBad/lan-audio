@@ -39,6 +39,8 @@ V2 的产品原则：
 - `data_plane`：配置/协商后的包格式（`legacy_las1` 或 `v2_header`）
 - `active_data_plane`：实际运行路径（`legacy_las1`、`v2_header`、`usb_direct`）
 - `rollback_available`：当前是否仍可显式回滚到 `legacy_las1 + pcm16`
+- `eq_enabled` / `eq_settings`：Android 播放端三段 EQ 状态（低频 60Hz、中频 1kHz、高频 10kHz）
+- `loudness_normalization_enabled`：响度归一化开关；运行指标通过 `metrics.loudness_gain_db` 暴露当前软件增益
 
 ## 3. 版本策略
 
@@ -269,6 +271,7 @@ V2 的产品原则：
 
 - 服务端可在客户端列表变化或 mode 变化后推送。
 - Android 可只展示数量（例如“当前共 N 台设备连接中”）。
+- v1.7 服务端最多同时维护 4 个 client session；超出时返回 `too_many_clients`。
 
 ### 4.12 client_joined / client_left
 
@@ -446,7 +449,8 @@ V2 的产品原则：
 - USB tethering 被纳入 V2 低延迟推荐连接路径。
 - 当前实现仍通过 IP/WebSocket/UDP 传输；USB tethering 的作用是提供更稳定、更低抖动的局域网链路。
 - `supports_usb_tethering` 表示产品层可提示用户尝试 USB tethering。
-- `supports_usb_direct_future` 只为未来 USB direct 传输预留，当前不启用。
+- USB direct 已具备 `adb reverse` + TCP length-prefixed 数据面保护，但 5391d451 的 10 分钟稳定性样本尚未采集，v1.7 Theme 1 结论保持 `known_issue`。
+- `supports_usb_direct_future` 只为未来 USB direct 传输预留，当前不作为默认主路径启用。
 
 ## 10. v2 synthetic 真机验收结论
 
@@ -520,11 +524,13 @@ V2 的产品原则：
   - `crates/lan_audio_server/src/session.rs` 已接通 v2 `hello/hello_ack`、`client_info/server_info`、`set_audio_mode/audio_mode_changed`。
   - Android 后台服务链路已发送 v2 `hello/client_info` 并处理 `hello_ack/server_info/audio_mode_changed/server_info.mode_profile`。
   - Windows 桌面客户端快照已显示 `current_audio_mode`、`mode_profile`、`protocol_path`、codec 与灰度状态。
+  - v1.7 Android 稳定 snapshot 增加 `eq_enabled`、`eq_settings`、`loudness_normalization_enabled` 和 `metrics.loudness_gain_db`，旧字段保持不变。
 - 发送/接收预留：
   - 服务端可按配置发送 `legacy_las1` / `v2_header`（桌面默认 `v2_header`）。
   - Android/Flutter 接收侧均可识别 `LAS1/LAV2` 双栈头。
   - 服务端标准 libopus `opus` 编码与 Android `libopus` JNI 解码已接入推荐路径，decode 失败时走 PLC concealment。
   - `config_changed/discontinuity` 已有最小处理：接收侧执行 jitter/audio track 重同步。
+  - 服务端广播发送层已支持最多 4 个独立 client session；同一采集帧按 client codec / mode / data plane 分组编码后分发。
 - 模式策略：
   - `AudioModeProfile` 已在 Rust/Android/桌面端形成一致语义。
   - Android jitter buffer 已按 mode profile 调整 start/max buffer、batch 和 drop threshold。

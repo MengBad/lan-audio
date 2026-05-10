@@ -30,6 +30,8 @@ interface PlaybackAudioSink {
 
     fun setQueueSoftCapFrames(maxQueuedFrames: Int)
 
+    fun setEqSettings(settings: PlaybackEqSettings) {}
+
     fun writePcm16(data: ByteArray, frames: Int)
 
     fun stop()

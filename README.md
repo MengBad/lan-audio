@@ -23,6 +23,9 @@ It supports both Wi-Fi and USB transport, keeps a safe rollback path, and is bui
 - Export desktop diagnostics snapshots as JSON for troubleshooting (`dist/diagnostics/`)
 - Desktop app can silently check GitHub Releases and show an in-window update banner (manual open only)
 - Android foreground playback notification now uses MediaStyle with MediaSession state/metadata and manual update check entry
+- Android background playback guide now surfaces battery-saver steps for Xiaomi, Huawei, and generic Android devices when buffering persists in the background
+- Android playback includes a 3-band EQ and optional loudness normalization on the PCM write path
+- The sender can broadcast one capture stream to up to 4 Android clients, with active device summaries in the desktop UI
 
 ## Current Status
 
@@ -40,6 +43,8 @@ Current validated release facts:
   - `WiFi + windows_loopback`
 
 Current mainline work after `v1.3` is focused on Android runtime and desktop refactor follow-up, not on changing the default path again.
+
+v1.7 Theme 1 has passed manual gate verification. Theme 2 code gates are in progress: Android EQ, loudness normalization, and 4-client server broadcast support are implemented, while real-device audible/sync checks remain manual.
 
 ## Architecture
 

@@ -1018,20 +1018,26 @@
         safeModeBtn.title = t('safeModeHint');
 
         const recent = snapshot.recent_clients || [];
-        const currentDevice = snapshot.connected_devices > 0 && recent.length > 0 ? recent[0] : t('noDevice');
+        const activeClients = recent.slice(0, snapshot.connected_devices || 0);
+        const currentDevice = snapshot.connected_devices > 0
+          ? `${snapshot.connected_devices} / 4 · ${runtime.mode || snapshot.current_audio_mode || 'balanced'} · RTT ${runtimeMetrics.rtt_ms ?? 0}ms`
+          : t('noDevice');
         document.getElementById('currentDeviceValue').textContent = currentDevice;
 
         const recentList = document.getElementById('deviceRecentList');
         recentList.innerHTML = '';
-        const recentOnly = snapshot.connected_devices > 0 ? recent.slice(1) : recent;
-        if (recentOnly.length === 0) {
+        const displayClients = activeClients.length > 0 ? activeClients : recent;
+        if (displayClients.length === 0) {
           const li = document.createElement('li');
           li.textContent = t('noRecentDevice');
           recentList.appendChild(li);
         } else {
-          recentOnly.forEach((item) => {
+          displayClients.forEach((item, index) => {
             const li = document.createElement('li');
-            li.textContent = item;
+            const prefix = index < activeClients.length ? `#${index + 1} ` : '';
+            li.textContent =
+              `${prefix}${item} · ${runtime.mode || snapshot.current_audio_mode || 'balanced'} · ` +
+              `RTT ${runtimeMetrics.rtt_ms ?? 0}ms`;
             recentList.appendChild(li);
           });
         }
