@@ -31,6 +31,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : FlutterActivity() {
     private companion object {
@@ -182,7 +183,10 @@ class MainActivity : FlutterActivity() {
                                 if (delayMs > 0) {
                                     delay(delayMs)
                                 }
-                                val update = UpdateChecker.checkForUpdate(currentVersionName())
+                                val currentVersion = currentVersionName()
+                                val update = withContext(Dispatchers.IO) {
+                                    UpdateChecker.checkForUpdate(currentVersion)
+                                }
                                 if (update == null) {
                                     result.success(null)
                                 } else {

@@ -450,7 +450,11 @@ fn export_diagnostics_report(state: State<'_, AppState>) -> Result<String, Strin
 
 #[tauri::command]
 fn check_for_updates(state: State<'_, AppState>) {
-    run_update_check(Arc::clone(&state.update_state));
+    spawn_update_check(
+        Arc::clone(&state.runtime),
+        Arc::clone(&state.update_state),
+        None,
+    );
 }
 
 #[tauri::command]
@@ -821,6 +825,19 @@ fn run_update_check(update_state: Arc<Mutex<UpdateState>>) {
     }
 }
 
+fn spawn_update_check(
+    runtime: Arc<Runtime>,
+    update_state: Arc<Mutex<UpdateState>>,
+    notify: Option<AppHandle>,
+) {
+    runtime.spawn_blocking(move || {
+        run_update_check(update_state);
+        if let Some(app) = notify {
+            let _ = app.emit("update-check-finished", ());
+        }
+    });
+}
+
 fn spawn_silent_startup_update_check(app: &AppHandle, update_state: Arc<Mutex<UpdateState>>) {
     let handle = app.clone();
     thread::spawn(move || {
@@ -840,8 +857,11 @@ fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "check_updates" {
                 if let Some(state) = app.try_state::<AppState>() {
-                    run_update_check(Arc::clone(&state.update_state));
-                    let _ = app.emit("update-check-finished", ());
+                    spawn_update_check(
+                        Arc::clone(&state.runtime),
+                        Arc::clone(&state.update_state),
+                        Some(app.clone()),
+                    );
                 }
             }
         })

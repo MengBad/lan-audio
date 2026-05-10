@@ -12,8 +12,8 @@ data class AndroidUpdateInfo(
 
 object UpdateChecker {
     private const val TAG = "lan_audio_update"
-    private const val LATEST_API = "https://api.github.com/repos/lan-audio/lan-audio/releases/latest"
-    private const val RELEASE_FALLBACK_URL = "https://github.com/lan-audio/lan-audio/releases"
+    private const val LATEST_API = "https://api.github.com/repos/MengBad/lan-audio/releases/latest"
+    private const val RELEASE_FALLBACK_URL = "https://github.com/MengBad/lan-audio/releases"
 
     fun checkForUpdate(currentVersion: String): AndroidUpdateInfo? {
         return try {
