@@ -107,6 +107,15 @@
 
 不满足任一项时，禁止发布。
 
+## Merge Validation Checklist
+
+合并功能分支或发布分支到 `main` 后，必须额外确认 Android 生产 UI 入口没有退回旧 MVP 页面：
+
+- [ ] `apps/android_flutter/lib/main.dart` 中仍调用 `buildAudioConsoleTheme()`
+- [ ] `apps/android_flutter/lib/main.dart` 中仍渲染 `HeroStatusWidget` / `ServerCardWidget` / `ModeSelectorWidget` / `DangerActionButton`
+- [ ] 生产入口不出现 `MVP` 标题
+- [ ] 发布前运行 `flutter test test/app_entry_smoke_test.dart`
+
 ## 强制发布覆盖（FORCE_RELEASE）
 
 当任务 prompt 包含 `FORCE_RELEASE=true` 时，上述发布触发条件和发布门控 checklist **全部跳过**，直接执行发布流程。
