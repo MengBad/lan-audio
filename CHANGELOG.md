@@ -4,6 +4,20 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.7.2] - 2026-05-11
+
+### Fixed
+
+- Restored the Android production entry to Audio Console Dark after the v1.7 merge regression.
+- Reconnected `buildAudioConsoleTheme()`, `HeroStatusWidget`, `ServerCardWidget`, `ModeSelectorWidget`, and `DangerActionButton` in `main.dart`.
+- Preserved the v1.7 connection and audio quality logic while restoring the newer UI shell: mDNS discovery, smart reconnect, history/favorites, EQ, and loudness normalization remain available.
+- Fixed narrow-screen overflow in the discovery status rows.
+
+### Tests
+
+- Added `app_entry_smoke_test.dart` to fail if the app entry falls back to the old MVP UI again.
+- Added merge validation checklist items to `AGENTS.md` for Audio Console Dark entry checks.
+
 ## [1.7.1] - 2026-05-11
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 ## Release State
 
-- Latest release: `v1.7.1`
+- Latest release: `v1.7.2`
 - Release gate: `allow_release`
 - FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
@@ -18,6 +18,16 @@
   - `high_quality p95=505ms`
 - Known issue:
   - Desktop per-device disconnect command is deferred to v1.8.
+
+## v1.7.2 Patch Release (`2026-05-11`)
+
+- [x] Android app entry restored to Audio Console Dark.
+- [x] `buildAudioConsoleTheme()` restored in production `MaterialApp`.
+- [x] `HeroStatusWidget` / `ServerCardWidget` / `ModeSelectorWidget` / `DangerActionButton` restored in production `main.dart`.
+- [x] v1.7 mDNS, reconnect, history/favorites, EQ, and loudness logic preserved.
+- [x] `app_entry_smoke_test.dart` added to catch future MVP UI regressions.
+- [x] `AGENTS.md` merge validation checklist updated.
+- Release conclusion: `pass`; patch release for Android UI entry regression.
 
 ## v1.7.1 Patch Release (`2026-05-11`)
 
