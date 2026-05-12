@@ -53,6 +53,27 @@ class PlaybackServiceSnapshot {
   final int reconnectDelayMs;
   final Map<String, dynamic> metrics;
 
+  // Jitter helpers derived from metrics
+  List<int> get jitterHistoryUs {
+    final raw = metrics['jitterHistoryUs'] ?? metrics['jitter_history_us'];
+    if (raw is List) {
+      return raw.map((e) => (e as num).toInt()).toList();
+    }
+    return [];
+  }
+
+  int get jitterP50Us =>
+      (metrics['jitterP50Us'] ?? metrics['jitter_p50_us'] ?? 0) as int;
+
+  int get jitterP95Us =>
+      (metrics['jitterP95Ms'] ?? metrics['jitter_p95_ms'] ?? 0) is int
+          ? ((metrics['jitterP95Ms'] ?? metrics['jitter_p95_ms']) as int) *
+              1000
+          : 0;
+
+  int get underrunCount =>
+      (metrics['jitterUnderrun'] ?? metrics['jitter_underrun'] ?? 0) as int;
+
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
     final normalized = map.map(
       (key, value) => MapEntry('$key', value),

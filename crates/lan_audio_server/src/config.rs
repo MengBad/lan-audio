@@ -293,6 +293,12 @@ impl ServerConfig {
                 "--force-rollback" => {
                     self.force_rollback = true;
                 }
+                "--reverse-channel" => {
+                    self.reverse_channel_enabled = true;
+                }
+                "--no-reverse-channel" => {
+                    self.reverse_channel_enabled = false;
+                }
                 _ => {}
             }
         }

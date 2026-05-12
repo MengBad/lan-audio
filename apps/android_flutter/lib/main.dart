@@ -13,6 +13,7 @@ import 'audio/las_packet.dart';
 import 'connect_history.dart';
 import 'power_saving_guide.dart';
 import 'services/mic_capture_service.dart';
+import 'ui/jitter_graph_widget.dart';
 import 'ui/mic_status_widget.dart';
 
 const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
@@ -103,6 +104,13 @@ class _DebugPageState extends State<DebugPage> {
   final MicCaptureService _micService = MicCaptureService();
   bool _micEnabled = false;
   final int _reverseChannelPort = 7878;
+  List<int> _jitterHistoryUs = [];
+  int _jitterP50Us = 0;
+  int _jitterP95Us = 0;
+  int _jitterUnderrun = 0;
+  bool _showJitterGraph = false;
+  int _androidVolumePct = 50;
+  bool _showVolumePill = false;
   final TextEditingController _manualHostController = TextEditingController();
 
   RawDatagramSocket? _discoverySocket;
@@ -190,6 +198,7 @@ class _DebugPageState extends State<DebugPage> {
         PlatformDispatcher.instance.locale.languageCode.toLowerCase();
     _lang = sysLang.startsWith('zh') ? AppLang.zh : AppLang.en;
     debugPrint('ui_build $kUiBuildTag');
+    _platformChannel.setMethodCallHandler(_handlePlatformCall);
     _acquireMulticastLock();
     _loadConnectHistory();
     _startDiscovery();
@@ -419,6 +428,15 @@ class _DebugPageState extends State<DebugPage> {
       _tcpRoundTripMedianMs = _tcpRoundTripMs;
       _serviceJitterP95Ms =
           (metrics['jitter_p95_ms'] as num?)?.toInt() ?? _serviceJitterP95Ms;
+
+      // Jitter graph data
+      _jitterHistoryUs = snapshot.jitterHistoryUs;
+      _jitterP50Us = snapshot.jitterP50Us;
+      _jitterP95Us = snapshot.jitterP95Us;
+      _jitterUnderrun = snapshot.underrunCount;
+      _showJitterGraph = _wsConnected &&
+          (_playbackState == PlaybackState.playing ||
+              _playbackState == PlaybackState.buffering);
 
       if (runtimeState == 'streaming') {
         _playbackState = PlaybackState.playing;
@@ -1500,6 +1518,26 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+  Future<dynamic> _handlePlatformCall(MethodCall call) async {
+    switch (call.method) {
+      case 'volumeChanged':
+        final args = call.arguments as Map<dynamic, dynamic>?;
+        final pct = args == null ? 50 : (args['volume_pct'] as int?) ?? 50;
+        if (mounted) {
+          setState(() {
+            _androidVolumePct = pct;
+            _showVolumePill = true;
+          });
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              setState(() => _showVolumePill = false);
+            }
+          });
+        }
+        break;
+    }
+  }
+
   Future<void> _toggleMicCapture() async {
     if (_micEnabled) {
       await _micService.stop();
@@ -1852,27 +1890,72 @@ class _DebugPageState extends State<DebugPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(kUiBuildTag,
-              style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              Chip(
-                backgroundColor:
-                    _statusChipColor(context).withValues(alpha: 0.18),
-                label: Text(
-                  _statusChipLabel(),
-                  style: TextStyle(
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
                       color: _statusChipColor(context),
-                      fontWeight: FontWeight.w700),
-                ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _statusChipLabel(),
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        Text(
+                          _status,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(context).colorScheme.onSurface
+                                .withValues(alpha: 0.6),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              Text(_status),
-            ],
+            ),
           ),
           const SizedBox(height: 10),
+          AnimatedOpacity(
+            opacity: _showVolumePill ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 300),
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A2035),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${_isZh ? '音量' : 'Vol'}: $_androidVolumePct%',
+                  style: const TextStyle(
+                    color: Color(0xFF00D4AA),
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_showVolumePill) const SizedBox(height: 6),
           _buildQuickConnectCard(servers),
           const SizedBox(height: 10),
           _buildConnectHistoryCard(),
@@ -2157,34 +2240,6 @@ class _DebugPageState extends State<DebugPage> {
                     '${tr('当前模式', 'Current mode')}: ${_audioModeLabel(_currentAudioMode)}',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${tr('协议路径', 'Protocol path')}: $_protocolPath'
-                    '${_experimentalPath ? ' (${tr('灰度', 'gray')})' : ''}',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Codec: $_effectiveCodec',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${tr('播放后端', 'Playback backend')}: $_playbackBackend  ·  '
-                    '${tr('连接来源', 'Connection path')}: ${_connectionPathLabel(_connectionPath)}',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${tr('传输模式', 'Transport mode')}: ${_transportMode == 'usb' ? 'USB' : 'WiFi'}  ·  '
-                    '${tr('当前共', 'Connected')}: $_connectedClientCount ${tr('台设备连接中', 'devices listening')}',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'TCP RTT: ${_tcpRoundTripMs == null ? '-' : '${_tcpRoundTripMs} ms'} / ${_tcpRoundTripMedianMs == null ? '-' : '${_tcpRoundTripMedianMs} ms'}(med)',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
                   const SizedBox(height: 6),
                   SegmentedButton<AudioModePreference>(
                     segments: [
@@ -2215,22 +2270,20 @@ class _DebugPageState extends State<DebugPage> {
                     runSpacing: 8,
                     children: [
                       _metricTile(tr('状态', 'Status'), _playbackLabel()),
-                      _metricTile(
-                        'total_buffered',
-                        '${_uiBufferedMs} ms (jitter: ${_uiJitterBufferedMs} ms + track: ${_uiTrackQueuedMs} ms)',
-                      ),
-                      _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
-                      _metricTile(
-                        tr('策略', 'Strategy'),
-                        '${_modeProfile['startBufferMs'] ?? '-'} / ${_modeProfile['maxBufferMs'] ?? '-'} ms',
-                      ),
-                      _metricTile(
-                        tr('响度增益', 'Loudness gain'),
-                        _playbackState == PlaybackState.playing
-                            ? '${_loudnessGainDb >= 0 ? '+' : ''}${_loudnessGainDb.toStringAsFixed(1)} dB'
-                            : '-',
-                      ),
+                      if (_uiUnderrun > 0)
+                        _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  AnimatedOpacity(
+                    opacity: _showJitterGraph ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: JitterGraphWidget(
+                      jitterUs: _jitterHistoryUs,
+                      p50Us: _jitterP50Us,
+                      p95Us: _jitterP95Us,
+                      underrunCount: _jitterUnderrun,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   MicStatusWidget(
@@ -2240,8 +2293,10 @@ class _DebugPageState extends State<DebugPage> {
                     enabled: _micEnabled,
                     onToggle: _toggleMicCapture,
                   ),
-                  const SizedBox(height: 8),
-                  Text('${tr('音频日志', 'Audio log')}: $_audioLog'),
+                  if (_audioLog.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text('${tr('音频日志', 'Audio log')}: $_audioLog'),
+                  ],
                 ],
               ),
             ),
@@ -2249,7 +2304,7 @@ class _DebugPageState extends State<DebugPage> {
           const SizedBox(height: 10),
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2260,7 +2315,7 @@ class _DebugPageState extends State<DebugPage> {
                           tr('均衡器', 'Equalizer'),
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
-                            fontSize: 16,
+                            fontSize: 14,
                           ),
                         ),
                       ),
@@ -2270,10 +2325,10 @@ class _DebugPageState extends State<DebugPage> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 6,
+                    runSpacing: 6,
                     children: [
                       _eqPresetButton(tr('平直', 'Flat'), 'flat'),
                       _eqPresetButton(tr('低音增强', 'Bass'), 'bass'),
@@ -2281,18 +2336,25 @@ class _DebugPageState extends State<DebugPage> {
                       _eqPresetButton(tr('高频亮丽', 'Bright'), 'bright'),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text(tr('响度归一化', 'Loudness normalization')),
-                    subtitle: Text(tr(
-                      'balanced/high_quality 生效，low_latency 自动旁路',
-                      'Active in balanced/high_quality; bypassed in low_latency',
-                    )),
+                    dense: true,
+                    title: Text(
+                      tr('响度归一化', 'Loudness normalization'),
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    subtitle: Text(
+                      tr(
+                        'balanced/high_quality 生效，low_latency 自动旁路',
+                        'Active in balanced/high_quality; bypassed in low_latency',
+                      ),
+                      style: const TextStyle(fontSize: 11),
+                    ),
                     value: _loudnessNormalizationEnabled,
                     onChanged: _setLoudnessNormalization,
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
@@ -2409,68 +2471,119 @@ class _DebugPageState extends State<DebugPage> {
                 Text(
                   '${tr('协议版本', 'Protocol')}: v${_protocolVersion ?? 1}  ·  '
                   '${tr('当前模式', 'Mode')}: ${_audioModeLabel(_currentAudioMode)}',
+                  style: const TextStyle(fontSize: 12),
                 ),
-                const SizedBox(height: 6),
-                Text('Codec: $_effectiveCodec'),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
+                Text(
+                  '${tr('协议路径', 'Protocol path')}: $_protocolPath'
+                  '${_experimentalPath ? ' (${tr('灰度', 'gray')})' : ''}',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Codec: $_effectiveCodec',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 4),
                 if (_serverPlatform != null || _serverAppVersion != null)
                   Text(
                     '${tr('服务端', 'Server')}: '
                     '${_serverPlatform ?? 'unknown'}'
                     '${_serverAppVersion == null ? '' : ' (${_serverAppVersion})'}',
+                    style: const TextStyle(fontSize: 12),
                   ),
                 if (_serverPlatform != null || _serverAppVersion != null)
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                 Text(
                   '${tr('能力协商', 'Capabilities')}: '
                   '${_negotiatedCapabilities.entries.where((e) => e.value).map((e) => e.key).join(', ')}',
-                  style: const TextStyle(color: Colors.black54),
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
                 ),
-                const SizedBox(height: 8),
-                _metricTile('sample_rate', '$_sampleRate'),
-                const SizedBox(height: 8),
-                _metricTile('channels', '$_channels'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
+                _metricTile(tr('采样率', 'Sample rate'), '$_sampleRate'),
+                const SizedBox(height: 4),
+                _metricTile(tr('声道', 'Channels'), '$_channels'),
+                const SizedBox(height: 4),
+                _metricTile(tr('总缓冲', 'Total buffered'), '$_uiBufferedMs ms'),
+                const SizedBox(height: 4),
+                _metricTile(tr('抖动', 'Jitter'), '$_uiJitterBufferedMs ms'),
+                const SizedBox(height: 4),
+                _metricTile(tr('轨道缓冲', 'Track buffered'), '$_uiTrackQueuedMs ms'),
+                const SizedBox(height: 4),
                 _metricTile(
-                  'total_buffered_ms',
-                  '${_uiBufferedMs} (jitter: ${_uiJitterBufferedMs} + track: ${_uiTrackQueuedMs})',
-                ),
-                const SizedBox(height: 8),
-                _metricTile(
-                  tr('AudioTrack 延迟', 'AudioTrack reported latency'),
+                  tr('AudioTrack 延迟', 'AudioTrack latency'),
                   _uiAudioTrackLatencyMs == null
                       ? '-'
                       : '${_uiAudioTrackLatencyMs} ms',
                 ),
-                const SizedBox(height: 8),
-                _metricTile('jitter_underrun', '$_uiUnderrun'),
-                const SizedBox(height: 8),
-                _metricTile('jitter_dropped', '$_uiDropped'),
-                const SizedBox(height: 8),
-                _metricTile('jitter_late', '$_uiLate'),
-                const SizedBox(height: 8),
-                _metricTile('floor_hold_count', '$_uiFloorHoldCount'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
+                _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
+                const SizedBox(height: 4),
+                _metricTile(tr('丢弃', 'Dropped'), '$_uiDropped'),
+                const SizedBox(height: 4),
+                _metricTile(tr('延迟帧', 'Late'), '$_uiLate'),
+                const SizedBox(height: 4),
+                _metricTile(tr('低水位保持', 'Floor holds'), '$_uiFloorHoldCount'),
+                const SizedBox(height: 4),
                 _metricTile(
-                  'jitter_p95_ms',
+                  tr('P95 抖动', 'P95 jitter'),
                   _uiJitterP95Ms == null ? '-' : '${_uiJitterP95Ms} ms',
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('播放后端', 'Playback backend'),
+                  _playbackBackend,
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('连接来源', 'Connection path'),
+                  _connectionPathLabel(_connectionPath),
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('传输模式', 'Transport mode'),
+                  _transportMode == 'usb' ? 'USB' : 'WiFi',
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('当前设备数', 'Connected devices'),
+                  '$_connectedClientCount',
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  'TCP RTT',
+                  _tcpRoundTripMs == null
+                      ? '-'
+                      : '${_tcpRoundTripMs} ms / ${_tcpRoundTripMedianMs} ms (med)',
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('策略', 'Strategy'),
+                  '${_modeProfile['startBufferMs'] ?? '-'} / ${_modeProfile['maxBufferMs'] ?? '-'} ms',
+                ),
+                const SizedBox(height: 4),
+                _metricTile(
+                  tr('响度增益', 'Loudness gain'),
+                  _playbackState == PlaybackState.playing
+                      ? '${_loudnessGainDb >= 0 ? '+' : ''}${_loudnessGainDb.toStringAsFixed(1)} dB'
+                      : '-',
+                ),
+                const SizedBox(height: 4),
                 _metricTile(tr('UDP 包数', 'UDP packets'), '$_uiUdpPackets'),
-                const SizedBox(height: 8),
-                _metricTile('UDP bytes', '$_uiUdpBytes'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
+                _metricTile(tr('UDP 字节', 'UDP bytes'), '$_uiUdpBytes'),
+                const SizedBox(height: 4),
                 _metricTile(tr('丢包估计', 'Loss estimate'), '$_uiUdpLoss'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 _metricTile(tr('最后序号', 'Last seq'), '${_uiLastSeq ?? '-'}'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(6),
                   color: Colors.black,
                   child: Text(
                     _wsLog.isEmpty ? '(empty)' : _wsLog,
-                    style: const TextStyle(color: Colors.greenAccent),
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 11),
                     maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                   ),

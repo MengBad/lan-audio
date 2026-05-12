@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -14,6 +14,7 @@ pub struct ReverseChannelState {
     pub mic_rms_db: f32,
     pub mic_device_name: String,
     pub android_volume_pct: u8,
+    pub pending_volume_command: Option<u8>,
     pub virtual_device_detected: bool,
     pub virtual_device_warning: Option<String>,
 }
@@ -357,8 +358,31 @@ async fn handle_control_stream(
     state: Arc<Mutex<ReverseChannelState>>,
     shutdown: &mut broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let buf_reader = BufReader::new(stream);
+    let (reader, mut writer) = stream.into_split();
+    let buf_reader = BufReader::new(reader);
     let mut lines = buf_reader.lines();
+
+    // Flush any pending outgoing commands (e.g. volume change from desktop)
+    let pending = state
+        .lock()
+        .ok()
+        .and_then(|mut s| s.pending_volume_command.take());
+    if let Some(pct) = pending {
+        let cmd = serde_json::json!({"type": "set_volume", "volume_pct": pct});
+        if let Ok(json) = serde_json::to_string(&cmd) {
+            match writer.write_all(format!("{}\n", json).as_bytes()).await {
+                Ok(()) => {
+                    if let Ok(mut s) = state.lock() {
+                        s.android_volume_pct = pct;
+                    }
+                    info!("Sent volume command to Android: {}%", pct);
+                }
+                Err(e) => {
+                    warn!("Failed to send volume command to Android: {}", e);
+                }
+            }
+        }
+    }
 
     loop {
         tokio::select! {

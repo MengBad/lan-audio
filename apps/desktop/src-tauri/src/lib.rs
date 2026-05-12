@@ -23,7 +23,7 @@ use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
 use lan_audio_server::usb_transport::adb_devices;
 use serde::{Deserialize, Serialize};
-use tauri::menu::MenuBuilder;
+use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::runtime::Runtime;
@@ -128,6 +128,12 @@ struct DesktopSnapshot {
     transport_mode: String,
     usb_serial: Option<String>,
     metrics: DesktopMetrics,
+    mic_active: bool,
+    mic_peak_db: f32,
+    mic_rms_db: f32,
+    mic_device_name: String,
+    android_volume_pct: u8,
+    reverse_channel_enabled: bool,
     logs: Vec<String>,
     update_banner: Option<UpdateBanner>,
 }
@@ -140,6 +146,7 @@ struct DesktopServiceConfig {
     allow_loopback_v2_header_gray: bool,
     fallback_to_synthetic: bool,
     capture_dump_wav: bool,
+    reverse_channel_enabled: bool,
     ws_port: u16,
     udp_port: u16,
     current_audio_mode: AudioMode,
@@ -156,6 +163,7 @@ impl Default for DesktopServiceConfig {
             allow_loopback_v2_header_gray: cfg.allow_loopback_v2_header_gray,
             fallback_to_synthetic: cfg.audio_source_fallback_to_synthetic,
             capture_dump_wav: cfg.capture_debug_dump_wav,
+            reverse_channel_enabled: true,
             ws_port: cfg.ws_bind.port(),
             udp_port: cfg.udp_bind.port(),
             current_audio_mode: cfg.current_audio_mode,
@@ -229,6 +237,11 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         .map(|svc| svc.metrics_snapshot())
         .map(DesktopMetrics::from)
         .unwrap_or_else(|| empty_metrics(cfg.audio_source.as_str()));
+
+    let reverse_channel_state = service
+        .as_ref()
+        .map(|svc| svc.reverse_channel_state())
+        .unwrap_or_default();
 
     let current_audio_mode = service
         .as_ref()
@@ -359,6 +372,12 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         transport_mode: cfg.transport_mode.as_str().to_string(),
         usb_serial: cfg.transport_mode.adb_serial().map(ToOwned::to_owned),
         metrics,
+        mic_active: reverse_channel_state.mic_active,
+        mic_peak_db: reverse_channel_state.mic_peak_db,
+        mic_rms_db: reverse_channel_state.mic_rms_db,
+        mic_device_name: reverse_channel_state.mic_device_name,
+        android_volume_pct: reverse_channel_state.android_volume_pct,
+        reverse_channel_enabled: cfg.reverse_channel_enabled,
         logs,
         update_banner,
     }
@@ -468,6 +487,26 @@ fn open_release_page(state: State<'_, AppState>) -> Result<(), String> {
         .map(|it| it.release_url.clone())
         .ok_or_else(|| "no update release url".to_string())?;
     open::that_detached(url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_android_volume(
+    state: State<'_, AppState>,
+    volume_pct: u8,
+) -> Result<DesktopSnapshot, String> {
+    let service = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.running.as_ref().map(|s| Arc::clone(&s.service))
+    };
+    if let Some(svc) = service {
+        svc.send_android_volume(volume_pct)
+            .map_err(|e| e.to_string())?;
+        push_log(
+            &state.logs,
+            format!("android volume set to {}%", volume_pct),
+        );
+    }
+    Ok(get_desktop_snapshot(state))
 }
 
 #[tauri::command]
@@ -646,6 +685,7 @@ fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, Strin
     server.allow_loopback_v2_header_gray = cfg.allow_loopback_v2_header_gray;
     server.audio_source_fallback_to_synthetic = cfg.fallback_to_synthetic;
     server.capture_debug_dump_wav = cfg.capture_dump_wav;
+    server.reverse_channel_enabled = cfg.reverse_channel_enabled;
     server.current_audio_mode = cfg.current_audio_mode;
     server.transport_mode = cfg.transport_mode.clone();
     let bind_host = match cfg.transport_mode {
@@ -849,14 +889,23 @@ fn spawn_silent_startup_update_check(app: &AppHandle, update_state: Arc<Mutex<Up
 }
 
 fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
+    let volume_menu = SubmenuBuilder::new(app, "Android 音量")
+        .text("vol_25", "25%")
+        .text("vol_50", "50%")
+        .text("vol_75", "75%")
+        .text("vol_100", "100%")
+        .build()?;
+
     let menu = MenuBuilder::new(app)
         .text("check_updates", "检查更新")
+        .separator()
+        .item(&volume_menu)
         .build()?;
 
     TrayIconBuilder::new()
         .menu(&menu)
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == "check_updates" {
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "check_updates" => {
                 if let Some(state) = app.try_state::<AppState>() {
                     spawn_update_check(
                         Arc::clone(&state.runtime),
@@ -865,6 +914,25 @@ fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
                     );
                 }
             }
+            "vol_25" | "vol_50" | "vol_75" | "vol_100" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    let pct: u8 = match event.id().as_ref() {
+                        "vol_25" => 25,
+                        "vol_50" => 50,
+                        "vol_75" => 75,
+                        "vol_100" => 100,
+                        _ => 50,
+                    };
+                    let service = {
+                        let guard = state.inner.lock().expect("state lock");
+                        guard.running.as_ref().map(|s| Arc::clone(&s.service))
+                    };
+                    if let Some(svc) = service {
+                        let _ = svc.send_android_volume(pct);
+                    }
+                }
+            }
+            _ => {}
         })
         .build(app)?;
     Ok(())
@@ -899,6 +967,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_desktop_snapshot,
+            set_android_volume,
             start_service,
             stop_service,
             restart_service,

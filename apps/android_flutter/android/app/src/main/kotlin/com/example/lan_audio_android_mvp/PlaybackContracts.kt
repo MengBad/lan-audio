@@ -281,6 +281,8 @@ data class PlaybackMetrics(
     val decodeErrors: Int = 0,
     val sinkWriteGapMsP95: Int = 0,
     val loudnessGainDb: Double = 0.0,
+    val jitterHistoryUs: List<Int> = emptyList(),
+    val jitterP50Us: Int = 0,
 )
 
 data class PlaybackSnapshot(
@@ -396,6 +398,8 @@ data class PlaybackSnapshot(
                 "decodeErrors" to metrics.decodeErrors,
                 "sinkWriteGapMsP95" to metrics.sinkWriteGapMsP95,
                 "loudnessGainDb" to metrics.loudnessGainDb,
+                "jitterHistoryUs" to metrics.jitterHistoryUs,
+                "jitterP50Us" to metrics.jitterP50Us,
             ),
             "recentLog" to recentLog,
             "error" to error,
@@ -425,6 +429,8 @@ data class StableServiceMetrics(
     val jitterP95Ms: Int? = null,
     val floorHoldCount: Int = 0,
     val loudnessGainDb: Double = 0.0,
+    val jitterHistoryUs: List<Int> = emptyList(),
+    val jitterP50Us: Int = 0,
 )
 
 data class StableServiceSnapshot(
@@ -498,6 +504,8 @@ data class StableServiceSnapshot(
                 "jitter_p95_ms" to metrics.jitterP95Ms,
                 "floor_hold_count" to metrics.floorHoldCount,
                 "loudness_gain_db" to metrics.loudnessGainDb,
+                "jitter_history_us" to metrics.jitterHistoryUs,
+                "jitter_p50_us" to metrics.jitterP50Us,
             ),
         )
     }
@@ -599,6 +607,8 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             jitterP95Ms = metrics.jitterP95Ms,
             floorHoldCount = metrics.floorHoldCount,
             loudnessGainDb = metrics.loudnessGainDb,
+            jitterHistoryUs = metrics.jitterHistoryUs,
+            jitterP50Us = metrics.jitterP50Us,
         ),
     )
 }

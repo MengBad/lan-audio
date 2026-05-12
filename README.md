@@ -8,8 +8,8 @@ It supports Wi-Fi and USB transport, keeps a permanent rollback path, and is bui
 
 ## Overview
 
-- Current version: `1.7`
-- Latest release: `v1.7`
+- Current version: `1.8`
+- Latest release: `v1.8`
 - Primary path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 - Transport modes: `wifi`, `usb`
@@ -32,11 +32,14 @@ It supports Wi-Fi and USB transport, keeps a permanent rollback path, and is bui
 - mDNS LAN discovery shows nearby senders without manual IP entry.
 - Smart reconnect uses exponential backoff after short network interruptions.
 - Connection history and favorites persist common devices for one-tap reconnect.
+- Android mic → PC reverse audio channel with Opus encoding and named-pipe output on Windows.
+- Real-time jitter visualization sparkline in Audio Console Dark with three-zone coloring.
+- PC-side volume control of Android via desktop tray presets and on-phone volume pill indicator.
 - Contributor docs, issue templates, PR template, changelog, and Codecov coverage reporting are in place.
 
 ## Current Status
 
-`v1.7` is the current standard release.
+`v1.8` is the current standard release.
 
 Validated release facts:
 
@@ -48,7 +51,7 @@ Validated release facts:
 - Verified device: `5391d451` (`Xiaomi 24129PN74C`)
 - Verified scenarios: `USB direct`, `WiFi + windows_loopback`, `2 Android clients`
 - Latency probe: `low_latency p95=64ms`, `balanced p95=185ms`, `high_quality p95=505ms`
-- Known issue: desktop per-device disconnect command is deferred to v1.8.
+- Reverse channel: Android mic streams to PC via Opus TCP (port 7878); PC-side volume control via TCP (port 7879).
 
 ## Architecture
 
@@ -146,7 +149,7 @@ Build local release artifacts:
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 ```
 
-Confirm the v1.7 latency probe:
+Confirm the v1.8 latency probe:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\export_latency_probe.ps1
@@ -161,15 +164,15 @@ Version source:
 Release entry:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.7
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.8
 ```
 
 GitHub Release artifacts include:
 
-- `lan-audio-android-arm64-v8a-v1.7.apk`
-- `lan-audio-android-armeabi-v7a-v1.7.apk`
-- `lan-audio-android-x86_64-v1.7.apk`
-- `lan-audio-desktop-v1.7.exe`
+- `lan-audio-android-arm64-v8a-v1.8.apk`
+- `lan-audio-android-armeabi-v7a-v1.8.apk`
+- `lan-audio-android-x86_64-v1.8.apk`
+- `lan-audio-desktop-v1.8.exe`
 - `SHA256SUMS.txt`
 
 ## Documentation
