@@ -12,6 +12,8 @@ import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 import 'connect_history.dart';
 import 'power_saving_guide.dart';
+import 'services/mic_capture_service.dart';
+import 'ui/mic_status_widget.dart';
 
 const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
 const bool kUseBackgroundPlaybackService = true;
@@ -98,6 +100,9 @@ class _DebugPageState extends State<DebugPage> {
   final AudioTrackOutput _audioOutput = AudioTrackOutput();
   final BackgroundPlaybackService _backgroundService =
       BackgroundPlaybackService();
+  final MicCaptureService _micService = MicCaptureService();
+  bool _micEnabled = false;
+  final int _reverseChannelPort = 7878;
   final TextEditingController _manualHostController = TextEditingController();
 
   RawDatagramSocket? _discoverySocket;
@@ -1456,6 +1461,13 @@ class _DebugPageState extends State<DebugPage> {
   }
 
   Future<void> _stopPlayback() async {
+    // stop mic if active
+    if (_micEnabled) {
+      try {
+        await _micService.stop();
+      } catch (_) {}
+      _micEnabled = false;
+    }
     if (kUseBackgroundPlaybackService) {
       try {
         debugPrint('ui_stopPlayback forwarding to background service');
@@ -1486,6 +1498,73 @@ class _DebugPageState extends State<DebugPage> {
         _playbackState = PlaybackState.stopped;
       });
     }
+  }
+
+  Future<void> _toggleMicCapture() async {
+    if (_micEnabled) {
+      await _micService.stop();
+      _micEnabled = false;
+      setState(() {});
+      return;
+    }
+    final rationale = await _micService.getRationaleString();
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr('麦克风权限', 'Microphone Permission')),
+        content: Text(rationale),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr('取消', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr('允许', 'Allow')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final granted = await _micService.requestPermission();
+    if (!granted) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(tr('权限被拒', 'Permission Denied')),
+          content: Text(tr(
+            '需要麦克风权限才能使用此功能。请在系统设置中授予权限。',
+            'Microphone permission is required. Please grant it in system settings.',
+          )),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr('确定', 'OK')),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final host = _serviceTargetHost;
+    if (host == null || host.isEmpty) {
+      _micService.status = MicStatus.error;
+      _micService.errorMessage = 'No server connected';
+      setState(() {});
+      return;
+    }
+    _micEnabled = true;
+    setState(() {});
+    try {
+      await _micService.start(host: host, port: _reverseChannelPort);
+    } catch (_) {
+      _micEnabled = false;
+      _micService.status = MicStatus.error;
+      _micService.errorMessage = 'Failed to start mic capture';
+    }
+    setState(() {});
   }
 
   String _playbackLabel() {
@@ -2152,6 +2231,14 @@ class _DebugPageState extends State<DebugPage> {
                             : '-',
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  MicStatusWidget(
+                    service: _micService,
+                    host: _serviceTargetHost,
+                    reversePort: _reverseChannelPort,
+                    enabled: _micEnabled,
+                    onToggle: _toggleMicCapture,
                   ),
                   const SizedBox(height: 8),
                   Text('${tr('音频日志', 'Audio log')}: $_audioLog'),

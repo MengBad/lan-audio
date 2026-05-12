@@ -39,6 +39,7 @@ class MainActivity : FlutterActivity() {
         const val KEY_FIRST_USE_HINT_CONSUMED = "first_use_hint_consumed"
         const val KEY_CONNECT_HISTORY_JSON = "connect_history_json"
         const val NSD_SERVICE_TYPE = "_lan-audio._tcp"
+        const val REQUEST_CODE_MIC_PERMISSION = 2701
         val ACTIVE_PLAYBACK_STATES = setOf(
             "handshaking",
             "negotiated",
@@ -70,6 +71,7 @@ class MainActivity : FlutterActivity() {
     private var nsdManager: NsdManager? = null
     private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
     private val nsdServices = ConcurrentHashMap<String, Map<String, Any>>()
+    private var pendingMicPermissionResult: MethodChannel.Result? = null
     @Volatile private var micCaptureService: MicCaptureService? = null
     @Volatile private var micPeakDb: Float = -96f
     @Volatile private var micRmsDb: Float = -96f
@@ -121,6 +123,20 @@ class MainActivity : FlutterActivity() {
         stopMicCaptureInternal()
         uiScope.coroutineContext.cancel()
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_MIC_PERMISSION) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pendingMicPermissionResult?.success(granted)
+            pendingMicPermissionResult = null
+        }
     }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -217,6 +233,24 @@ class MainActivity : FlutterActivity() {
                                 // silent ignore
                             }
                             result.success(null)
+                        }
+                        "getMicRationaleString" -> {
+                            val resId = resources.getIdentifier(
+                                "mic_permission_rationale", "string", packageName)
+                            val text = if (resId != 0) getString(resId)
+                                else "Microphone access is needed to stream your voice to the PC audio system. No audio is recorded or saved."
+                            result.success(text)
+                        }
+                        "requestMicPermission" -> {
+                            pendingMicPermissionResult = result
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                requestPermissions(
+                                    arrayOf(android.Manifest.permission.RECORD_AUDIO),
+                                    REQUEST_CODE_MIC_PERMISSION)
+                            } else {
+                                result.success(true)
+                                pendingMicPermissionResult = null
+                            }
                         }
                         else -> result.notImplemented()
                     }
