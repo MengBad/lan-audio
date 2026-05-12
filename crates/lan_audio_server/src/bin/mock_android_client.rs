@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
             supports_stable_audio_track: true,
             supports_usb_tethering: true,
             supports_usb_direct_future: false,
+            supports_reverse_channel: false,
         },
         preferred_audio_mode: AudioMode::Balanced,
     });

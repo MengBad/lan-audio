@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use if_addrs::{get_if_addrs, IfAddr};
 use lan_audio_protocol::DiscoveryBeacon;
+use lan_audio_protocol::{REVERSE_CONTROL_PORT, REVERSE_TCP_PORT};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
@@ -66,6 +67,8 @@ pub async fn run_discovery_broadcast(
                     server_name: cfg.server_name.clone(),
                     ws_port: cfg.ws_port,
                     udp_port: cfg.udp_port,
+                    reverse_channel_port: REVERSE_TCP_PORT,
+                    control_channel_port: REVERSE_CONTROL_PORT,
                     ts_unix_ms: now_ms(),
                 };
                 match serde_json::to_vec(&beacon) {

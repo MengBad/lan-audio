@@ -13,6 +13,8 @@ pub use lan_audio_domain::{
 pub const DISCOVERY_PORT: u16 = 39990;
 pub const WS_PORT: u16 = 39991;
 pub const UDP_AUDIO_PORT: u16 = 39992;
+pub const REVERSE_TCP_PORT: u16 = 7878;
+pub const REVERSE_CONTROL_PORT: u16 = 7879;
 
 pub const PROTOCOL_VERSION_V2: u8 = 2;
 
@@ -104,6 +106,7 @@ pub struct ProtocolCapabilities {
     pub supports_stable_audio_track: bool,
     pub supports_usb_tethering: bool,
     pub supports_usb_direct_future: bool,
+    pub supports_reverse_channel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,6 +279,8 @@ pub struct DiscoveryBeacon {
     pub server_name: String,
     pub ws_port: u16,
     pub udp_port: u16,
+    pub reverse_channel_port: u16,
+    pub control_channel_port: u16,
     pub ts_unix_ms: u64,
 }
 
@@ -638,6 +643,7 @@ mod tests {
             supports_stable_audio_track: true,
             supports_usb_tethering: true,
             supports_usb_direct_future: false,
+            supports_reverse_channel: false,
         };
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
@@ -668,6 +674,7 @@ mod tests {
                 supports_stable_audio_track: true,
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
+                supports_reverse_channel: false,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -703,6 +710,7 @@ mod tests {
                 supports_stable_audio_track: true,
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
+                supports_reverse_channel: false,
             },
             message: "ok".to_string(),
         });
@@ -749,6 +757,7 @@ mod tests {
                 supports_stable_audio_track: true,
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
+                supports_reverse_channel: false,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -971,5 +980,45 @@ mod tests {
         assert_eq!(high.drop_threshold_ms, 420);
         assert!(high.prefer_stable_audio_track);
         assert!(!high.reset_buffer_on_switch);
+    }
+
+    #[test]
+    fn discovery_beacon_includes_reverse_ports() {
+        let beacon = DiscoveryBeacon {
+            kind: "lan_audio_discovery_v1".into(),
+            server_id: uuid::Uuid::nil(),
+            server_name: "test".into(),
+            ws_port: 39991,
+            udp_port: 39992,
+            reverse_channel_port: 7878,
+            control_channel_port: 7879,
+            ts_unix_ms: 0,
+        };
+        let json = serde_json::to_string(&beacon).unwrap();
+        assert!(json.contains("reverse_channel_port"));
+        assert!(json.contains("control_channel_port"));
+    }
+
+    #[test]
+    fn protocol_capabilities_include_reverse_channel() {
+        let caps = ProtocolCapabilities {
+            supports_pcm16: true,
+            supports_f32: false,
+            supports_modes: true,
+            supports_metrics: true,
+            supports_opus_future: false,
+            supports_opus: true,
+            supports_opus_experimental: true,
+            supports_low_latency: true,
+            supports_high_quality: true,
+            supports_native_audio_track: true,
+            supports_fast_path: true,
+            supports_stable_audio_track: true,
+            supports_usb_tethering: true,
+            supports_usb_direct_future: false,
+            supports_reverse_channel: false,
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("supports_reverse_channel"));
     }
 }
