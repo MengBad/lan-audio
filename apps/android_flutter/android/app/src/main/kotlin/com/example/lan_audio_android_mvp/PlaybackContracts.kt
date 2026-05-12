@@ -11,6 +11,8 @@ object PlaybackActions {
     const val ACTION_SET_EQ = "lan_audio.action.SET_EQ"
     const val ACTION_SET_LOUDNESS = "lan_audio.action.SET_LOUDNESS"
     const val ACTION_DUMP_METRICS = "lan_audio.action.DUMP_METRICS"
+    const val ACTION_START_MIC = "lan_audio.action.START_MIC"
+    const val ACTION_STOP_MIC = "lan_audio.action.STOP_MIC"
 
     const val EXTRA_HOST = "host"
     const val EXTRA_WS_PORT = "ws_port"
@@ -28,6 +30,8 @@ object PlaybackActions {
     const val EXTRA_EQ_MID_DB = "eq_mid_db"
     const val EXTRA_EQ_HIGH_DB = "eq_high_db"
     const val EXTRA_LOUDNESS_ENABLED = "loudness_enabled"
+    const val EXTRA_MIC_HOST = "mic_host"
+    const val EXTRA_REVERSE_PORT = "reverse_port"
 }
 
 object PlaybackChannels {

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mic_permission_rationale">Microphone access is needed to stream your voice to the PC audio system. No audio is recorded or saved.</string>
+</resources>

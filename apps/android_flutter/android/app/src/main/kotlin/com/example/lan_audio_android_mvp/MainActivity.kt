@@ -52,6 +52,7 @@ class MainActivity : FlutterActivity() {
     private val platformChannelName = "lan_audio/platform"
     private val playbackServiceChannelName = PlaybackChannels.METHOD_PLAYBACK_SERVICE
     private val playbackEventChannelName = PlaybackChannels.EVENT_PLAYBACK_EVENTS
+    private val micChannelName = "lan_audio/mic"
     private val logTag = "lan_audio_activity"
     private var audioTrack: AudioTrack? = null
     private var sampleRate: Int = 48000
@@ -69,6 +70,9 @@ class MainActivity : FlutterActivity() {
     private var nsdManager: NsdManager? = null
     private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
     private val nsdServices = ConcurrentHashMap<String, Map<String, Any>>()
+    @Volatile private var micCaptureService: MicCaptureService? = null
+    @Volatile private var micPeakDb: Float = -96f
+    @Volatile private var micRmsDb: Float = -96f
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,6 +118,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         logLifecycle("onDestroy no service stop issued from activity lifecycle")
         stopNsdDiscovery()
+        stopMicCaptureInternal()
         uiScope.coroutineContext.cancel()
         super.onDestroy()
     }
@@ -237,6 +242,14 @@ class MainActivity : FlutterActivity() {
                     PlaybackEventBus.detachSink()
                 }
             })
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, micChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    handleMicCall(call, result)
+                } catch (e: Exception) {
+                    result.error("mic_error", e.message, null)
+                }
+            }
     }
 
     private fun handleDebugCommand(intent: Intent?): Boolean {
@@ -525,6 +538,61 @@ class MainActivity : FlutterActivity() {
 
             else -> result.notImplemented()
         }
+    }
+
+    private fun handleMicCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "startMicCapture" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val host = args["host"] as? String ?: ""
+                val reversePort = (args["reversePort"] as? Number)?.toInt() ?: 7878
+                if (host.isBlank()) {
+                    result.error("invalid_args", "host is required", null)
+                    return
+                }
+                Log.i(logTag, "startMicCapture host=$host reversePort=$reversePort")
+                stopMicCaptureInternal()
+                val service = MicCaptureService(
+                    host = host,
+                    reversePort = reversePort,
+                    onLevel = { peakDb, rmsDb ->
+                        micPeakDb = peakDb
+                        micRmsDb = rmsDb
+                    },
+                    onError = { error ->
+                        Log.e(logTag, "MicCaptureService error: $error")
+                        stopMicCaptureInternal()
+                    }
+                )
+                micCaptureService = service
+                service.start()
+                PlaybackForegroundService.notifyMicStarted(applicationContext, host)
+                result.success(null)
+            }
+
+            "stopMicCapture" -> {
+                Log.i(logTag, "stopMicCapture")
+                stopMicCaptureInternal()
+                result.success(null)
+            }
+
+            "getMicLevel" -> {
+                result.success(
+                    mapOf(
+                        "peakDb" to micPeakDb,
+                        "rmsDb" to micRmsDb,
+                    )
+                )
+            }
+
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun stopMicCaptureInternal() {
+        micCaptureService?.stop()
+        micCaptureService = null
+        PlaybackForegroundService.notifyMicStopped(applicationContext)
     }
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
