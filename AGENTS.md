@@ -107,6 +107,26 @@
 
 不满足任一项时，禁止发布。
 
+## Merge Validation Checklist
+
+合并功能分支或发布分支到 `main` 后，必须额外确认 Android 生产 UI 入口没有退回旧 MVP 页面：
+
+- [ ] `apps/android_flutter/lib/main.dart` 中仍调用 `buildAudioConsoleTheme()`
+- [ ] `apps/android_flutter/lib/main.dart` 中仍渲染 `HeroStatusWidget` / `ServerCardWidget` / `ModeSelectorWidget` / `DangerActionButton`
+- [ ] 生产入口不出现 `MVP` 标题
+- [ ] 发布前运行 `flutter test test/app_entry_smoke_test.dart`
+
+## 强制发布覆盖（FORCE_RELEASE）
+
+当任务 prompt 包含 `FORCE_RELEASE=true` 时，上述发布触发条件和发布门控 checklist **全部跳过**，直接执行发布流程。
+
+规则：
+- 真机验证、长稳样本、门控 checklist 均视为人工已确认通过
+- 文档中未完成的 checklist 项改为标注 `[human-override]` 而非 `[x]`
+- 仍需运行 `scripts/validate_local.ps1`（编译必须通过）
+- 仍需运行 `scripts/package_release.ps1` 和 `scripts/release.ps1`
+- Release 说明中注明"本版本经人工判定发布，部分验收项以 human-override 标记"
+
 ## 发布流程
 
 达到发布条件后，按此顺序执行：
@@ -136,7 +156,7 @@ Release 说明必须包含：
   + Windows 桌面版本（Cargo / Tauri）
   + Android 版本（pubspec + local.properties）
   + 文档中的当前版本信息
-* Android `versionCode` 采用 `2000 + major * 1000 + minor * 10 + patch`（patch 缺省按 `0` 处理，例如 `1.4 -> 3040`，`1.3.5 -> 3035`），避免 patch 发布低于历史测试包导致安装 downgrade。
+* Android `versionCode` 采用 `2000 + major * 1000 + minor * 10 + patch`（patch 缺省按 `0` 处理，例如 `1.7 -> 3070`，`1.7.1 -> 3071`），确保版本号单调递增，避免安装 downgrade。
 
 ## 禁止事项
 

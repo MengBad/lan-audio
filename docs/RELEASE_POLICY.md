@@ -2,7 +2,7 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.7`
+- Latest shipped release: `v1.7.2`
 - Current tracked gate decision: `allow_release`
 - FORCE_RELEASE: `false`
 - Main path: `windows_loopback + v2_header + opus`
@@ -117,6 +117,39 @@ A release is allowed only when all of the following are true:
   - `lan-audio-android-armeabi-v7a-v1.7.apk`
   - `lan-audio-android-x86_64-v1.7.apk`
   - `lan-audio-desktop-v1.7.exe`
+  - `SHA256SUMS.txt`
+
+## v1.7.1 Patch Release Record
+
+`v1.7.1` is a standard patch release for the v1.7 line, not a FORCE_RELEASE.
+
+- Date: `2026-05-11`
+- Scope: update-check correctness and release pipeline hardening.
+- Fixed update checker GitHub API owner/repo: `MengBad/lan-audio`.
+- Android update checks run on `Dispatchers.IO` and return results to `Dispatchers.Main`.
+- Desktop manual update checks use the asynchronous/non-blocking path.
+- Android release signing in GitHub Actions uses the fixed keystore-backed `local.properties` contract.
+- Required release assets:
+  - `lan-audio-android-arm64-v8a-v1.7.1.apk`
+  - `lan-audio-android-armeabi-v7a-v1.7.1.apk`
+  - `lan-audio-android-x86_64-v1.7.1.apk`
+  - `lan-audio-desktop-v1.7.1.exe`
+  - `SHA256SUMS.txt`
+
+## v1.7.2 Patch Release Record
+
+`v1.7.2` is a standard patch release for the v1.7 line, not a FORCE_RELEASE.
+
+- Date: `2026-05-11`
+- Scope: Android UI entry regression after merging v1.7 into main.
+- Restored Audio Console Dark as the production Android UI shell.
+- Preserved v1.7 feature logic: mDNS discovery, smart reconnect, history/favorites, EQ, and loudness normalization.
+- Added an app-entry smoke test and merge validation checklist to prevent another hidden UI-entry rollback.
+- Required release assets:
+  - `lan-audio-android-arm64-v8a-v1.7.2.apk`
+  - `lan-audio-android-armeabi-v7a-v1.7.2.apk`
+  - `lan-audio-android-x86_64-v1.7.2.apk`
+  - `lan-audio-desktop-v1.7.2.exe`
   - `SHA256SUMS.txt`
 
 ## Rollback Rule

@@ -53,6 +53,34 @@ void main() {
     expect(packet.sequence, 9);
   });
 
+
+  test('parse v2 LAV2 packet preserves 16-bit flags', () {
+    final payload = Uint8List.fromList([1, 1]);
+    const headerSize = 33;
+    const flags = 0x0206;
+    final bytes = BytesBuilder()
+      ..add('LAV2'.codeUnits)
+      ..add([2])
+      ..add(_u16(headerSize))
+      ..add(_u16(flags))
+      ..add(_u32(11))
+      ..add(_u64(1000))
+      ..add([LasPacket.codecPcm16])
+      ..add([2])
+      ..add(_u32(48000))
+      ..add(_u16(10))
+      ..add(_u16(payload.length))
+      ..add(_u16(0))
+      ..add(payload);
+
+    final packet = LasPacket.parse(bytes.toBytes());
+
+    expect(packet, isNotNull);
+    expect(packet!.flagsV2, flags);
+    expect(packet.hasConfigChanged, isTrue);
+    expect(packet.hasDiscontinuity, isTrue);
+  });
+
   test('parse v2 LAV2 opus experimental packet', () {
     final payload = Uint8List.fromList([9, 8, 7]);
     const headerSize = 33;

@@ -24,6 +24,37 @@ The format follows Keep a Changelog, and this project uses `v<major.minor>` rele
 - `PlaybackServiceSnapshot` (Dart) exposes jitter helpers and underrun count from metrics.
 - `DesktopSnapshot` (Tauri) surfaces reverse channel mic state and Android volume.
 
+## [1.7.2] - 2026-05-11
+
+### Fixed
+
+- Restored the Android production entry to Audio Console Dark after the v1.7 merge regression.
+- Reconnected `buildAudioConsoleTheme()`, `HeroStatusWidget`, `ServerCardWidget`, `ModeSelectorWidget`, and `DangerActionButton` in `main.dart`.
+- Preserved the v1.7 connection and audio quality logic while restoring the newer UI shell: mDNS discovery, smart reconnect, history/favorites, EQ, and loudness normalization remain available.
+- Fixed narrow-screen overflow in the discovery status rows.
+
+### Tests
+
+- Added `app_entry_smoke_test.dart` to fail if the app entry falls back to the old MVP UI again.
+- Added merge validation checklist items to `AGENTS.md` for Audio Console Dark entry checks.
+
+## [1.7.1] - 2026-05-11
+
+### Fixed
+
+- Corrected the desktop and Android update checker GitHub API endpoint to `MengBad/lan-audio`.
+- Moved Android update checks off the main thread to avoid `NetworkOnMainThreadException`.
+- Kept desktop manual update checks on a non-blocking path so release lookup cannot freeze the Tauri UI thread.
+- Aligned Android release signing in GitHub Actions with the fixed keystore-backed `local.properties` flow.
+- Kept Android `versionCode` monotonic for the v1.7 patch release (`1.7.1` -> `3071`).
+
+### Verification
+
+- `scripts/validate_local.ps1` passed.
+- `cargo test -p lan_audio_desktop -- update` passed.
+- `flutter test` passed.
+- Main branch Android APK workflow passed after the release signing fix.
+
 ## [1.7.0] - 2026-05-10
 
 ### Added

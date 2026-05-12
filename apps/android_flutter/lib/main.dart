@@ -15,8 +15,15 @@ import 'power_saving_guide.dart';
 import 'services/mic_capture_service.dart';
 import 'ui/jitter_graph_widget.dart';
 import 'ui/mic_status_widget.dart';
+import 'ui/audio_console_status.dart';
+import 'ui/audio_console_theme.dart';
+import 'ui/widgets/danger_action_button.dart';
+import 'ui/widgets/hero_status_widget.dart';
+import 'ui/widgets/metric_chip_widget.dart';
+import 'ui/widgets/mode_selector_widget.dart';
+import 'ui/widgets/server_card_widget.dart';
 
-const String kUiBuildTag = 'UI build: playback-diagnostics-v31';
+const String kUiBuildTag = 'UI build: audio-console-dark-v1.7.2';
 const bool kUseBackgroundPlaybackService = true;
 
 void main() {
@@ -29,14 +36,90 @@ class LanAudioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LAN Audio Android MVP',
-      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+      title: 'LAN Audio Console',
+      theme: buildAudioConsoleTheme(),
       home: const DebugPage(),
       routes: {
         PowerSavingGuidePage.routeName: (_) => const PowerSavingGuidePage(),
       },
     );
   }
+}
+
+QrConnectionTarget? parseLanAudioUri(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || uri.scheme != 'lan-audio') return null;
+  final host = uri.host;
+  if (host.isEmpty) return null;
+  final wsPort = uri.hasPort ? uri.port : 39991;
+  final udpPort = int.tryParse(uri.queryParameters['udp'] ?? '') ?? 39992;
+  return QrConnectionTarget(host: host, wsPort: wsPort, udpPort: udpPort);
+}
+
+FirewallGuidance? firewallGuidanceForMessage(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final message = raw.toLowerCase();
+  if (message.contains('connection refused') ||
+      message.contains('econnrefused') ||
+      message.contains('refused')) {
+    return const FirewallGuidance(
+      titleZh: 'PC 端服务未启动或端口被防火墙拦截',
+      titleEn: 'PC service is not running or the port is blocked',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('timeout') ||
+      message.contains('timed out') ||
+      message.contains('etimedout')) {
+    return const FirewallGuidance(
+      titleZh: '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991',
+      titleEn:
+          'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+      body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+    );
+  }
+  if (message.contains('auth') ||
+      message.contains('version') ||
+      message.contains('incompatible')) {
+    return const FirewallGuidance(
+      titleZh: '版本不兼容，请检查双端版本号',
+      titleEn: 'Version mismatch. Check both app versions',
+      body: '确认 Windows 与 Android 都是同一发布版本。\n'
+          'Make sure Windows and Android are running the same LAN Audio release.',
+    );
+  }
+  return null;
+}
+
+class FirewallGuidance {
+  const FirewallGuidance({
+    required this.titleZh,
+    required this.titleEn,
+    required this.body,
+  });
+
+  final String titleZh;
+  final String titleEn;
+  final String body;
+}
+
+class QrConnectionTarget {
+  QrConnectionTarget({
+    required this.host,
+    required this.wsPort,
+    required this.udpPort,
+  });
+
+  final String host;
+  final int wsPort;
+  final int udpPort;
 }
 
 class DiscoveryServer {
@@ -1616,6 +1699,75 @@ class _DebugPageState extends State<DebugPage> {
     }
   }
 
+  ConsoleUiState get _consoleState => ConsoleStatusMapper.map(
+        isConnecting: _isConnecting,
+        wsConnected: _wsConnected,
+        isPlaying: _playbackState == PlaybackState.playing,
+        isBuffering: _playbackState == PlaybackState.buffering,
+        runtimeState: _playbackLabel(),
+        hasError: _status.toLowerCase().contains('fail') ||
+            _status.toLowerCase().contains('error'),
+      );
+
+  ConsoleStatusViewData get _consoleStatus =>
+      ConsoleStatusMapper.viewData(_consoleState);
+
+  String get _heroMeta {
+    final version = _protocolVersion == null ? 'v?' : 'v$_protocolVersion';
+    return '${_audioModeWire(_currentAudioMode)} | $_effectiveCodec | $version';
+  }
+
+  String get _serverAddress {
+    final selected =
+        _selectedServerId == null ? null : _servers[_selectedServerId!];
+    final host = selected?.host ??
+        _serviceTargetHost ??
+        _manualHostController.text.trim();
+    final wsPort = selected?.wsPort ?? 39991;
+    if (host.isEmpty) return tr('未连接服务器', 'No server connected');
+    return '$host:$wsPort';
+  }
+
+  String get _transportBadge => _transportMode == 'usb' ? 'USB' : 'Wi-Fi';
+
+  bool get _modeSelectorEnabled =>
+      _wsConnected && _consoleState != ConsoleUiState.connecting;
+
+  String get _metricBufferText {
+    if (_consoleState != ConsoleUiState.streaming &&
+        _consoleState != ConsoleUiState.buffering) {
+      return '--';
+    }
+    return '$_uiBufferedMs';
+  }
+
+  String get _metricFpsText => '--';
+
+  String get _metricUnderrunText => '$_uiUnderrun';
+
+  String _modeId(AudioModePreference mode) {
+    switch (mode) {
+      case AudioModePreference.lowLatency:
+        return 'low_latency';
+      case AudioModePreference.balanced:
+        return 'balanced';
+      case AudioModePreference.highQuality:
+        return 'high_quality';
+    }
+  }
+
+  AudioModePreference _modeFromId(String id) {
+    switch (id) {
+      case 'low_latency':
+        return AudioModePreference.lowLatency;
+      case 'high_quality':
+        return AudioModePreference.highQuality;
+      case 'balanced':
+      default:
+        return AudioModePreference.balanced;
+    }
+  }
+
   String _statusChipLabel() {
     if (_isConnecting) return tr('连接中', 'CONNECTING');
     if (_wsConnected &&
@@ -1856,6 +2008,130 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
+  void _showAdvancedSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          children: [
+            Text(tr('高级与调试', 'Advanced & Debug'),
+                style: AudioConsoleType.title()),
+            const SizedBox(height: 10),
+            Text('protocol: v${_protocolVersion ?? 1}'),
+            Text('mode: ${_audioModeWire(_currentAudioMode)}'),
+            Text('codec: $_effectiveCodec'),
+            Text('data_plane: $_protocolPath'),
+            Text('transport: $_transportMode'),
+            Text('connected_clients: $_connectedClientCount'),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _updateCheckRunning
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      _checkForUpdate(
+                        silentDelayMs: 0,
+                        showNoUpdateHint: true,
+                      );
+                    },
+              child: Text(tr('检查更新', 'Check Update')),
+            ),
+            OutlinedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _openPowerSavingGuide();
+              },
+              child: Text(tr('后台播放', 'Background playback')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showConnectionSheet(List<DiscoveryServer> servers) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          children: [
+            Text(tr('连接控制', 'Connection Control'),
+                style: AudioConsoleType.title()),
+            const SizedBox(height: 10),
+            SegmentedButton<ConnectMode>(
+              segments: [
+                ButtonSegment(
+                  value: ConnectMode.discovered,
+                  label: Text(tr('发现设备', 'Discovered')),
+                ),
+                ButtonSegment(
+                  value: ConnectMode.manual,
+                  label: Text(tr('手动地址', 'Manual')),
+                ),
+                ButtonSegment(
+                  value: ConnectMode.usb,
+                  label: Text(tr('USB(adb)', 'USB (adb)')),
+                ),
+              ],
+              selected: <ConnectMode>{_connectMode},
+              onSelectionChanged: (selection) {
+                setState(() => _connectMode = selection.first);
+                Navigator.of(context).pop();
+              },
+            ),
+            const SizedBox(height: 10),
+            if (servers.isEmpty)
+              Text(tr('暂无发现结果，可扫描或手动输入。',
+                  'No discovered server yet. Scan or input manually.'))
+            else
+              ...servers.map(
+                (server) => ListTile(
+                  dense: true,
+                  title: Text('${server.serverName} (${server.host})'),
+                  subtitle: Text('ws:${server.wsPort} udp:${server.udpPort}'),
+                  onTap: () {
+                    setState(() => _selectedServerId = server.serverId);
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _manualHostController,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                labelText: tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
+                hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: _isConnecting
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      if (_connectMode == ConnectMode.usb) {
+                        _connectUsb();
+                      } else if (_connectMode == ConnectMode.manual) {
+                        _connectManual();
+                      } else {
+                        _connectSelected();
+                      }
+                    },
+              child: Text(_connectActionLabel()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final servers = _servers.values.toList()
@@ -1871,11 +2147,35 @@ class _DebugPageState extends State<DebugPage> {
       });
 
     _maybeSelectRecentOrFirst();
+    final status = _consoleStatus;
+    final modeItems = <ModeSelectorItem>[
+      ModeSelectorItem(
+        id: 'low_latency',
+        name: tr('低延迟', 'Low Latency'),
+        desc: tr('游戏/视频', 'Games/Video'),
+      ),
+      ModeSelectorItem(
+        id: 'balanced',
+        name: tr('均衡', 'Balanced'),
+        desc: tr('日常使用', 'Daily'),
+      ),
+      ModeSelectorItem(
+        id: 'high_quality',
+        name: tr('高质量', 'High Quality'),
+        desc: tr('音乐欣赏', 'Music'),
+      ),
+    ];
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(tr('局域网手机音响 MVP', 'LAN Audio Android MVP')),
+        title: Text(tr('LAN Audio 控制台', 'LAN Audio Console')),
         actions: [
+          IconButton(
+            key: const Key('advanced_debug_entry'),
+            tooltip: tr('高级与调试', 'Advanced & Debug'),
+            onPressed: () => _showAdvancedSheet(),
+            icon: const Icon(Icons.tune),
+          ),
           PopupMenuButton<AppLang>(
             initialValue: _lang,
             onSelected: (lang) => setState(() => _lang = lang),
@@ -1888,7 +2188,7 @@ class _DebugPageState extends State<DebugPage> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
         children: [
           Card(
             child: Padding(
@@ -1931,7 +2231,6 @@ class _DebugPageState extends State<DebugPage> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
           AnimatedOpacity(
             opacity: _showVolumePill ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 300),
@@ -1956,6 +2255,56 @@ class _DebugPageState extends State<DebugPage> {
             ),
           ),
           if (_showVolumePill) const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: MetricChipWidget(
+                  label: 'buffer ms',
+                  value: _metricBufferText,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: MetricChipWidget(
+                  label: 'rx fps',
+                  value: _metricFpsText,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: MetricChipWidget(
+                  label: 'underrun',
+                  value: _metricUnderrunText,
+                  valueColor: _uiUnderrun > 0
+                      ? AudioConsoleColors.amber
+                      : AudioConsoleColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ModeSelectorWidget(
+            items: modeItems,
+            selectedId: _modeId(_currentAudioMode),
+            enabled: _modeSelectorEnabled,
+            onSelected: (id) => _setAudioMode(_modeFromId(id)),
+          ),
+          const SizedBox(height: 12),
+          if (_consoleState == ConsoleUiState.error)
+            FilledButton.tonal(
+              key: const Key('retry_action'),
+              onPressed: _isConnecting ? null : _connectSelected,
+              child: Text(tr('重试连接', 'Retry Connection')),
+            ),
+          if (_consoleState == ConsoleUiState.error) const SizedBox(height: 8),
+          DangerActionButton(
+            label: tr('停止播放', 'Stop Playback'),
+            enabled: _wsConnected || _playbackState != PlaybackState.stopped,
+            onPressed: (_wsConnected || _playbackState != PlaybackState.stopped)
+                ? _stopPlayback
+                : null,
+          ),
+          const SizedBox(height: 12),
           _buildQuickConnectCard(servers),
           const SizedBox(height: 10),
           _buildConnectHistoryCard(),
@@ -2002,7 +2351,12 @@ class _DebugPageState extends State<DebugPage> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                         const SizedBox(width: 8),
-                        Text(tr('正在扫描局域网...', 'Scanning LAN...')),
+                        Expanded(
+                          child: Text(
+                            tr('正在扫描局域网...', 'Scanning LAN...'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ],
                     ),
                   if (_probeRunning) const SizedBox(height: 10),
@@ -2015,8 +2369,12 @@ class _DebugPageState extends State<DebugPage> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                            tr('正在发现附近设备...', 'Discovering nearby devices...')),
+                        Expanded(
+                          child: Text(
+                            tr('正在发现附近设备...', 'Discovering nearby devices...'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ],
                     ),
                   if (_nsdDiscoveryRunning) const SizedBox(height: 10),

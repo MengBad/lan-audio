@@ -776,6 +776,7 @@ fn build_service_snapshot(
         state,
         rollback_state,
         metrics: ServiceMetricsSnapshot::default(),
+        last_error: None,
     }
 }
 

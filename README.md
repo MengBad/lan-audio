@@ -52,6 +52,8 @@ Validated release facts:
 - Verified scenarios: `USB direct`, `WiFi + windows_loopback`, `2 Android clients`
 - Latency probe: `low_latency p95=64ms`, `balanced p95=185ms`, `high_quality p95=505ms`
 - Reverse channel: Android mic streams to PC via Opus TCP (port 7878); PC-side volume control via TCP (port 7879).
+- v1.7.1 hotfix: update checker endpoints use `MengBad/lan-audio`, Android update checks run off the main thread, and release signing CI is aligned with the fixed keystore flow.
+- v1.7.2 hotfix: Android production entry restores Audio Console Dark after the v1.7 merge regression.
 
 ## Architecture
 

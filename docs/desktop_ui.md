@@ -1,3 +1,7 @@
+中文摘要：本文档记录 Windows Tauri 桌面端的产品化 UI 规范，包括 Audio Console Dark 主界面、运行状态、数据面路径、回滚入口、QR 连接入口和诊断导出。桌面端应面向日常操作，而不是只作为开发调试面板。
+
+---
+
 # Windows Desktop UI (Tauri)
 
 ## Scope
@@ -21,6 +25,12 @@ Phase 0 / Phase 1 update:
   - `rollback_state`
   - `metrics.{buffered_ms, underrun, late_packets, dropped_packets, rtt_ms, reconnect_count, decode_errors, sink_write_gap_ms_p95}`
 - Service controls, local address, adb device listing, and similar management data stay outside the runtime snapshot contract.
+
+Post-`v1.4` regression update:
+
+- The Windows first screen uses the Audio Console Dark visual structure.
+- The top status area, key runtime metrics, audio mode, connection address, and stop action must remain visible without opening diagnostics.
+- Diagnostics remain collapsed by default and continue to use the existing desktop snapshot data.
 
 ## First Screen
 
@@ -54,6 +64,11 @@ Only one primary button should be visually dominant:
 - Service running: Stop streaming
 
 Restart and debug actions must stay secondary.
+
+Service lifecycle actions should remain non-blocking on the window thread:
+
+- Start should return immediately with a visible `starting` state while runtime setup continues in the background.
+- Stop should avoid blocking the desktop window long enough to trigger a Windows "not responding" warning.
 
 ## State Sources
 
@@ -99,6 +114,14 @@ When expanded, group metrics by user-friendly categories:
 
 Raw engineering labels may remain available, but the visible label should be readable. Example: `tx_packets` is displayed as `Sent packets`.
 
+Latency revalidation is exported outside the UI by `scripts/export_latency_probe.ps1`. The script consumes desktop diagnostics or Android snapshot JSON and writes `artifacts/latency/latency_probe_latest.json` with per-mode latency proxy results for `low_latency`, `balanced`, and `high_quality`.
+
+## USB Device Refresh
+
+- ADB device discovery should not interrupt normal streaming UX.
+- The desktop UI may refresh ADB devices on manual demand, and can do a low-frequency background refresh while USB mode is active.
+- Windows GUI builds must launch `adb` without a visible console window.
+
 ## Release Packaging
 
 Current GitHub release strategy for Windows is exe-only:
@@ -130,4 +153,4 @@ Language defaults should follow the system locale (`zh*` -> Chinese, otherwise E
 - More guided USB tethering help
 - Firewall help text
 - Structured diagnostics export (desktop JSON snapshot export is available; Android bundle still pending)
-- Android real-device latency revalidation for the recommended `windows_loopback + v2_header + opus` path before release sign-off
+- Keep feeding real diagnostics snapshots into `scripts/export_latency_probe.ps1` before release sign-off

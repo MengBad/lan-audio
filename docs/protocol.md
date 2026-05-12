@@ -1,8 +1,16 @@
-﻿# Protocol v2 Draft
+中文摘要：本文档记录 LAN Audio 的 Protocol v2 设计、运行时 snapshot contract、主路径与回滚路径约束。当前推荐主路径保持 `windows_loopback + v2_header + opus`，永久维护回滚路径 `legacy_las1 + pcm16`，并通过能力协商、模式同步和结构化错误来支撑后续演进。
 
-## Release Update (`2026-04-22`)
+---
 
+# Protocol v2 Draft
+
+## Release Update (`2026-04-24`)
+
+- `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.
+- Post-release regression fixes keep the Protocol v2 contract stable: no data-plane header fields, control messages, mode enums, or rollback semantics were changed.
+- Android stable snapshot export now includes the already-computed `rx_frames_per_sec` and `audio_track_write_frames_per_sec` UI metrics so the console can show real receive cadence without changing protocol meaning.
 - Release decision is currently `allow_release`, sourced from `artifacts/release/acceptance_gate.json`.
+- Latency revalidation is now structured: `scripts/export_latency_probe.ps1` reads diagnostics/snapshot JSON and emits `artifacts/latency/latency_probe_latest.json` with per-mode latency proxy targets.
 - Shared mode contracts, connection state machine, rollback state, failure taxonomy, service snapshot, and release gate schema now live in `crates/lan_audio_domain`.
 - Protocol messages still preserve v1/v2 compatibility, but shared contract types are now imported from the domain layer instead of being duplicated ad hoc.
 - The maintained main-path target remains `windows_loopback + v2_header + opus`; the maintained rollback path remains `legacy_las1 + pcm16`.
@@ -418,7 +426,7 @@ V2 的产品原则：
   - `AudioModeProfile` 运行时下发与 Android 播放策略应用
   - 稳定 Opus 入口（Opus 在 `v2_header` 下作为推荐默认链路启用）
 - 未全量完成：
-  - Android 真机 loopback 长稳与延迟复核仍待补样本
+  - Android 真机 loopback 长稳样本仍待补齐；延迟复核已通过 `scripts/export_latency_probe.ps1` 结构化为 artifact 流程
   - USB direct 尚未实现
   - 按连接动态协商切换 v2 header 仍待收敛，当前仍以配置默认值为主
 
@@ -442,7 +450,7 @@ V2 的产品原则：
   - Android Opus decode 失败时优先走 PLC concealment，不直接静音。
   - 当数据面回退到 `legacy_las1` 时，effective codec 必须回退 `pcm16`。
 - 当前验收：`synthetic + v2_header + opus` 已完成真机非零 PCM 与听感验收，并通过 5 分钟服务端压力测试（`p99 encode ~= 0.509 ms`，channel-full drop rate `0.000000`）。
-- 下一步：补齐 `windows_loopback + v2_header + opus` 的 Android 真机长稳与延迟样本。
+- 下一步：继续用 `scripts/export_latency_probe.ps1` 将三档模式的真实诊断快照沉淀为 `artifacts/latency/` 结构化结果。
 
 ## 9.5 USB 连接策略
 
@@ -534,7 +542,7 @@ V2 的产品原则：
 - 模式策略：
   - `AudioModeProfile` 已在 Rust/Android/桌面端形成一致语义。
   - Android jitter buffer 已按 mode profile 调整 start/max buffer、batch 和 drop threshold。
-- 尚未完成：Android 真机 `windows_loopback + v2_header + opus` 的长稳 / latency / USB 样本仍待补齐；USB direct 未实现。
+- 尚未完成：Android 真机 `windows_loopback + v2_header + opus` 的长稳 / USB 样本仍待补齐；latency 复核已具备结构化 probe/export；USB direct 未实现。
 
 ## 13. Opus synthetic 真机听感验收结论
 

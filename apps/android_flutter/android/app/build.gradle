@@ -4,9 +4,18 @@ plugins {
     id 'dev.flutter.flutter-gradle-plugin'
 }
 
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
 android {
     namespace 'com.example.lan_audio_android_mvp'
     compileSdk flutter.compileSdkVersion
+    ndkVersion '25.1.8937393'
 
     defaultConfig {
         applicationId 'com.example.lan_audio_android_mvp'
@@ -47,9 +56,27 @@ android {
         abortOnError false
     }
 
+    signingConfigs {
+        release {
+            def releaseStoreFile = localProperties.getProperty("lanAudio.releaseStoreFile")
+            storeFile releaseStoreFile
+                ? file(releaseStoreFile)
+                : file(System.getenv("LAN_AUDIO_KEYSTORE_PATH") ?: rootProject.file("../../lan-audio-release.jks"))
+            storePassword localProperties.getProperty("lanAudio.releaseStorePassword")
+                ?: System.getenv("LAN_AUDIO_KEYSTORE_PASS")
+                ?: ""
+            keyAlias localProperties.getProperty("lanAudio.releaseKeyAlias")
+                ?: System.getenv("LAN_AUDIO_KEY_ALIAS")
+                ?: "lan-audio"
+            keyPassword localProperties.getProperty("lanAudio.releaseKeyPassword")
+                ?: System.getenv("LAN_AUDIO_KEY_PASS")
+                ?: ""
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -62,6 +89,7 @@ flutter {
 }
 
 dependencies {
+    implementation "androidx.core:core:1.13.1"
     implementation "androidx.media:media:1.7.0"
     implementation "androidx.media3:media3-session:1.4.1"
     implementation "androidx.media3:media3-exoplayer:1.4.1"

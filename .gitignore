@@ -45,6 +45,7 @@ artifacts/validate/
 *.hprof
 apps/android_flutter/android/.gradle/
 apps/android_flutter/android/.kotlin/
+apps/android_flutter/android/local.properties
 
 # Local release signing material
 *.jks

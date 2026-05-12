@@ -1150,6 +1150,7 @@ mod tests {
             state: ConnectionState::Streaming,
             rollback_state: lan_audio_protocol::RollbackState::MainPathActive,
             metrics: ServiceMetricsSnapshot::default(),
+            last_error: None,
         };
 
         assert_eq!(

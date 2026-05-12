@@ -6,15 +6,20 @@
     <title>LAN Audio Desktop Console</title>
     <style>
       :root {
-        --bg: #f3f5f7;
-        --panel: #ffffff;
-        --text: #16202a;
-        --muted: #5f6c7b;
-        --line: #d8e0e9;
-        --accent: #1461d9;
-        --ok: #127948;
-        --warn: #b45309;
-        --error: #b42318;
+        --bg: #0c0f14;
+        --bg2: #131720;
+        --panel: #1e2433;
+        --panel2: #252b3b;
+        --text: #f0f2f7;
+        --muted: #8892a4;
+        --faint: #4a5568;
+        --line: rgba(255,255,255,0.09);
+        --line-strong: rgba(255,255,255,0.14);
+        --accent: #00d4aa;
+        --accent-dim: rgba(0,212,170,0.12);
+        --ok: #00d4aa;
+        --warn: #f59e0b;
+        --error: #ef4444;
       }
 
       * { box-sizing: border-box; }
@@ -22,7 +27,9 @@
       body {
         margin: 0;
         font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-        background: var(--bg);
+        background:
+          radial-gradient(circle at top left, rgba(0,212,170,0.10), transparent 32%),
+          var(--bg);
         color: var(--text);
       }
 
@@ -54,17 +61,18 @@
 
       .lang-toggle {
         border: 1px solid var(--line);
-        border-radius: 10px;
-        background: #fff;
+        border-radius: 8px;
+        background: var(--panel);
         padding: 7px 10px;
         color: var(--text);
       }
 
       .panel {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 16px 42px rgba(0,0,0,0.22);
       }
 
       .status-line {
@@ -81,6 +89,7 @@
         height: 10px;
         border-radius: 50%;
         background: #8a98a8;
+        box-shadow: 0 0 18px currentColor;
       }
 
       .status-dot.running { background: var(--ok); }
@@ -102,17 +111,18 @@
 
       .primary {
         border: 0;
-        border-radius: 11px;
+        border-radius: 8px;
         font-size: 16px;
         font-weight: 700;
         padding: 11px 26px;
         background: var(--accent);
-        color: #fff;
+        color: #07110f;
         cursor: pointer;
       }
 
       .primary.stop {
-        background: #d22f2f;
+        background: var(--error);
+        color: #fff;
       }
 
       .primary:disabled {
@@ -127,7 +137,7 @@
 
       .health-strip {
         margin-top: 12px;
-        border-top: 1px solid #e6ebf2;
+        border-top: 1px solid var(--line);
         padding-top: 10px;
       }
 
@@ -175,16 +185,17 @@
 
       .source-btn {
         border: 1px solid var(--line);
-        background: #fff;
+        background: var(--bg2);
         color: var(--text);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 8px 12px;
         cursor: pointer;
       }
 
       .source-btn.active {
-        border-color: #9dc0fb;
-        color: #0f4db2;
+        border-color: rgba(0,212,170,0.40);
+        background: var(--accent-dim);
+        color: var(--accent);
       }
 
       .toggle {
@@ -224,8 +235,8 @@
 
       .copy-btn {
         border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fff;
+        border-radius: 6px;
+        background: var(--bg2);
         color: var(--text);
         padding: 4px 9px;
         font-size: 12px;
@@ -233,7 +244,7 @@
       }
 
       .copy-btn:hover {
-        border-color: #b9c7d9;
+        border-color: var(--line-strong);
       }
 
       .device-block {
@@ -250,7 +261,7 @@
         font-size: 13px;
         font-weight: 600;
         padding-bottom: 8px;
-        border-bottom: 1px solid #e6ebf2;
+        border-bottom: 1px solid var(--line);
         margin-bottom: 8px;
       }
 
@@ -264,12 +275,12 @@
 
       .device-recent li {
         font-size: 13px;
-        color: #2e3a47;
+        color: var(--text);
       }
 
       .usb-panel {
         margin-top: 10px;
-        border-top: 1px solid #e6ebf2;
+        border-top: 1px solid var(--line);
         padding-top: 10px;
       }
 
@@ -282,6 +293,30 @@
       .usb-device-list {
         display: grid;
         gap: 6px;
+      }
+
+      .qr-panel {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .qr-code {
+        width: 120px;
+        height: 120px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0b111a;
+        overflow: hidden;
+      }
+
+      .qr-code svg {
+        width: 104px;
+        height: 104px;
       }
 
       .usb-device {
@@ -298,9 +333,9 @@
 
       details {
         margin-top: 12px;
-        background: #fff;
+        background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 0 14px;
       }
 
@@ -353,6 +388,29 @@
         font-size: 13px;
       }
 
+      .guidance-panel {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border: 1px solid rgba(14, 165, 233, 0.24);
+        border-radius: 8px;
+        background: rgba(14, 165, 233, 0.08);
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .guidance-panel summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .guidance-panel pre {
+        margin: 10px 0 0;
+        white-space: pre-wrap;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        line-height: 1.45;
+      }
+
       @media (max-width: 900px) {
         .layout { grid-template-columns: 1fr; }
         .debug-groups { grid-template-columns: 1fr; }
@@ -396,6 +454,18 @@
           </div>
         </div>
         <div class="error-text" id="errorText"></div>
+        <details class="guidance-panel" id="firewallGuide" style="display:none;">
+          <summary id="firewallGuideTitle"></summary>
+          <pre id="firewallGuideBody"></pre>
+        </details>
+        <div class="qr-panel" id="qrPanel" style="display:none;">
+          <div class="qr-code" id="qrCode"></div>
+          <div>
+            <div class="health-title" id="qrTitle"></div>
+            <div class="status-sub" id="qrSubtitle"></div>
+            <div class="address-value" id="qrUriValue"></div>
+          </div>
+        </div>
       </section>
 
       <div class="layout">
@@ -499,10 +569,22 @@
       </details>
 
       <details>
-        <summary id="logSummary"></summary>
-        <div style="margin: 10px 0;">
-          <button class="copy-btn" id="exportDiagBtn" type="button"></button>
+        <summary id="advancedSummary"></summary>
+        <div class="plain-list" style="margin-bottom: 12px;">
+          <div class="row"><span class="label" id="advancedPathLabel"></span><span class="value" id="advancedDataPathValue"></span></div>
+          <div class="row">
+            <span class="label" id="advancedRollbackLabel"></span>
+            <button class="copy-btn" id="advancedSafeModeBtn" type="button"></button>
+          </div>
+          <div class="row">
+            <span class="label" id="advancedExportLabel"></span>
+            <button class="copy-btn" id="exportDiagBtn" type="button"></button>
+          </div>
         </div>
+      </details>
+
+      <details>
+        <summary id="logSummary"></summary>
         <div class="log-pane" id="logPane"></div>
       </details>
     </div>
@@ -527,9 +609,16 @@
           safeModeEnable: '切回安全模式',
           safeModeDisable: '恢复推荐路径',
           safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
+          rollbackConfirm: '切换到回滚模式将使用 PCM16 编码，延迟更高但兼容性更好。\n确认切换？',
+          advancedSummary: '高级选项',
+          advancedPath: '当前数据面路径',
+          advancedRollback: '回滚路径',
+          advancedExport: '诊断报告',
+          qrTitle: '扫码连接',
+          qrSubtitle: 'Android 端扫码后会自动填入并连接。',
           dump: '导出 capture wav（调试）',
-          exportDiag: '导出诊断快照（JSON）',
-          exportDiagDone: '诊断快照已导出：{path}',
+          exportDiag: '导出诊断包',
+          exportDiagDone: '诊断包已导出：{path}',
           updateBannerText: '发现新版本 v{version}',
           updateBannerBtn: '前往下载',
           address: '连接地址',
@@ -647,9 +736,16 @@
           safeModeEnable: 'Switch to safe mode',
           safeModeDisable: 'Restore recommended path',
           safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
+          rollbackConfirm: 'Switching to rollback mode uses PCM16 encoding. Latency is higher, but compatibility is better.\nContinue?',
+          advancedSummary: 'Advanced Options',
+          advancedPath: 'Current data-plane path',
+          advancedRollback: 'Rollback path',
+          advancedExport: 'Diagnostics report',
+          qrTitle: 'Scan to connect',
+          qrSubtitle: 'Scan from Android to fill and connect automatically.',
           dump: 'Export capture wav (debug)',
-          exportDiag: 'Export diagnostics snapshot (JSON)',
-          exportDiagDone: 'Diagnostics snapshot exported: {path}',
+          exportDiag: 'Export support bundle',
+          exportDiagDone: 'Support bundle exported: {path}',
           updateBannerText: 'New version v{version} is available',
           updateBannerBtn: 'Open release page',
           address: 'Connect Address',
@@ -755,6 +851,8 @@
         snapshot: null,
         busy: false,
         adbDevices: [],
+        lastAdbRefreshAt: 0,
+        qrKey: '',
       };
 
       function t(key) {
@@ -783,6 +881,83 @@
 
       function dataPlaneName(dataPlane) {
         return t(`data_plane_${dataPlane}`) || dataPlane;
+      }
+
+      function humanizeNegotiationError(value) {
+        if (!value || typeof value !== 'object') return value ? String(value) : '';
+        if (value.type === 'unsupported_codec') {
+          return `Unsupported codec: offered=${JSON.stringify(value.offered || [])}, required=${value.required}`;
+        }
+        if (value.type === 'unsupported_data_plane') {
+          return `Unsupported data plane: offered=${JSON.stringify(value.offered || [])}`;
+        }
+        if (value.type === 'version_mismatch') {
+          return `Protocol version mismatch: local=${value.local}, remote=${value.remote}`;
+        }
+        if (value.type === 'timeout') {
+          return `Negotiation timed out after ${value.elapsed_ms}ms`;
+        }
+        if (value.type === 'rejected') {
+          return `Negotiation rejected: ${value.reason}`;
+        }
+        return JSON.stringify(value);
+      }
+
+      function firewallGuidanceForMessage(raw) {
+        if (!raw) return null;
+        const message = String(raw).toLowerCase();
+        const firewallSteps =
+          'Windows 防火墙放行步骤 / Windows Firewall steps:\n' +
+          '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n' +
+          '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n' +
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991';
+        if (message.includes('connection refused') || message.includes('econnrefused') || message.includes('refused')) {
+          return {
+            title: state.lang === 'zh'
+              ? 'PC 端服务未启动或端口被防火墙拦截'
+              : 'PC service is not running or the port is blocked',
+            body: firewallSteps,
+          };
+        }
+        if (message.includes('timeout') || message.includes('timed out') || message.includes('etimedout')) {
+          return {
+            title: state.lang === 'zh'
+              ? '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991'
+              : 'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+            body: firewallSteps,
+          };
+        }
+        if (message.includes('auth') || message.includes('version') || message.includes('incompatible')) {
+          return {
+            title: state.lang === 'zh'
+              ? '版本不兼容，请检查双端版本号'
+              : 'Version mismatch. Check both app versions',
+            body:
+              '确认 Windows 与 Android 都是同一发布版本。\n' +
+              'Make sure Windows and Android are running the same LAN Audio release.',
+          };
+        }
+        return null;
+      }
+
+      function renderFirewallGuidance(errorText) {
+        const panel = document.getElementById('firewallGuide');
+        const guidance = firewallGuidanceForMessage(errorText);
+        if (!guidance) {
+          panel.style.display = 'none';
+          document.getElementById('firewallGuideTitle').textContent = '';
+          document.getElementById('firewallGuideBody').textContent = '';
+          return;
+        }
+        panel.style.display = 'block';
+        document.getElementById('firewallGuideTitle').textContent = guidance.title;
+        document.getElementById('firewallGuideBody').textContent = guidance.body;
+      }
+
+      function setErrorText(value) {
+        const text = value || '';
+        document.getElementById('errorText').textContent = text;
+        renderFirewallGuidance(text);
       }
 
       function runtimeSnapshot(snapshot) {
@@ -835,11 +1010,22 @@
         return t('subStopped');
       }
 
-      async function refreshAdbDevices() {
+      async function refreshAdbDevices(force = false) {
+        const now = Date.now();
+        const shouldRefresh =
+          force ||
+          !state.snapshot ||
+          state.snapshot.transport_mode === 'usb' ||
+          now - state.lastAdbRefreshAt >= 15000;
+        if (!shouldRefresh) {
+          return;
+        }
         try {
           state.adbDevices = await tauriInvoke('list_adb_devices');
+          state.lastAdbRefreshAt = now;
         } catch {
           state.adbDevices = [];
+          state.lastAdbRefreshAt = now;
         }
       }
 
@@ -944,6 +1130,12 @@
         document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
         document.getElementById('healthSourceLabel').textContent = `${t('healthSource')}:`;
         document.getElementById('debugSummary').textContent = t('debugSummary');
+        document.getElementById('advancedSummary').textContent = t('advancedSummary');
+        document.getElementById('advancedPathLabel').textContent = t('advancedPath');
+        document.getElementById('advancedRollbackLabel').textContent = t('advancedRollback');
+        document.getElementById('advancedExportLabel').textContent = t('advancedExport');
+        document.getElementById('qrTitle').textContent = t('qrTitle');
+        document.getElementById('qrSubtitle').textContent = t('qrSubtitle');
         document.getElementById('logSummary').textContent = t('logSummary');
         document.getElementById('groupTx').textContent = t('groupTx');
         document.getElementById('groupCapture').textContent = t('groupCapture');
@@ -994,7 +1186,7 @@
         document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version;
-        document.getElementById('errorText').textContent = snapshot.error_message || '';
+        setErrorText(snapshot.error_message || humanizeNegotiationError(runtime.last_error));
         const banner = document.getElementById('updateBanner');
         if (snapshot.update_banner?.latest_version) {
           banner.style.display = 'block';
@@ -1016,6 +1208,11 @@
         const safeModeBtn = document.getElementById('safeModeBtn');
         safeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
         safeModeBtn.title = t('safeModeHint');
+        const advancedSafeModeBtn = document.getElementById('advancedSafeModeBtn');
+        advancedSafeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
+        advancedSafeModeBtn.title = t('safeModeHint');
+        document.getElementById('advancedDataPathValue').textContent =
+          `${snapshot.audio_source} + ${runtime.data_plane || snapshot.data_plane_format} + ${runtime.effective_codec || snapshot.effective_codec}`;
 
         const recent = snapshot.recent_clients || [];
         const activeClients = recent.slice(0, snapshot.connected_devices || 0);
@@ -1088,6 +1285,7 @@
         document.getElementById('codecOpus').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
         document.getElementById('safeModeBtn').disabled = disabled;
+        document.getElementById('advancedSafeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled;
         document.getElementById('usbRefreshBtn').disabled = disabled;
@@ -1095,7 +1293,28 @@
         document.getElementById('exportDiagBtn').disabled = disabled;
         document.getElementById('updateBannerBtn').disabled = disabled || !snapshot.update_banner?.release_url;
 
+        renderConnectionQr(snapshot);
         renderUsbPanel(snapshot);
+      }
+
+      async function renderConnectionQr(snapshot) {
+        const panel = document.getElementById('qrPanel');
+        const uri = `lan-audio://${snapshot.local_ip}:${snapshot.ws_port}`;
+        document.getElementById('qrUriValue').textContent = uri;
+        if (snapshot.service_status !== 'running') {
+          panel.style.display = 'none';
+          state.qrKey = '';
+          document.getElementById('qrCode').innerHTML = '';
+          return;
+        }
+        panel.style.display = 'grid';
+        if (state.qrKey === uri) return;
+        state.qrKey = uri;
+        try {
+          document.getElementById('qrCode').innerHTML = await tauriInvoke('get_connection_qr_svg');
+        } catch (error) {
+          document.getElementById('qrCode').textContent = String(error);
+        }
       }
 
       async function refresh() {
@@ -1104,7 +1323,7 @@
           const snapshot = await tauriInvoke('get_desktop_snapshot');
           renderSnapshot(snapshot);
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 
@@ -1138,23 +1357,13 @@
       async function toggleSafeMode() {
         if (!state.snapshot) return;
         const isSafeMode = state.snapshot.data_plane_format === 'legacy_las1' && state.snapshot.codec_selection === 'pcm16';
-        document.getElementById('sourceLoopback').classList.add('active');
-        document.getElementById('sourceSynthetic').classList.remove('active');
-        document.getElementById('fallbackToggle').checked = state.snapshot.fallback_to_synthetic;
-        document.getElementById('dumpToggle').checked = state.snapshot.capture_dump_wav;
         if (isSafeMode) {
-          document.getElementById('dataPlaneLegacy').classList.remove('active');
-          document.getElementById('dataPlaneV2Header').classList.add('active');
-          document.getElementById('codecPcm16').classList.remove('active');
-          document.getElementById('codecOpus').classList.add('active');
-          await applySettings('windows_loopback');
+          await call('restore_recommended_mode');
           return;
         }
-        document.getElementById('dataPlaneLegacy').classList.add('active');
-        document.getElementById('dataPlaneV2Header').classList.remove('active');
-        document.getElementById('codecPcm16').classList.add('active');
-        document.getElementById('codecOpus').classList.remove('active');
-        await applySettings('windows_loopback');
+        if (window.confirm(t('rollbackConfirm'))) {
+          await call('switch_to_rollback_mode');
+        }
       }
 
       async function copyAddress() {
@@ -1163,16 +1372,16 @@
           await navigator.clipboard.writeText(state.snapshot.connect_address);
           document.getElementById('statusSubline').textContent = t('copied');
         } catch {
-          document.getElementById('errorText').textContent = state.snapshot.connect_address;
+          setErrorText(state.snapshot.connect_address);
         }
       }
 
       async function exportDiagnostics() {
         try {
-          const path = await tauriInvoke('export_diagnostics_report');
+          const path = await tauriInvoke('export_support_bundle');
           document.getElementById('statusSubline').textContent = trf('exportDiagDone', { path });
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 
@@ -1180,7 +1389,7 @@
         try {
           await tauriInvoke('open_release_page');
         } catch (error) {
-          document.getElementById('errorText').textContent = String(error);
+          setErrorText(String(error));
         }
       }
 
@@ -1225,11 +1434,15 @@
         });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
         document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
+        document.getElementById('advancedSafeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
         document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);
         document.getElementById('updateBannerBtn').addEventListener('click', openReleasePage);
-        document.getElementById('usbRefreshBtn').addEventListener('click', refresh);
+        document.getElementById('usbRefreshBtn').addEventListener('click', async () => {
+          await refreshAdbDevices(true);
+          await refresh();
+        });
         document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 

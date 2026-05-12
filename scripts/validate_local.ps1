@@ -42,6 +42,9 @@ try {
         Invoke-Step -Name 'cargo test -p lan_audio_protocol -p lan_audio_server' -Action {
             cargo test -p lan_audio_protocol -p lan_audio_server
         }
+        Invoke-Step -Name 'cargo test -p lan_audio_protocol -- legacy' -Action {
+            cargo test -p lan_audio_protocol -- legacy
+        }
     }
 
     if (-not $SkipDesktopCheck) {
@@ -69,6 +72,13 @@ try {
     }
 
     if (-not $SkipAndroidBuild) {
+        $localPropsPath = Join-Path $repoRoot 'apps/android_flutter/android/local.properties'
+        if (-not (Test-Path $localPropsPath)) {
+            Invoke-Step -Name 'Prepare android/local.properties' -Action {
+                powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/write_local_properties.ps1')
+            }
+        }
+
         Push-Location (Join-Path $repoRoot 'apps/android_flutter/android')
         try {
             Invoke-Step -Name 'gradlew.bat assembleDebug' -Action {

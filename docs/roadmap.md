@@ -2,13 +2,14 @@
 
 ## Current Position
 
-- Latest shipped release: `v1.3`
+- Latest shipped release before the hotfix tag: `v1.4`
+- Current release target: `v1.4.1`
 - Default runtime path: `windows_loopback + v2_header + opus`
 - Maintained rollback path: `legacy_las1 + pcm16`
 - Supported transports: `wifi`, `usb`
 - Shared contract source: `crates/lan_audio_domain`
 
-`v1.3` closed the release gate and shipped the current core Windows-to-Android streaming path. The next cycle is not about changing the default path again. It is about making the existing path easier to maintain, easier to diagnose, and safer to evolve.
+`v1.4` has been shipped, but not as a “done forever” milestone. The current follow-up cycle remains focused on making the existing Windows-to-Android path easier to maintain, easier to diagnose, and safer to evolve without changing the default/rollback split.
 
 ## Long-Term Product Goals
 
