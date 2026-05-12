@@ -18,6 +18,31 @@ pub struct ReverseChannelState {
     pub virtual_device_warning: Option<String>,
 }
 
+/// Check if a virtual audio device is available on the system.
+/// On Windows, warn by default and clear when a named pipe consumer connects.
+/// On non-Windows, skip the check (no virtual device needed).
+fn check_virtual_audio_device(state: &Arc<Mutex<ReverseChannelState>>) {
+    #[cfg(windows)]
+    {
+        if let Ok(mut s) = state.lock() {
+            s.virtual_device_detected = false;
+            s.virtual_device_warning = Some(
+                "Mic input requires a virtual audio device (e.g. VB-Cable). Named pipe fallback is active — check your audio settings.".into(),
+            );
+        }
+        info!(
+            "Virtual audio device check: warning set (cleared when named pipe consumer connects)"
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(mut s) = state.lock() {
+            s.virtual_device_detected = true;
+            s.virtual_device_warning = None;
+        }
+    }
+}
+
 /// Server that accepts reverse-channel audio (port 7878) and control (port 7879) connections
 pub struct ReverseChannelServer {
     reverse_port: u16,
@@ -50,6 +75,8 @@ impl ReverseChannelServer {
 
     /// Start both listeners. Returns Ok even if a listener fails to bind (best-effort).
     pub async fn start(&mut self) -> anyhow::Result<()> {
+        check_virtual_audio_device(&self.state);
+
         let (audio_tx, audio_rx) = broadcast::channel::<()>(1);
         let (control_tx, control_rx) = broadcast::channel::<()>(1);
         self.audio_shutdown_tx = Some(audio_tx);
@@ -260,8 +287,20 @@ async fn handle_audio_client(
                         #[cfg(windows)]
                         if let Some(ref mut pipe) = named_pipe {
                             use std::io::Write;
-                            if let Err(e) = pipe.write_all(pcm_bytes) {
-                                warn!("Failed to write to named pipe: {}", e);
+                            match pipe.write_all(pcm_bytes) {
+                                Ok(()) => {
+                                    // Clear virtual device warning on first successful write
+                                    if let Ok(mut s) = state.lock() {
+                                        if s.virtual_device_warning.is_some() {
+                                            s.virtual_device_detected = true;
+                                            s.virtual_device_warning = None;
+                                            info!("Named pipe consumer detected — virtual audio device warning cleared");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to write to named pipe: {}", e);
+                                }
                             }
                             let _ = pipe.flush();
                         }
