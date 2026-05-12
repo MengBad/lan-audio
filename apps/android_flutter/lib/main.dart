@@ -18,10 +18,8 @@ import 'ui/mic_status_widget.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
 import 'ui/widgets/danger_action_button.dart';
-import 'ui/widgets/hero_status_widget.dart';
 import 'ui/widgets/metric_chip_widget.dart';
 import 'ui/widgets/mode_selector_widget.dart';
-import 'ui/widgets/server_card_widget.dart';
 
 const String kUiBuildTag = 'UI build: audio-console-dark-v1.7.2';
 const bool kUseBackgroundPlaybackService = true;
@@ -1709,27 +1707,6 @@ class _DebugPageState extends State<DebugPage> {
             _status.toLowerCase().contains('error'),
       );
 
-  ConsoleStatusViewData get _consoleStatus =>
-      ConsoleStatusMapper.viewData(_consoleState);
-
-  String get _heroMeta {
-    final version = _protocolVersion == null ? 'v?' : 'v$_protocolVersion';
-    return '${_audioModeWire(_currentAudioMode)} | $_effectiveCodec | $version';
-  }
-
-  String get _serverAddress {
-    final selected =
-        _selectedServerId == null ? null : _servers[_selectedServerId!];
-    final host = selected?.host ??
-        _serviceTargetHost ??
-        _manualHostController.text.trim();
-    final wsPort = selected?.wsPort ?? 39991;
-    if (host.isEmpty) return tr('未连接服务器', 'No server connected');
-    return '$host:$wsPort';
-  }
-
-  String get _transportBadge => _transportMode == 'usb' ? 'USB' : 'Wi-Fi';
-
   bool get _modeSelectorEnabled =>
       _wsConnected && _consoleState != ConsoleUiState.connecting;
 
@@ -2052,86 +2029,6 @@ class _DebugPageState extends State<DebugPage> {
     );
   }
 
-  void _showConnectionSheet(List<DiscoveryServer> servers) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          children: [
-            Text(tr('连接控制', 'Connection Control'),
-                style: AudioConsoleType.title()),
-            const SizedBox(height: 10),
-            SegmentedButton<ConnectMode>(
-              segments: [
-                ButtonSegment(
-                  value: ConnectMode.discovered,
-                  label: Text(tr('发现设备', 'Discovered')),
-                ),
-                ButtonSegment(
-                  value: ConnectMode.manual,
-                  label: Text(tr('手动地址', 'Manual')),
-                ),
-                ButtonSegment(
-                  value: ConnectMode.usb,
-                  label: Text(tr('USB(adb)', 'USB (adb)')),
-                ),
-              ],
-              selected: <ConnectMode>{_connectMode},
-              onSelectionChanged: (selection) {
-                setState(() => _connectMode = selection.first);
-                Navigator.of(context).pop();
-              },
-            ),
-            const SizedBox(height: 10),
-            if (servers.isEmpty)
-              Text(tr('暂无发现结果，可扫描或手动输入。',
-                  'No discovered server yet. Scan or input manually.'))
-            else
-              ...servers.map(
-                (server) => ListTile(
-                  dense: true,
-                  title: Text('${server.serverName} (${server.host})'),
-                  subtitle: Text('ws:${server.wsPort} udp:${server.udpPort}'),
-                  onTap: () {
-                    setState(() => _selectedServerId = server.serverId);
-                    Navigator.of(context).pop();
-                  },
-                ),
-              ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _manualHostController,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                labelText: tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
-                hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
-              ),
-            ),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: _isConnecting
-                  ? null
-                  : () {
-                      Navigator.of(context).pop();
-                      if (_connectMode == ConnectMode.usb) {
-                        _connectUsb();
-                      } else if (_connectMode == ConnectMode.manual) {
-                        _connectManual();
-                      } else {
-                        _connectSelected();
-                      }
-                    },
-              child: Text(_connectActionLabel()),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final servers = _servers.values.toList()
@@ -2147,7 +2044,6 @@ class _DebugPageState extends State<DebugPage> {
       });
 
     _maybeSelectRecentOrFirst();
-    final status = _consoleStatus;
     final modeItems = <ModeSelectorItem>[
       ModeSelectorItem(
         id: 'low_latency',
