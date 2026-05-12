@@ -918,6 +918,7 @@ impl TxStats {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn observe(
         &mut self,
         packet: &UdpAudioPacket,

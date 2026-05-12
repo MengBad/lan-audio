@@ -192,6 +192,7 @@ impl CaptureStatsWindow {
         self.reset_window();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_callback(
         &mut self,
         frames: u32,

@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
             supports_modes: true,
             supports_metrics: true,
             supports_opus_future: supports_opus,
-            supports_opus: supports_opus,
+            supports_opus,
             supports_opus_experimental: supports_opus,
             supports_low_latency: true,
             supports_high_quality: true,
@@ -70,18 +70,17 @@ async fn main() -> anyhow::Result<()> {
         preferred_audio_mode: AudioMode::Balanced,
     });
     ws_tx
-        .send(Message::Text(serde_json::to_string(&v2_hello)?.into()))
+        .send(Message::Text(serde_json::to_string(&v2_hello)?))
         .await?;
     ws_tx
-        .send(Message::Text(
-            serde_json::to_string(&ControlMessageV2::ClientInfo(ClientInfo {
+        .send(Message::Text(serde_json::to_string(
+            &ControlMessageV2::ClientInfo(ClientInfo {
                 client_name: "mock-android".to_string(),
                 platform: "mock".to_string(),
                 app_version: "local".to_string(),
                 udp_port,
-            }))?
-            .into(),
-        ))
+            }),
+        )?))
         .await?;
 
     let mut ping_seq = 0_u64;
@@ -163,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
                     ts_unix_ms: now_ms(),
                 };
                 if let Ok(msg) = serde_json::to_string(&ping) {
-                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                    let _ = ws_tx.send(Message::Text(msg)).await;
                 }
                 ping_seq = ping_seq.wrapping_add(1);
             }
@@ -177,38 +176,35 @@ async fn main() -> anyhow::Result<()> {
             mode_switch_step = mode_switch_step.saturating_add(1);
             if mode_switch_step == 3 {
                 let _ = ws_tx
-                    .send(Message::Text(
-                        serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
+                    .send(Message::Text(serde_json::to_string(
+                        &ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::LowLatency,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
-                        }))?
-                        .into(),
-                    ))
+                        }),
+                    )?))
                     .await;
                 println!("sent set_audio_mode=low_latency");
             } else if mode_switch_step == 6 {
                 let _ = ws_tx
-                    .send(Message::Text(
-                        serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
+                    .send(Message::Text(serde_json::to_string(
+                        &ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::HighQuality,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
-                        }))?
-                        .into(),
-                    ))
+                        }),
+                    )?))
                     .await;
                 println!("sent set_audio_mode=high_quality");
             } else if mode_switch_step == 9 {
                 let _ = ws_tx
-                    .send(Message::Text(
-                        serde_json::to_string(&ControlMessageV2::SetAudioMode(SetAudioMode {
+                    .send(Message::Text(serde_json::to_string(
+                        &ControlMessageV2::SetAudioMode(SetAudioMode {
                             mode: AudioMode::Balanced,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
-                        }))?
-                        .into(),
-                    ))
+                        }),
+                    )?))
                     .await;
                 println!("sent set_audio_mode=balanced");
             } else if mode_switch_step >= 12 {

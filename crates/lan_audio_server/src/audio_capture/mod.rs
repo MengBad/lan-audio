@@ -131,6 +131,7 @@ impl AudioFrame {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_meta(
         pts_ms: u64,
         format: AudioFormat,

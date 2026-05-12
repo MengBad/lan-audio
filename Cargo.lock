@@ -1830,6 +1830,7 @@ version = "1.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytemuck",
  "futures-util",
  "if-addrs",
  "lan_audio_protocol",
