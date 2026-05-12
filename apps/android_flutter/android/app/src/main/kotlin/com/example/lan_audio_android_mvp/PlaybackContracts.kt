@@ -11,6 +11,8 @@ object PlaybackActions {
     const val ACTION_SET_EQ = "lan_audio.action.SET_EQ"
     const val ACTION_SET_LOUDNESS = "lan_audio.action.SET_LOUDNESS"
     const val ACTION_DUMP_METRICS = "lan_audio.action.DUMP_METRICS"
+    const val ACTION_START_MIC = "lan_audio.action.START_MIC"
+    const val ACTION_STOP_MIC = "lan_audio.action.STOP_MIC"
 
     const val EXTRA_HOST = "host"
     const val EXTRA_WS_PORT = "ws_port"
@@ -28,6 +30,8 @@ object PlaybackActions {
     const val EXTRA_EQ_MID_DB = "eq_mid_db"
     const val EXTRA_EQ_HIGH_DB = "eq_high_db"
     const val EXTRA_LOUDNESS_ENABLED = "loudness_enabled"
+    const val EXTRA_MIC_HOST = "mic_host"
+    const val EXTRA_REVERSE_PORT = "reverse_port"
 }
 
 object PlaybackChannels {
@@ -277,6 +281,8 @@ data class PlaybackMetrics(
     val decodeErrors: Int = 0,
     val sinkWriteGapMsP95: Int = 0,
     val loudnessGainDb: Double = 0.0,
+    val jitterHistoryUs: List<Int> = emptyList(),
+    val jitterP50Us: Int = 0,
 )
 
 data class PlaybackSnapshot(
@@ -392,6 +398,8 @@ data class PlaybackSnapshot(
                 "decodeErrors" to metrics.decodeErrors,
                 "sinkWriteGapMsP95" to metrics.sinkWriteGapMsP95,
                 "loudnessGainDb" to metrics.loudnessGainDb,
+                "jitterHistoryUs" to metrics.jitterHistoryUs,
+                "jitterP50Us" to metrics.jitterP50Us,
             ),
             "recentLog" to recentLog,
             "error" to error,
@@ -421,6 +429,8 @@ data class StableServiceMetrics(
     val jitterP95Ms: Int? = null,
     val floorHoldCount: Int = 0,
     val loudnessGainDb: Double = 0.0,
+    val jitterHistoryUs: List<Int> = emptyList(),
+    val jitterP50Us: Int = 0,
 )
 
 data class StableServiceSnapshot(
@@ -494,6 +504,8 @@ data class StableServiceSnapshot(
                 "jitter_p95_ms" to metrics.jitterP95Ms,
                 "floor_hold_count" to metrics.floorHoldCount,
                 "loudness_gain_db" to metrics.loudnessGainDb,
+                "jitter_history_us" to metrics.jitterHistoryUs,
+                "jitter_p50_us" to metrics.jitterP50Us,
             ),
         )
     }
@@ -595,6 +607,8 @@ fun PlaybackSnapshot.toStableServiceSnapshot(): StableServiceSnapshot {
             jitterP95Ms = metrics.jitterP95Ms,
             floorHoldCount = metrics.floorHoldCount,
             loudnessGainDb = metrics.loudnessGainDb,
+            jitterHistoryUs = metrics.jitterHistoryUs,
+            jitterP50Us = metrics.jitterP50Us,
         ),
     )
 }

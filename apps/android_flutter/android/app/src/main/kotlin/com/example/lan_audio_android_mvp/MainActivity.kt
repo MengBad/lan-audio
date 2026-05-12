@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -39,6 +40,7 @@ class MainActivity : FlutterActivity() {
         const val KEY_FIRST_USE_HINT_CONSUMED = "first_use_hint_consumed"
         const val KEY_CONNECT_HISTORY_JSON = "connect_history_json"
         const val NSD_SERVICE_TYPE = "_lan-audio._tcp"
+        const val REQUEST_CODE_MIC_PERMISSION = 2701
         val ACTIVE_PLAYBACK_STATES = setOf(
             "handshaking",
             "negotiated",
@@ -52,6 +54,8 @@ class MainActivity : FlutterActivity() {
     private val platformChannelName = "lan_audio/platform"
     private val playbackServiceChannelName = PlaybackChannels.METHOD_PLAYBACK_SERVICE
     private val playbackEventChannelName = PlaybackChannels.EVENT_PLAYBACK_EVENTS
+    private val micChannelName = "lan_audio/mic"
+    private val jitterMetricsChannelName = "lan_audio/jitter_metrics"
     private val logTag = "lan_audio_activity"
     private var audioTrack: AudioTrack? = null
     private var sampleRate: Int = 48000
@@ -69,6 +73,13 @@ class MainActivity : FlutterActivity() {
     private var nsdManager: NsdManager? = null
     private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
     private val nsdServices = ConcurrentHashMap<String, Map<String, Any>>()
+    private var pendingMicPermissionResult: MethodChannel.Result? = null
+    @Volatile private var micCaptureService: MicCaptureService? = null
+    @Volatile private var micPeakDb: Float = -96f
+    @Volatile private var micRmsDb: Float = -96f
+    @Volatile private var controlChannelService: ControlChannelService? = null
+    @Volatile private var jitterEventSink: EventChannel.EventSink? = null
+    @Volatile private var jitterPollerActive = false
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,8 +125,23 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         logLifecycle("onDestroy no service stop issued from activity lifecycle")
         stopNsdDiscovery()
+        stopMicCaptureInternal()
         uiScope.coroutineContext.cancel()
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_MIC_PERMISSION) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pendingMicPermissionResult?.success(granted)
+            pendingMicPermissionResult = null
+        }
     }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -213,6 +239,24 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
+                        "getMicRationaleString" -> {
+                            val resId = resources.getIdentifier(
+                                "mic_permission_rationale", "string", packageName)
+                            val text = if (resId != 0) getString(resId)
+                                else "Microphone access is needed to stream your voice to the PC audio system. No audio is recorded or saved."
+                            result.success(text)
+                        }
+                        "requestMicPermission" -> {
+                            pendingMicPermissionResult = result
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                requestPermissions(
+                                    arrayOf(android.Manifest.permission.RECORD_AUDIO),
+                                    REQUEST_CODE_MIC_PERMISSION)
+                            } else {
+                                result.success(true)
+                                pendingMicPermissionResult = null
+                            }
+                        }
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -235,6 +279,26 @@ class MainActivity : FlutterActivity() {
 
                 override fun onCancel(arguments: Any?) {
                     PlaybackEventBus.detachSink()
+                }
+            })
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, micChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    handleMicCall(call, result)
+                } catch (e: Exception) {
+                    result.error("mic_error", e.message, null)
+                }
+            }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, jitterMetricsChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    jitterEventSink = events
+                    startJitterPoller()
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    jitterEventSink = null
+                    stopJitterPoller()
                 }
             })
     }
@@ -446,17 +510,20 @@ class MainActivity : FlutterActivity() {
                         transportMode = transportMode,
                     ),
                 )
+                startControlChannel(host)
                 result.success(null)
             }
 
             "stopPlayback" -> {
                 Log.i(logTag, "MethodChannel stopPlayback received")
+                stopControlChannel()
                 PlaybackForegroundService.stopPlayback(applicationContext)
                 result.success(null)
             }
 
             "disconnect" -> {
                 Log.i(logTag, "MethodChannel disconnect received")
+                stopControlChannel()
                 PlaybackForegroundService.stopPlayback(applicationContext)
                 result.success(null)
             }
@@ -525,6 +592,122 @@ class MainActivity : FlutterActivity() {
 
             else -> result.notImplemented()
         }
+    }
+
+    private fun handleMicCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "startMicCapture" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val host = args["host"] as? String ?: ""
+                val reversePort = (args["reversePort"] as? Number)?.toInt() ?: 7878
+                if (host.isBlank()) {
+                    result.error("invalid_args", "host is required", null)
+                    return
+                }
+                Log.i(logTag, "startMicCapture host=$host reversePort=$reversePort")
+                stopMicCaptureInternal()
+                val service = MicCaptureService(
+                    host = host,
+                    reversePort = reversePort,
+                    onLevel = { peakDb, rmsDb ->
+                        micPeakDb = peakDb
+                        micRmsDb = rmsDb
+                    },
+                    onError = { error ->
+                        Log.e(logTag, "MicCaptureService error: $error")
+                        stopMicCaptureInternal()
+                    }
+                )
+                micCaptureService = service
+                service.start()
+                PlaybackForegroundService.notifyMicStarted(applicationContext, host)
+                result.success(null)
+            }
+
+            "stopMicCapture" -> {
+                Log.i(logTag, "stopMicCapture")
+                stopMicCaptureInternal()
+                result.success(null)
+            }
+
+            "getMicLevel" -> {
+                result.success(
+                    mapOf(
+                        "peakDb" to micPeakDb,
+                        "rmsDb" to micRmsDb,
+                    )
+                )
+            }
+
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun startControlChannel(host: String) {
+        stopControlChannel()
+        val messenger = flutterEngine?.dartExecutor?.binaryMessenger ?: run {
+            Log.w(logTag, "Cannot start control channel: no Flutter engine")
+            return
+        }
+        val platformChannel = MethodChannel(messenger, platformChannelName)
+        val service = ControlChannelService(
+            context = applicationContext,
+            host = host,
+            controlPort = 7879,
+            onVolumeChanged = { volumePct ->
+                Log.i(logTag, "Volume changed from control channel: $volumePct%")
+                try {
+                    platformChannel.invokeMethod("volumeChanged", mapOf("volume_pct" to volumePct))
+                } catch (_: Exception) {}
+            },
+        )
+        controlChannelService = service
+        service.start()
+        Log.i(logTag, "Control channel started for $host:7879")
+    }
+
+    private fun stopControlChannel() {
+        controlChannelService?.stop()
+        controlChannelService = null
+    }
+
+    private fun startJitterPoller() {
+        if (jitterPollerActive) return
+        jitterPollerActive = true
+        uiScope.launch {
+            while (isActive && jitterPollerActive) {
+                val sink = jitterEventSink ?: break
+                try {
+                    val snapshot = PlaybackEventBus.snapshotMap()
+                    val metrics = snapshot["metrics"] as? Map<*, *>
+                    val jitterHistory = (metrics?.get("jitter_history_us") as? List<*>)?.mapNotNull {
+                        (it as? Number)?.toInt()
+                    } ?: emptyList()
+                    val jitterP50Us = (metrics?.get("jitter_p50_us") as? Number)?.toInt() ?: 0
+                    val jitterP95Us = (metrics?.get("jitter_p95_ms") as? Number)?.let { it.toInt() * 1000 } ?: 0
+                    val underrun = (metrics?.get("jitterUnderrun") as? Number)?.toInt() ?: 0
+
+                    val payload: Map<String, Any?> = mapOf(
+                        "jitterHistoryUs" to jitterHistory,
+                        "jitterP50Us" to jitterP50Us,
+                        "jitterP95Us" to jitterP95Us,
+                        "underrunCount" to underrun,
+                    )
+                    sink.success(payload)
+                } catch (_: Exception) {}
+                delay(100L)
+            }
+        }
+    }
+
+    private fun stopJitterPoller() {
+        jitterPollerActive = false
+    }
+
+    private fun stopMicCaptureInternal() {
+        micCaptureService?.stop()
+        micCaptureService = null
+        PlaybackForegroundService.notifyMicStopped(applicationContext)
     }
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {

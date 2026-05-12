@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_desktop"
-version = "1.7.2"
+version = "1.8.0"
 dependencies = [
  "anyhow",
  "lan_audio_protocol",
@@ -1806,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_domain"
-version = "1.7.2"
+version = "1.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_protocol"
-version = "1.7.2"
+version = "1.8.0"
 dependencies = [
  "lan_audio_domain",
  "serde",
@@ -1826,10 +1826,11 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_server"
-version = "1.7.2"
+version = "1.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytemuck",
  "futures-util",
  "if-addrs",
  "lan_audio_protocol",

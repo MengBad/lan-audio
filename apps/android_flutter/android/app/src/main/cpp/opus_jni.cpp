@@ -17,8 +17,18 @@ struct DecoderHandle {
     int channels = 0;
 };
 
+struct EncoderHandle {
+    OpusEncoder *encoder = nullptr;
+    int sample_rate = 0;
+    int channels = 0;
+};
+
 DecoderHandle *from_handle(jlong handle) {
     return reinterpret_cast<DecoderHandle *>(handle);
+}
+
+EncoderHandle *encoder_from_handle(jlong handle) {
+    return reinterpret_cast<EncoderHandle *>(handle);
 }
 
 jint throw_illegal_state(JNIEnv *env, const char *message) {
@@ -272,4 +282,89 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeGetRingBufferLevelFrames(
     JNIEnv *, jobject) {
     return g_sink != nullptr ? g_sink->getRingBufferLevelFrames() : 0;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_example_lan_1audio_1android_1mvp_MicCaptureService_nativeOpusEncoderCreate(
+    JNIEnv *env, jclass, jint sample_rate, jint channels, jint bitrate) {
+    if (sample_rate <= 0 || channels <= 0 || channels > 2) {
+        throw_illegal_state(env, "invalid opus encoder format");
+        return 0;
+    }
+
+    int error = OPUS_OK;
+    OpusEncoder *encoder = opus_encoder_create(sample_rate, channels, OPUS_APPLICATION_AUDIO, &error);
+    if (error != OPUS_OK || encoder == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "opus_encoder_create failed: %s", opus_strerror(error));
+        throw_illegal_state(env, opus_strerror(error));
+        return 0;
+    }
+
+    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(bitrate));
+    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(5));
+    opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+
+    auto *handle = new EncoderHandle();
+    handle->encoder = encoder;
+    handle->sample_rate = sample_rate;
+    handle->channels = channels;
+    return reinterpret_cast<jlong>(handle);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_lan_1audio_1android_1mvp_MicCaptureService_nativeOpusEncode(
+    JNIEnv *env,
+    jclass,
+    jlong handle_value,
+    jshortArray pcm,
+    jint samples,
+    jbyteArray output,
+    jint max_output) {
+    EncoderHandle *handle = encoder_from_handle(handle_value);
+    if (handle == nullptr || handle->encoder == nullptr) {
+        return throw_illegal_state(env, "opus encoder is closed");
+    }
+    if (pcm == nullptr || samples <= 0 || output == nullptr || max_output <= 0) {
+        return throw_illegal_state(env, "invalid opus encode input");
+    }
+
+    const jsize pcm_len = env->GetArrayLength(pcm);
+    if (pcm_len < samples) {
+        return throw_illegal_state(env, "opus pcm input buffer is too small");
+    }
+
+    std::vector<opus_int16> pcm_data(static_cast<size_t>(samples));
+    env->GetShortArrayRegion(pcm, 0, samples, pcm_data.data());
+    if (env->ExceptionCheck()) {
+        return -1;
+    }
+
+    std::vector<unsigned char> encoded(static_cast<size_t>(max_output));
+    const int encoded_len = opus_encode(
+        handle->encoder,
+        pcm_data.data(),
+        samples,
+        encoded.data(),
+        max_output);
+    if (encoded_len < 0) {
+        __android_log_print(ANDROID_LOG_WARN, kTag, "opus_encode failed: %s", opus_strerror(encoded_len));
+        return encoded_len;
+    }
+
+    env->SetByteArrayRegion(output, 0, encoded_len, reinterpret_cast<const jbyte *>(encoded.data()));
+    return encoded_len;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_lan_1audio_1android_1mvp_MicCaptureService_nativeOpusEncoderDestroy(
+    JNIEnv *, jclass, jlong handle_value) {
+    EncoderHandle *handle = encoder_from_handle(handle_value);
+    if (handle == nullptr) {
+        return;
+    }
+    if (handle->encoder != nullptr) {
+        opus_encoder_destroy(handle->encoder);
+        handle->encoder = nullptr;
+    }
+    delete handle;
 }

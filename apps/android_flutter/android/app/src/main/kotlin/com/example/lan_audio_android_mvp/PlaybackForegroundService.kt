@@ -37,6 +37,7 @@ class PlaybackForegroundService : MediaSessionService() {
     private var lastNotificationKey = ""
     private var bufferingSinceMs = 0L
     private var lastPowerGuideNotificationAtMs = 0L
+    @Volatile private var micActive: Boolean = false
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
         updateMediaSession(snapshot)
@@ -196,6 +197,17 @@ class PlaybackForegroundService : MediaSessionService() {
             PlaybackActions.ACTION_DUMP_METRICS -> {
                 val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "adb_request"
                 sessionController.dumpMetrics(reason)
+            }
+
+            PlaybackActions.ACTION_START_MIC -> {
+                val micHost = intent.getStringExtra(PlaybackActions.EXTRA_MIC_HOST).orEmpty()
+                if (micHost.isNotBlank()) {
+                    startMicNotification(micHost)
+                }
+            }
+
+            PlaybackActions.ACTION_STOP_MIC -> {
+                stopMicNotification()
             }
 
             else -> {
@@ -398,6 +410,13 @@ class PlaybackForegroundService : MediaSessionService() {
         )
         channel.description = "LAN Audio background playback"
         manager.createNotificationChannel(channel)
+        val micChannel = NotificationChannel(
+            MIC_NOTIFICATION_CHANNEL_ID,
+            "LAN Audio Mic Capture",
+            NotificationManager.IMPORTANCE_LOW,
+        )
+        micChannel.description = "LAN Audio mic streaming to PC"
+        manager.createNotificationChannel(micChannel)
     }
 
     private fun maybeNotifyPowerSavingRestriction(snapshot: PlaybackSnapshot) {
@@ -443,6 +462,40 @@ class PlaybackForegroundService : MediaSessionService() {
         manager.notify(POWER_GUIDE_NOTIFICATION_ID, notification)
         Log.w(logTag, "power saving guidance notification shown after buffering timeout")
     }
+
+    fun startMicNotification(host: String) {
+        if (micActive) return
+        micActive = true
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val launchPending = PendingIntent.getActivity(
+            this,
+            MIC_NOTIFICATION_ID,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, MIC_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("LAN Audio Mic")
+            .setContentText("Streaming to PC")
+            .setSubText(host)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(launchPending)
+            .build()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(MIC_NOTIFICATION_ID, notification)
+        Log.i(logTag, "mic notification started host=$host")
+    }
+
+    fun stopMicNotification() {
+        if (!micActive) return
+        micActive = false
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(MIC_NOTIFICATION_ID)
+        Log.i(logTag, "mic notification stopped")
+    }
+
+    fun isMicActive(): Boolean = micActive
 
     private fun acquirePlaybackLocks() {
         if (wakeLock?.isHeld != true) {
@@ -620,6 +673,8 @@ class PlaybackForegroundService : MediaSessionService() {
         private const val NOTIFICATION_ID = 2591
         private const val POWER_GUIDE_NOTIFICATION_ID = 2593
         private const val POWER_GUIDE_REQUEST_CODE = 2594
+        private const val MIC_NOTIFICATION_CHANNEL_ID = "lan_audio_mic_capture"
+        private const val MIC_NOTIFICATION_ID = 2595
         private const val NOTIFICATION_UPDATE_MIN_INTERVAL_MS = 1000L
         private const val POWER_GUIDE_BUFFERING_TIMEOUT_MS = 10_000L
         private const val POWER_GUIDE_NOTIFICATION_COOLDOWN_MS = 10 * 60 * 1000L
@@ -716,6 +771,19 @@ class PlaybackForegroundService : MediaSessionService() {
             val intent = Intent(context, PlaybackForegroundService::class.java)
                 .setAction(PlaybackActions.ACTION_DUMP_METRICS)
                 .putExtra(PlaybackActions.EXTRA_REASON, reason)
+            context.startService(intent)
+        }
+
+        fun notifyMicStarted(context: Context, host: String) {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_START_MIC)
+                .putExtra(PlaybackActions.EXTRA_MIC_HOST, host)
+            context.startService(intent)
+        }
+
+        fun notifyMicStopped(context: Context) {
+            val intent = Intent(context, PlaybackForegroundService::class.java)
+                .setAction(PlaybackActions.ACTION_STOP_MIC)
             context.startService(intent)
         }
     }

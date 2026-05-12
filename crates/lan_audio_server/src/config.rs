@@ -150,6 +150,7 @@ pub struct ServerConfig {
     pub allow_loopback_v2_header_gray: bool,
     pub transport_mode: TransportMode,
     pub force_rollback: bool,
+    pub reverse_channel_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -179,6 +180,7 @@ impl Default for ServerConfig {
             allow_loopback_v2_header_gray: false,
             transport_mode: TransportMode::WiFi,
             force_rollback: false,
+            reverse_channel_enabled: false,
         }
     }
 }
@@ -290,6 +292,12 @@ impl ServerConfig {
                 }
                 "--force-rollback" => {
                     self.force_rollback = true;
+                }
+                "--reverse-channel" => {
+                    self.reverse_channel_enabled = true;
+                }
+                "--no-reverse-channel" => {
+                    self.reverse_channel_enabled = false;
                 }
                 _ => {}
             }

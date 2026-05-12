@@ -78,6 +78,11 @@ class PlaybackSessionRuntime(
     private val recentArrivalIntervalsMs = ArrayDeque<Int>()
     private var jitterP95Ms: Int? = null
     private var adaptiveStartBufferMs: Int? = null
+    private val jitterHistoryUs = IntArray(120)
+    private var jitterHistoryIdx = 0
+    private var lastPacketArrivalUs = 0L
+    private var expectedArrivalUs = 0L
+    private var jitterP50Us = 0
     private var adaptiveStableSinceMs: Long = 0
     private var lastDecodeSummaryAtMs: Long = 0
     private var lastRxSeqRaw: Int? = null
@@ -544,6 +549,24 @@ class PlaybackSessionRuntime(
         rxWindowFrames += 1
         val currentSeq = packet.sequence
         rxLastSeqWindow = currentSeq
+
+        // Jitter timing: deviation from expected inter-packet arrival
+        val nowUs = System.nanoTime() / 1000L
+        if (expectedArrivalUs == 0L) {
+            expectedArrivalUs = nowUs
+        } else {
+            val frameDurationUs = options.frameDurationMs * 1000L
+            expectedArrivalUs += frameDurationUs
+            val jitterUs = Math.abs(nowUs - expectedArrivalUs).toInt()
+            jitterHistoryUs[jitterHistoryIdx % 120] = jitterUs
+            jitterHistoryIdx++
+            // Re-align expectation if we drifted too far
+            if (jitterUs > frameDurationUs * 8) {
+                expectedArrivalUs = nowUs
+            }
+        }
+        lastPacketArrivalUs = nowUs
+
         val previousSeq = lastRxSeqRaw
         if (previousSeq != null) {
             val expectedRawSeq = ((previousSeq.toLong() + 1L) and 0xFFFFFFFFL).toInt()
@@ -625,6 +648,8 @@ class PlaybackSessionRuntime(
                     cfgChangedCount = cfgChangedCount,
                     discontinuityCount = discontinuityCount,
                     jitterP95Ms = jitterP95Ms,
+                    jitterHistoryUs = computeJitterHistory(),
+                    jitterP50Us = computeJitterP50(),
                     floorHoldCount = stats.floorHoldCount,
                     reconnectCount = reconnectTotalCount,
                     decodeErrors = decodeErrorTotal,
@@ -640,6 +665,43 @@ class PlaybackSessionRuntime(
         maybeLogDecodeAndRxSummary(SystemClock.elapsedRealtime())
         maybeLogMetrics()
     }
+
+    private fun computeJitterHistory(): List<Int> {
+        val count = jitterHistoryIdx.coerceAtMost(120)
+        if (count == 0) return emptyList()
+        val out = ArrayList<Int>(count)
+        val start = if (jitterHistoryIdx > 120) jitterHistoryIdx % 120 else 0
+        for (i in 0 until count) {
+            out.add(jitterHistoryUs[(start + i) % 120])
+        }
+        return out
+    }
+
+    private fun computeJitterP50(): Int {
+        val count = jitterHistoryIdx.coerceAtMost(120)
+        if (count == 0) return 0
+        val sorted = IntArray(count) { i ->
+            val idx = if (jitterHistoryIdx > 120) (jitterHistoryIdx - count + i) % 120 else i
+            jitterHistoryUs[idx]
+        }
+        sorted.sort()
+        return sorted[count / 2]
+    }
+
+    fun computeJitterP95Us(): Int {
+        val count = jitterHistoryIdx.coerceAtMost(120)
+        if (count < 2) return if (count == 1) jitterHistoryUs[0] else 0
+        val sorted = IntArray(count) { i ->
+            val idx = if (jitterHistoryIdx > 120) (jitterHistoryIdx - count + i) % 120 else i
+            jitterHistoryUs[idx]
+        }
+        sorted.sort()
+        val p95Idx = (count * 0.95).toInt().coerceAtMost(count - 1)
+        return sorted[p95Idx]
+    }
+
+    fun getJitterHistorySnapshot(): List<Int> = computeJitterHistory()
+    fun getJitterP50Us(): Int = computeJitterP50()
 
     private fun decodePacketForPlayback(packet: LasPacket): DecodeResult {
         return when (packet.codec) {

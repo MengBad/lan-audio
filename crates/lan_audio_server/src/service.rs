@@ -11,6 +11,7 @@ use crate::discovery::{
     run_discovery_broadcast, run_mdns_registration, DiscoveryConfig, MdnsServiceConfig,
 };
 use crate::metrics::{Metrics, MetricsSnapshot};
+use crate::reverse_channel::{ReverseChannelServer, ReverseChannelState};
 use crate::session::{ClientRegistry, SessionServer};
 use crate::transport::BroadcastTransport;
 use crate::usb_transport::{setup_adb_reverse, AdbReverseManager};
@@ -22,6 +23,7 @@ pub struct LanAudioService {
     adb_reverse_manager: AdbReverseManager,
     active_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
     data_plane_router: Arc<std::sync::Mutex<DataPlaneRouter>>,
+    reverse_channel: std::sync::Mutex<Option<ReverseChannelServer>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +58,12 @@ impl LanAudioService {
             setup_adb_reverse(serial, cfg.udp_bind.port(), cfg.udp_bind.port())?;
             adb_reverse_manager.track_reverse(serial.to_string(), cfg.udp_bind.port());
         }
+
+        // Always start the reverse channel server (Android mic + control)
+        let mut reverse_channel = ReverseChannelServer::new();
+        reverse_channel.start().await?;
+        info!("reverse channel server started");
+
         Ok(Self {
             cfg: Arc::clone(&cfg),
             metrics,
@@ -63,6 +71,7 @@ impl LanAudioService {
             adb_reverse_manager,
             active_audio_mode,
             data_plane_router: Arc::new(std::sync::Mutex::new(router)),
+            reverse_channel: std::sync::Mutex::new(Some(reverse_channel)),
         })
     }
 
@@ -98,6 +107,30 @@ impl LanAudioService {
             rollback_available: router.rollback_available(),
             is_on_main_path: router.is_on_main_path(),
         }
+    }
+
+    /// Public snapshot of the reverse channel state (mic levels, Android volume, etc.)
+    pub fn reverse_channel_state(&self) -> ReverseChannelState {
+        self.reverse_channel
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|rc| rc.state.lock().unwrap().clone())
+            .unwrap_or_default()
+    }
+
+    /// Set Android volume. Stores the value and queues a command to be
+    /// delivered to the Android control client on its next connection.
+    pub fn send_android_volume(&self, volume_pct: u8) -> anyhow::Result<()> {
+        let reverse_channel = self.reverse_channel.lock().unwrap();
+        if let Some(rc) = reverse_channel.as_ref() {
+            if let Ok(mut state) = rc.state.lock() {
+                state.android_volume_pct = volume_pct;
+                state.pending_volume_command = Some(volume_pct);
+                info!("Queued volume command for Android: {}%", volume_pct);
+            }
+        }
+        Ok(())
     }
 
     pub async fn run_until_shutdown(&self) -> anyhow::Result<()> {
@@ -215,6 +248,10 @@ impl LanAudioService {
     }
 
     pub fn stop(&self) {
+        if let Some(mut rc) = self.reverse_channel.lock().unwrap().take() {
+            rc.stop();
+            info!("reverse channel server stopped");
+        }
         let _ = &self.adb_reverse_manager;
         let _ = self.shutdown_tx.send(());
     }

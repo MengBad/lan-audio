@@ -4,6 +4,26 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.8.0] - 2026-05-12
+
+### Added
+
+- Android mic → PC reverse audio channel: Opus-encoded TCP stream on port 7878, with named-pipe output on Windows and per-frame level metering.
+- Real-time jitter visualization sparkline in Audio Console Dark, showing per-segment coloring and p50/p95 readout.
+- PC-side volume control of Android via TCP control channel on port 7879, with desktop tray volume presets and Android volume pill indicator.
+- Reverse channel control JSON protocol (ports 7878/7879) with mic gain, volume, and device-name messages.
+- `ReverseChannelServer` in Rust server with concurrent audio and control listeners.
+- `ControlChannelService` on Android for receiving and applying remote volume commands, with auto-reconnect.
+- `JitterGraphWidget` (Flutter CustomPainter) with three-zone coloring, dashed reference lines, and empty-buffer safety.
+
+### Changed
+
+- Audio Console Dark UI restructured: Hero orb card for primary status, technical metrics moved into expandable collapsible section, Chinese labels for metrics fields.
+- Playback card now shows only mode selector, status, and underrun count; conditional audio log line.
+- `PlaybackSessionRuntime` collects per-packet jitter timing and exposes a 120-sample circular buffer with p50/p95 computation.
+- `PlaybackServiceSnapshot` (Dart) exposes jitter helpers and underrun count from metrics.
+- `DesktopSnapshot` (Tauri) surfaces reverse channel mic state and Android volume.
+
 ## [1.7.2] - 2026-05-11
 
 ### Fixed

@@ -277,17 +277,16 @@ impl SessionServer {
                     message: "too_many_clients".to_string(),
                 });
                 ws_tx
-                    .send(Message::Text(serde_json::to_string(&hello_ack)?.into()))
+                    .send(Message::Text(serde_json::to_string(&hello_ack)?))
                     .await?;
             } else {
                 ws_tx
-                    .send(Message::Text(
-                        serde_json::to_string(&ServerControlMessage::ServerError {
+                    .send(Message::Text(serde_json::to_string(
+                        &ServerControlMessage::ServerError {
                             code: "too_many_clients".to_string(),
                             message: "too many clients".to_string(),
-                        })?
-                        .into(),
-                    ))
+                        },
+                    )?))
                     .await?;
             }
             return Ok(());
@@ -296,7 +295,7 @@ impl SessionServer {
         let (control_tx, mut control_rx) = mpsc::unbounded_channel::<String>();
         let writer_task = tokio::spawn(async move {
             while let Some(text) = control_rx.recv().await {
-                if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                if ws_tx.send(Message::Text(text)).await.is_err() {
                     break;
                 }
             }
@@ -527,7 +526,7 @@ impl ClientRegistry {
             if guard.clients.len() >= MAX_CLIENTS {
                 return Err(anyhow!("too_many_clients"));
             }
-            if guard.clients.len() >= 1 && !check_multi_client_allowed_with_guard(&guard) {
+            if !guard.clients.is_empty() && !check_multi_client_allowed_with_guard(&guard) {
                 return Err(anyhow!("multi_client_upgrade_required"));
             }
 
@@ -853,6 +852,7 @@ fn legacy_client_capabilities() -> ProtocolCapabilities {
         supports_stable_audio_track: false,
         supports_usb_tethering: false,
         supports_usb_direct_future: false,
+        supports_reverse_channel: false,
     }
 }
 
@@ -912,6 +912,7 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_stable_audio_track: true,
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
+        supports_reverse_channel: false,
     }
 }
 

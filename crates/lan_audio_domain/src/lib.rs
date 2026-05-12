@@ -1,25 +1,28 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioMode {
     LowLatency,
+    #[default]
     Balanced,
     HighQuality,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioCodecPreference {
+    #[default]
     Pcm16,
     #[serde(alias = "opus_experimental")]
     Opus,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportType {
+    #[default]
     Wifi,
     Usb,
 }
@@ -198,7 +201,7 @@ pub enum FailureCode {
     ReleaseGateBlocked,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ServiceMetricsSnapshot {
     pub buffered_ms: u32,
     pub underrun: u64,
@@ -208,21 +211,6 @@ pub struct ServiceMetricsSnapshot {
     pub reconnect_count: u64,
     pub decode_errors: u64,
     pub sink_write_gap_ms_p95: u32,
-}
-
-impl Default for ServiceMetricsSnapshot {
-    fn default() -> Self {
-        Self {
-            buffered_ms: 0,
-            underrun: 0,
-            late_packets: 0,
-            dropped_packets: 0,
-            rtt_ms: 0,
-            reconnect_count: 0,
-            decode_errors: 0,
-            sink_write_gap_ms_p95: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -491,24 +479,6 @@ impl TransitionError {
 
     fn failure_target(from: ConnectionState, to: ConnectionState) -> Self {
         Self::InvalidFailureTarget { from, to }
-    }
-}
-
-impl Default for AudioMode {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
-
-impl Default for AudioCodecPreference {
-    fn default() -> Self {
-        Self::Pcm16
-    }
-}
-
-impl Default for TransportType {
-    fn default() -> Self {
-        Self::Wifi
     }
 }
 

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
+bytemuck = "1"
 futures-util.workspace = true
 if-addrs = "0.13"
 lan_audio_protocol = { path = "../lan_audio_protocol" }
