@@ -3,6 +3,7 @@ pub mod config;
 pub mod data_plane;
 pub mod discovery;
 pub mod metrics;
+pub mod reverse_channel;
 pub mod service;
 pub mod session;
 pub mod transport;
