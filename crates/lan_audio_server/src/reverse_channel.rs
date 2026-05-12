@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Public state snapshot for UI readout
 #[derive(Debug, Clone, Default)]
@@ -281,12 +281,131 @@ async fn handle_audio_client(
 }
 
 async fn run_control_listener(
-    _listener: TcpListener,
-    _state: Arc<Mutex<ReverseChannelState>>,
-    mut _shutdown: broadcast::Receiver<()>,
+    listener: TcpListener,
+    state: Arc<Mutex<ReverseChannelState>>,
+    mut shutdown: broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    // Will be implemented in Task 1.3
-    info!("Reverse control listener started (stub — full implementation in next task)");
-    let _ = _shutdown.recv().await;
+    loop {
+        tokio::select! {
+            _ = shutdown.recv() => {
+                info!("Reverse control listener shutting down");
+                break;
+            }
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, peer)) => {
+                        info!("Reverse control client connected from {}", peer);
+                        let state_clone = Arc::clone(&state);
+                        let mut shutdown_clone = shutdown.resubscribe();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_control_stream(stream, state_clone, &mut shutdown_clone).await {
+                                warn!("Reverse control stream ended ({}): {}", peer, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("Reverse control accept error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_control_stream(
+    stream: TcpStream,
+    state: Arc<Mutex<ReverseChannelState>>,
+    shutdown: &mut broadcast::Receiver<()>,
+) -> anyhow::Result<()> {
+    let buf_reader = BufReader::new(stream);
+    let mut lines = buf_reader.lines();
+
+    loop {
+        tokio::select! {
+            _ = shutdown.recv() => {
+                break;
+            }
+            line_result = lines.next_line() => {
+                match line_result {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<serde_json::Value>(trimmed) {
+                            Ok(msg) => {
+                                let msg_type = msg["type"].as_str().unwrap_or("");
+                                match msg_type {
+                                    "mic_gain" => {
+                                        if let Some(gain) = msg["value"].as_f64() {
+                                            debug!("Received mic_gain: {}", gain);
+                                        }
+                                    }
+                                    "volume" => {
+                                        if let Some(vol) = msg["value"].as_f64() {
+                                            let pct = (vol.clamp(0.0, 1.0) * 100.0).round() as u8;
+                                            debug!("Remote Android volume changed: {}%", pct);
+                                            if let Ok(mut s) = state.lock() {
+                                                s.android_volume_pct = pct;
+                                            }
+                                        }
+                                    }
+                                    "mic_device" => {
+                                        if let Some(name) = msg["name"].as_str() {
+                                            debug!("Android mic device: {}", name);
+                                            if let Ok(mut s) = state.lock() {
+                                                s.mic_device_name = name.to_string();
+                                            }
+                                        }
+                                    }
+                                    "mic_level" => {
+                                        let peak = msg["peak_db"].as_f64().map(|v| v as f32).unwrap_or(-96.0);
+                                        let rms = msg["rms_db"].as_f64().map(|v| v as f32).unwrap_or(-96.0);
+                                        if let Ok(mut s) = state.lock() {
+                                            s.mic_peak_db = peak;
+                                            s.mic_rms_db = rms;
+                                        }
+                                    }
+                                    "mic_active" => {
+                                        let active = msg["active"].as_bool().unwrap_or(false);
+                                        if let Ok(mut s) = state.lock() {
+                                            s.mic_active = active;
+                                        }
+                                    }
+                                    "volume_changed" => {
+                                        if let Some(pct) = msg["volume_pct"].as_u64() {
+                                            debug!("Android reported volume change: {}%", pct);
+                                            if let Ok(mut s) = state.lock() {
+                                                s.android_volume_pct = pct as u8;
+                                            }
+                                        }
+                                    }
+                                    "ping" => {
+                                        // Keep-alive, no response needed
+                                    }
+                                    other => {
+                                        debug!("Unknown control message type: {}", other);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Invalid control JSON: {} — raw: {}", trimmed, e);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("Control stream EOF");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("Control read error: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
