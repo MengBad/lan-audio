@@ -1,11 +1,19 @@
 package com.example.lan_audio_android_mvp
 
+import android.Manifest
+import android.content.ComponentName
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.OutputStream
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MicCaptureService(
@@ -33,11 +41,35 @@ class MicCaptureService(
     private var socket: Socket? = null
     private var opusEncoder: Long = 0
     private var outputStream: OutputStream? = null
+    @Volatile private var playbackService: PlaybackForegroundService? = null
+    private var playbackServiceConnection: ServiceConnection? = null
 
     fun start() {
+        if (running.get()) return
+        val context = resolveApplicationContext()
+        if (context == null) {
+            onError("mic_capture_no_application_context")
+            return
+        }
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            onError("record_audio_permission_not_granted")
+            return
+        }
         if (running.getAndSet(true)) return
         recordThread = Thread {
             try {
+                // ② start/bind PlaybackForegroundService
+                val connected = bindPlaybackServiceAndWait(context)
+                if (!connected) {
+                    onError("playback_service_bind_failed")
+                    return@Thread
+                }
+                // ③ upgrade foreground service type to include microphone
+                playbackService?.upgradeForegroundTypeToMicrophone()
+                // ④ start AudioRecord capture only after the foreground upgrade
                 captureLoop()
             } catch (e: Exception) {
                 Log.e(TAG, "Mic capture failed", e)
@@ -65,9 +97,63 @@ class MicCaptureService(
             nativeOpusEncoderDestroy(opusEncoder)
             opusEncoder = 0
         }
+        try {
+            playbackService?.downgradeForegroundTypeToMediaPlayback()
+        } catch (_: Throwable) {
+        }
+        unbindPlaybackService()
     }
 
     val isRunning: Boolean get() = running.get()
+
+    private fun bindPlaybackServiceAndWait(context: android.content.Context): Boolean {
+        val latch = CountDownLatch(1)
+        val connection =
+            object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                    val binder = service as? PlaybackForegroundService.InternalBinder
+                    playbackService = binder?.getService()
+                    latch.countDown()
+                }
+
+                override fun onServiceDisconnected(name: ComponentName?) {
+                    playbackService = null
+                }
+            }
+        playbackServiceConnection = connection
+        return try {
+            val ok = PlaybackForegroundService.bindInternal(context, connection)
+            if (!ok) {
+                false
+            } else {
+                latch.await(2, TimeUnit.SECONDS) && playbackService != null
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun unbindPlaybackService() {
+        val context = resolveApplicationContext() ?: return
+        val connection = playbackServiceConnection ?: return
+        try {
+            context.unbindService(connection)
+        } catch (_: Throwable) {
+        } finally {
+            playbackServiceConnection = null
+            playbackService = null
+        }
+    }
+
+    private fun resolveApplicationContext(): android.content.Context? {
+        return try {
+            val clazz = Class.forName("android.app.ActivityThread")
+            val method = clazz.getMethod("currentApplication")
+            method.invoke(null) as? android.app.Application
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     private fun captureLoop() {
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNELS, ENCODING)
