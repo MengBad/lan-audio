@@ -284,6 +284,19 @@ Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeGetRing
     return g_sink != nullptr ? g_sink->getRingBufferLevelFrames() : 0;
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeSetEqSettings(
+    JNIEnv *, jobject, jboolean enabled, jint low_db, jint mid_db, jint high_db) {
+    if (g_sink == nullptr) {
+        return;
+    }
+    g_sink->setEqSettings(
+        enabled == JNI_TRUE,
+        static_cast<int>(low_db),
+        static_cast<int>(mid_db),
+        static_cast<int>(high_db));
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_example_lan_1audio_1android_1mvp_MicCaptureService_nativeOpusEncoderCreate(
     JNIEnv *env, jclass, jint sample_rate, jint channels, jint bitrate) {

@@ -4,6 +4,24 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.9.3] - 2026-05-14
+
+### Fixed
+
+- **EQ now actually works on Oboe playback path.** Previously the 3-band equalizer in the Flutter UI (`Low 60Hz / Mid 1kHz / High 10kHz`) was silently ignored on Android 8.1+ devices because `OboeAudioTrackController` had no `setEqSettings` override and inherited the default no-op from `PlaybackAudioSink`. Since Oboe is the default backend on `Build.VERSION.SDK_INT >= O_MR1` (~99% of active devices), the EQ was effectively dead code in production.
+- The `AudioTrackController` (legacy fallback) was unaffected because it overrides `setEqSettings` to drive the platform `android.media.audiofx.Equalizer`.
+
+### Added
+
+- Native 3-band biquad peaking EQ in `oboe_sink.cpp`. RBJ Audio EQ Cookbook formulas, hard-coded to 60 Hz / 1 kHz / 10 kHz at Q=0.7 to match the existing UI labels. PCM samples are processed in-place in chunks of up to 1024 frames before being written into the ring buffer.
+- New JNI binding `nativeSetEqSettings(enabled, lowDb, midDb, highDb)` exposed to Kotlin.
+- `OboeAudioTrackController.setEqSettings` override that calls into the native sink when the stream is open. The Kotlin sink is recreated on every `init`, and the runtime calls `setEqSettings` after `init`, so settings are correctly re-applied across mode switches and reconnects.
+
+### Implementation Notes
+
+- Filter coefficients are read-only on the producer thread. The method-channel thread writes new gains under `eq_state_mutex_` and flips `eq_pending_dirty_`; the producer thread drains the pending update at the start of every `pushPcm` call and rebuilds coefficients in-place. Delay state (z1/z2/y1/y2) stays attached to the producer's filter bank across calls so a small gain change does not introduce a discontinuity.
+- When EQ is disabled, the cascade is bypassed entirely (no per-sample math, no working-buffer copy). Toggling on/off is therefore zero-cost.
+
 ## [1.9.2] - 2026-05-14
 
 ### Fixed
