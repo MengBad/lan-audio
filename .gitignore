@@ -1,7 +1,6 @@
 ﻿# Rust
 /target
 **/*.rs.bk
-Cargo.lock
 
 # Flutter / Dart
 .dart_tool/
@@ -13,36 +12,46 @@ build/
 node_modules/
 dist/
 
-# IDE
+# IDE & AI tools
 .vscode/
 .idea/
 .claude/
+.kiro/
+.impeccable.md
+AGENTS.md
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Debug audio dumps
+# Debug audio dumps & temp files
 debug_captures/
 logs/
-tmp_*.log
-_tmp_usb_server*.log
 tmp/
-tmp_retest/
-tmp_test/
-tmp_lan_audio_home.png
+tmp_*/
+tmp_*.log
+tmp_*.png
+_tmp_*.log
+_orig.html
+*.hprof
+ui_dump*.xml
+ui_home*.xml
+ui_full.xml
+ui_fix_*.png
+v18_ui_check.png
+
+# Internal planning & AI prompts
+docs/todo.md
+docs/roadmap.md
+docs/roadmap-v1.4.md
+docs/codex-*.md
+docs/code_review_*.md
+docs/android_visual_regression.md
 
 # Generated validation artifacts
-artifacts/baseline/
-artifacts/contracts/
-artifacts/latency/
-artifacts/phase3/
-artifacts/reports/
-artifacts/ui_baseline/
-artifacts/validate/
+artifacts/
 
-# Android crash dumps
-*.hprof
+# Android
 apps/android_flutter/android/.gradle/
 apps/android_flutter/android/.kotlin/
 apps/android_flutter/android/local.properties
@@ -51,5 +60,15 @@ apps/android_flutter/android/local.properties
 *.jks
 *.b64.txt
 
-# Local Codex prompt scratch files
-docs/codex-v1.7-prompt.md
+# Unrelated scripts
+chatgpt-team-subscribe-helper.user.js
+
+# Internal CI scripts (kept locally)
+scripts/emit_phase01_artifacts.ps1
+scripts/assert_release_gate.ps1
+scripts/capture_android_ui_baseline.ps1
+scripts/check_android_visual_regression.ps1
+scripts/android_visual_diff.py
+scripts/export_latency_probe.ps1
+scripts/rewrite_validate.ps1
+scripts/generate_screenshots.ps1
