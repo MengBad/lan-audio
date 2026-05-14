@@ -90,4 +90,46 @@ void main() {
     // So buffer[0] should hold the value from insert #120 = 120*100 = 12000
     expect(buffer[0], 12000);
   });
+
+  testWidgets('JitterGraphWidget handles all-zero input', (tester) async {
+    final jitter = List.filled(120, 0);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: JitterGraphWidget(
+            jitterUs: jitter,
+            p50Us: 0,
+            p95Us: 0,
+            underrunCount: 0,
+          ),
+        ),
+      ),
+    );
+
+    await tester.pump();
+    expect(find.byType(JitterGraphWidget), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('JitterGraphWidget handles all-maximum input', (tester) async {
+    final jitter = List.filled(120, 120000);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: JitterGraphWidget(
+            jitterUs: jitter,
+            p50Us: 120000,
+            p95Us: 120000,
+            underrunCount: 50,
+          ),
+        ),
+      ),
+    );
+
+    await tester.pump();
+    expect(find.byType(JitterGraphWidget), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

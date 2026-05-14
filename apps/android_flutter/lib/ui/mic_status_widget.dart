@@ -88,7 +88,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
       case MicStatus.error:
         return const Color(0xFFFF4444);
       case MicStatus.off:
-        return Colors.grey;
+        return const Color(0xFF6B7A99);
     }
   }
 
@@ -123,7 +123,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
             ),
             const SizedBox(width: 6),
             Text(
-              'Mic',
+              '麦克风',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
@@ -181,7 +181,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
           ),
           const SizedBox(height: 2),
           Text(
-            'Streaming to PC',
+            '正在推送到 PC',
             style: TextStyle(
               color: const Color(0xFF00D4AA).withValues(alpha: 0.8),
               fontSize: 10,
@@ -192,7 +192,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
           const Padding(
             padding: EdgeInsets.only(top: 2),
             child: Text(
-              'Connecting...',
+              '连接中...',
               style: TextStyle(color: Color(0xFFFFB300), fontSize: 10),
             ),
           ),

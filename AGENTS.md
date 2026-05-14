@@ -183,3 +183,15 @@ Release 说明必须包含：
 7. 是否达到发布条件
 8. 若已发布：版本号、Actions、Release 结果
 9. 下一步唯一建议
+
+## v1.8 新增检查项
+
+- [ ] main.dart import 并调用 HeroStatusWidget（不能只有文件存在）
+- [ ] main.dart import 并调用 ServerCardWidget（同上）
+- [ ] PlaybackForegroundService.onCreate() 不含 FOREGROUND_SERVICE_TYPE_MICROPHONE
+- [ ] MicCaptureService.start() 权限检查在 AudioRecord 采集之前
+- [ ] Kotlin TCP 写帧与 Rust 读帧字节序一致（均为小端）
+- [ ] JitterGraphWidget EventChannel 数据链路端到端联通
+- [ ] ReverseChannelServer::start/stop 已 wire 进服务生命周期
+- [ ] VERSION 文件为纯 ASCII 无 BOM
+- [ ] app_entry_smoke_test 覆盖所有核心 widget 的实际挂载

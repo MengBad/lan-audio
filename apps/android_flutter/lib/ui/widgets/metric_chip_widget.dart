@@ -33,13 +33,10 @@ class MetricChipWidget extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AnimatedSwitcher(
-            duration: AudioConsoleMotion.metricFade,
-            child: Text(
-              value,
-              key: ValueKey<String>('${_labelKey()}_$value'),
-              style: AudioConsoleType.monoValue(color: valueColor),
-            ),
+          Text(
+            value,
+            key: ValueKey<String>('${_labelKey()}_$value'),
+            style: AudioConsoleType.monoValue(color: valueColor),
           ),
           const SizedBox(height: 2),
           Text(
