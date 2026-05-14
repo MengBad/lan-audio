@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../main.dart';
 import '../../services/mic_capture_service.dart';
 import '../audio_console_theme.dart';
 import '../mic_status_widget.dart';
@@ -304,9 +305,10 @@ class MorePage extends StatelessWidget {
             ),
           )
         else
-          SizedBox(
-            height: 170,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 200),
             child: ListView.builder(
+              shrinkWrap: true,
               itemCount: servers.length,
               itemBuilder: (context, index) {
                 final s = servers[index];
@@ -501,9 +503,9 @@ class MorePage extends StatelessWidget {
         ListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(tr('版本', 'Version')),
-          trailing: const Text(
-            '1.8.2',
-            style: TextStyle(color: AudioConsoleColors.text2),
+          trailing: Text(
+            kAppVersion,
+            style: const TextStyle(color: AudioConsoleColors.text2),
           ),
         ),
         const SizedBox(height: 20),
