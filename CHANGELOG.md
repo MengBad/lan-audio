@@ -4,6 +4,26 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.9.0] - 2026-05-14
+
+### Added
+
+- Phase 3 client watermark feedback channel: Android client now reports buffer level, ring-buffer depth, silence-fill / underrun deltas, and jitter p95 once per second on the existing WebSocket control channel as `client_watermark`.
+- Phase 4 server-side adaptive runtime: CPU + queue-pressure watchdog ticking at 500 ms decides a Green / Yellow / Red tier and reconfigures live `AudioFrameEncoder`s; Red tier forces PCM16 fallback for predictable CPU cost.
+- Phase 4 metrics: `MetricsSnapshot` now exposes `adaptive_tier`, `adaptive_predicted_cpu_percent`, and `adaptive_queue_ratio`.
+- Server CLI flag `--no-adaptive-runtime` (and `--adaptive-runtime`) to disable / re-enable the watchdog as a rollback path.
+- Protocol crate: new `WatermarkReport` struct + `ClientControlMessage::ClientWatermark` variant; older servers safely ignore the unknown tag.
+
+### Changed
+
+- v1.8.7 already landed Phase 1 (Soft Limiter + Peak-Ahead Guard + 高增益迟滞) and Phase 2 (Android + desktop latency chart). v1.9.0 wires the previously-unwired Phase 3 / 4 modules into the live broadcast hot path.
+- Phase 5 MMCSS module (`thread_priority`) remains kept as a public API but is **not** registered from tokio tasks (registration is unreliable across worker migrations); a follow-up to migrate capture / encode / send to dedicated `std::thread` is tracked.
+
+### Rollback
+
+- Run the server with `--no-adaptive-runtime` to disable Phase 4 (encoder stays at default per-mode bitrate, Phase 3 watermark messages are still ignored gracefully).
+- The legacy `legacy_las1 + pcm16` path is preserved.
+
 ## [1.8.0] - 2026-05-12
 
 ### Added

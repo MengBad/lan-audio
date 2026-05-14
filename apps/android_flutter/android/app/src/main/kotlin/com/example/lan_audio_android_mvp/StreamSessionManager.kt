@@ -47,7 +47,24 @@ class StreamSessionManager(
         fun onClientCountUpdated(count: Int)
         fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int)
         fun onError(code: String, message: String)
+
+        /**
+         * Phase 3: provide the latest playback watermark so it can be sent
+         * up to the server's adaptive sync engine. Default returns null,
+         * which keeps the previous (no-feedback) behaviour for any caller
+         * that has not been migrated yet.
+         */
+        fun provideWatermark(): WatermarkSample? = null
     }
+
+    /** Snapshot of client buffer/jitter state used by Phase 3 reports. */
+    data class WatermarkSample(
+        val jitterBufMs: Int,
+        val ringBufMs: Int,
+        val silenceFillDelta: Int,
+        val underrunDelta: Int,
+        val jitterP95Us: Int,
+    )
 
     private val okHttpClient = OkHttpClient.Builder().build()
     private var webSocket: WebSocket? = null
@@ -433,6 +450,30 @@ class StreamSessionManager(
                     pingSentAt[seq] = System.currentTimeMillis()
                 }
                 webSocket?.send(ping.toString())
+
+                // Phase 3 watermark report — piggybacks on the same ping
+                // cadence to feed the server's Kalman+PID sync engine.
+                try {
+                    val sample = callback.provideWatermark()
+                    if (sample != null) {
+                        val watermark = JSONObject(
+                            mapOf(
+                                "type" to "client_watermark",
+                                "ts_unix_ms" to System.currentTimeMillis(),
+                                "jitter_buf_ms" to sample.jitterBufMs.coerceAtLeast(0),
+                                "ring_buf_ms" to sample.ringBufMs.coerceAtLeast(0),
+                                "silence_fill_delta" to sample.silenceFillDelta.coerceAtLeast(0),
+                                "underrun_delta" to sample.underrunDelta.coerceAtLeast(0),
+                                "jitter_p95_us" to sample.jitterP95Us.coerceAtLeast(0),
+                            ),
+                        )
+                        webSocket?.send(watermark.toString())
+                    }
+                } catch (t: Throwable) {
+                    // Watermark reporting is best-effort — never tear down
+                    // the session because the report failed.
+                    Log.w(logTag, "watermark report failed: ${t.message}")
+                }
             } catch (t: Throwable) {
                 Log.e(logTag, "ws ping failed: ${t.message}")
                 wsReady = false

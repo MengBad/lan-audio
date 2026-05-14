@@ -35,10 +35,20 @@ pub struct SessionServer {
     current_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
 }
 
+/// Phase 3 watermark slot. Cloneable across the WS handler (writer), the
+/// watchdog task (reader/drain), and the test mocks. Single-slot
+/// "last-writer-wins" semantics keep contention low.
+pub type WatermarkSlot = Arc<std::sync::Mutex<Option<lan_audio_protocol::WatermarkReport>>>;
+
 #[derive(Clone)]
 pub struct ClientRegistry {
     inner: Arc<Mutex<ClientRegistryInner>>,
     metrics: Arc<Metrics>,
+    /// Phase 3 watermark feed. The TCP control handler stores the latest
+    /// per-client observation here; the adaptive watchdog drains it on
+    /// every tick. Using a single-slot std Mutex (cheap, lock-free reads on
+    /// the watchdog thread are not a goal — drains happen at ~2 Hz).
+    latest_watermark: WatermarkSlot,
 }
 
 struct ClientRegistryInner {
@@ -414,6 +424,17 @@ impl SessionServer {
                                 continue;
                             }
 
+                            // Phase 3: client buffer-level reports feed the
+                            // adaptive sync engine. We accept the message
+                            // even on legacy v1 sessions — the variant is
+                            // additive over the existing JSON tag space.
+                            if let Ok(ClientControlMessage::ClientWatermark(report)) =
+                                serde_json::from_str::<ClientControlMessage>(&text)
+                            {
+                                self.registry.note_client_watermark(report);
+                                continue;
+                            }
+
                             if v2_session {
                                 match serde_json::from_str::<ControlMessageV2>(&text) {
                                     Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate })) => {
@@ -494,7 +515,31 @@ impl ClientRegistry {
                 pending_usb_streams: VecDeque::new(),
             })),
             metrics,
+            latest_watermark: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Phase 3: store the most recently received watermark observation. The
+    /// adaptive watchdog drains this on every tick. We keep a single-slot
+    /// "last writer wins" semantic — the engine cares about freshness, not
+    /// history.
+    pub fn note_client_watermark(&self, report: lan_audio_protocol::WatermarkReport) {
+        if let Ok(mut guard) = self.latest_watermark.lock() {
+            *guard = Some(report);
+        }
+    }
+
+    /// Phase 3: drain the latest watermark observation if any. Returns
+    /// `None` if no new report has arrived since the previous drain.
+    pub fn take_latest_watermark(&self) -> Option<lan_audio_protocol::WatermarkReport> {
+        self.latest_watermark.lock().ok().and_then(|mut g| g.take())
+    }
+
+    /// Phase 3: hand out a clone of the watermark slot so the transport
+    /// layer's watchdog task can drain reports without holding a registry
+    /// reference.
+    pub fn watermark_slot(&self) -> WatermarkSlot {
+        Arc::clone(&self.latest_watermark)
     }
 
     pub async fn client_count(&self) -> usize {
@@ -1212,5 +1257,66 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn watermark_slot_round_trips_latest_observation() {
+        let metrics = Metrics::new_shared();
+        let registry = ClientRegistry::new(metrics);
+
+        // No reports yet — drain returns None.
+        assert!(registry.take_latest_watermark().is_none());
+
+        let report = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 1_700_000_000_500,
+            jitter_buf_ms: 95,
+            ring_buf_ms: 30,
+            silence_fill_delta: 2,
+            underrun_delta: 0,
+            jitter_p95_us: 1_800,
+        };
+        registry.note_client_watermark(report);
+
+        let drained = registry
+            .take_latest_watermark()
+            .expect("watermark must be present after note");
+        assert_eq!(drained.jitter_buf_ms, 95);
+        assert_eq!(drained.ring_buf_ms, 30);
+        assert_eq!(drained.silence_fill_delta, 2);
+        assert_eq!(drained.jitter_p95_us, 1_800);
+
+        // Drain consumes the slot — second drain returns None.
+        assert!(registry.take_latest_watermark().is_none());
+    }
+
+    #[test]
+    fn watermark_slot_uses_last_writer_wins_semantics() {
+        let metrics = Metrics::new_shared();
+        let registry = ClientRegistry::new(metrics);
+
+        let first = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 1_000,
+            jitter_buf_ms: 50,
+            ring_buf_ms: 20,
+            silence_fill_delta: 0,
+            underrun_delta: 0,
+            jitter_p95_us: 1_000,
+        };
+        let second = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 2_000,
+            jitter_buf_ms: 100,
+            ring_buf_ms: 40,
+            silence_fill_delta: 1,
+            underrun_delta: 1,
+            jitter_p95_us: 2_000,
+        };
+        registry.note_client_watermark(first);
+        registry.note_client_watermark(second);
+
+        let drained = registry
+            .take_latest_watermark()
+            .expect("watermark must be present");
+        assert_eq!(drained.ts_unix_ms, 2_000, "last writer must win");
+        assert_eq!(drained.jitter_buf_ms, 100);
     }
 }

@@ -26,6 +26,12 @@ pub struct Metrics {
     negotiated_data_plane: RwLock<String>,
     negotiated_codec: RwLock<String>,
     recent_clients: RwLock<Vec<String>>,
+    /// Phase 4 watchdog tier label ("green" / "yellow" / "red").
+    adaptive_tier: RwLock<String>,
+    /// Phase 4 watchdog forecast CPU percent x 100, atomic-safe storage.
+    adaptive_predicted_cpu_x100: AtomicU64,
+    /// Phase 4 latest queue fill ratio x 10000.
+    adaptive_queue_ratio_x10000: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +59,9 @@ pub struct MetricsSnapshot {
     pub capture_last_rms: f32,
     pub last_capture_pts_ms: u64,
     pub recent_clients: Vec<String>,
+    pub adaptive_tier: String,
+    pub adaptive_predicted_cpu_percent: f64,
+    pub adaptive_queue_ratio: f64,
 }
 
 impl Metrics {
@@ -163,6 +172,26 @@ impl Metrics {
         self.last_capture_pts_ms.store(pts_ms, Ordering::Relaxed);
     }
 
+    pub fn set_adaptive_tier(&self, tier: impl Into<String>) {
+        if let Ok(mut lock) = self.adaptive_tier.write() {
+            *lock = tier.into();
+        }
+    }
+
+    pub fn set_adaptive_predicted_cpu_percent(&self, percent: f64) {
+        let clamped = percent.clamp(0.0, 100.0);
+        let scaled = (clamped * 100.0).round() as u64;
+        self.adaptive_predicted_cpu_x100
+            .store(scaled, Ordering::Relaxed);
+    }
+
+    pub fn set_adaptive_queue_ratio(&self, ratio: f64) {
+        let clamped = ratio.clamp(0.0, 10.0);
+        let scaled = (clamped * 10_000.0).round() as u64;
+        self.adaptive_queue_ratio_x10000
+            .store(scaled, Ordering::Relaxed);
+    }
+
     pub fn note_client_connected(&self, client_name: &str, client_ip: &str) {
         let normalized_name = if client_name.trim().is_empty() {
             "Unknown Client"
@@ -215,6 +244,20 @@ impl Metrics {
             .read()
             .map(|v| v.clone())
             .unwrap_or_default();
+        let adaptive_tier = self
+            .adaptive_tier
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| "green".to_string());
+        let adaptive_tier = if adaptive_tier.is_empty() {
+            "green".to_string()
+        } else {
+            adaptive_tier
+        };
+        let adaptive_predicted_cpu_percent =
+            self.adaptive_predicted_cpu_x100.load(Ordering::Relaxed) as f64 / 100.0;
+        let adaptive_queue_ratio =
+            self.adaptive_queue_ratio_x10000.load(Ordering::Relaxed) as f64 / 10_000.0;
 
         MetricsSnapshot {
             tx_packets: self.tx_packets.load(Ordering::Relaxed),
@@ -240,6 +283,9 @@ impl Metrics {
             capture_last_rms,
             last_capture_pts_ms: self.last_capture_pts_ms.load(Ordering::Relaxed),
             recent_clients,
+            adaptive_tier,
+            adaptive_predicted_cpu_percent,
+            adaptive_queue_ratio,
         }
     }
 }

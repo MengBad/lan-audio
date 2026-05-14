@@ -297,6 +297,26 @@ pub enum ClientControlMessage {
         seq: u64,
         ts_unix_ms: u64,
     },
+    /// Phase 3 watermark report. Sent by the Android client roughly once per
+    /// second over the existing TCP control channel so the server can drive
+    /// its Kalman+PID sync engine. All fields are derived from the client's
+    /// own jitter buffer + Audio ring buffer state. Older servers simply
+    /// ignore unknown tags.
+    ClientWatermark(WatermarkReport),
+}
+
+/// Buffer-level snapshot reported by the playback client to drive the server's
+/// adaptive sync engine. Fields are derived from the client jitter buffer and
+/// the AudioTrack/Oboe ring buffer state; deltas are reset between reports so
+/// the server can compute rates without storing per-client history.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatermarkReport {
+    pub ts_unix_ms: u64,
+    pub jitter_buf_ms: u32,
+    pub ring_buf_ms: u32,
+    pub silence_fill_delta: u32,
+    pub underrun_delta: u32,
+    pub jitter_p95_us: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -589,6 +609,35 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains("client_ping"));
+    }
+
+    #[test]
+    fn client_watermark_round_trip_json() {
+        let report = WatermarkReport {
+            ts_unix_ms: 1_700_000_000_000,
+            jitter_buf_ms: 80,
+            ring_buf_ms: 25,
+            silence_fill_delta: 1,
+            underrun_delta: 0,
+            jitter_p95_us: 2_500,
+        };
+        let msg = ClientControlMessage::ClientWatermark(report);
+        let json = serde_json::to_string(&msg).expect("serialize watermark");
+        assert!(json.contains("\"type\":\"client_watermark\""));
+        assert!(json.contains("\"jitter_buf_ms\":80"));
+        let decoded: ClientControlMessage =
+            serde_json::from_str(&json).expect("deserialize watermark");
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn unknown_client_control_message_type_is_ignored_safely() {
+        // The server must tolerate older/newer client variants — a payload
+        // with an unknown tag should fail to deserialize but not panic, so
+        // the WS handler can fall through to other variants.
+        let json = "{\"type\":\"client_unknown_future\",\"foo\":1}";
+        let result = serde_json::from_str::<ClientControlMessage>(json);
+        assert!(result.is_err(), "unknown tag should not deserialize");
     }
 
     #[test]

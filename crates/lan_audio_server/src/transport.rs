@@ -17,6 +17,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
+use crate::adaptive_runtime::{tier_encoder_profile, AdaptiveRuntime, TierEncoderProfile};
 use crate::audio_capture::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
     CaptureSourceState, PacketKind, SyntheticAudioSource, WindowsLoopbackCapture,
@@ -31,6 +32,7 @@ use crate::data_plane::{
 };
 use crate::metrics::Metrics;
 use crate::session::{BroadcastClient, ClientRegistry, ClientTransportSnapshot};
+use crate::watchdog::{DegradationTier, WatchdogConfig};
 
 #[derive(Clone)]
 pub struct UdpTransport {
@@ -369,6 +371,79 @@ impl BroadcastTransport {
         let mut sequence: u32 = 0;
         let mut tx_stats = TxStats::new();
 
+        // Phase 4 adaptive runtime: drives a CPU + queue-pressure watchdog
+        // that publishes a tier (Green/Yellow/Red) into a shared slot the
+        // broadcast loop re-reads on every frame. When the tier changes we
+        // reconfigure every active encoder via `apply_tier_profile`.
+        let adaptive_enabled = self.capture_helper.cfg.adaptive_runtime_enabled;
+        let watermark_slot = self.registry.watermark_slot();
+        let adaptive_runtime = if adaptive_enabled {
+            Some(Arc::new(StdMutex::new(AdaptiveRuntime::new(
+                WatchdogConfig::default(),
+                3.0,
+                100.0,
+                100.0,
+                Duration::from_millis(500),
+            ))))
+        } else {
+            None
+        };
+        let current_tier = Arc::new(StdMutex::new(DegradationTier::Green));
+        let watchdog_handle = if let Some(rt_arc) = adaptive_runtime.as_ref() {
+            let rt_arc = Arc::clone(rt_arc);
+            let watchdog_metrics = Arc::clone(&self.metrics);
+            let watchdog_tier = Arc::clone(&current_tier);
+            let mut watchdog_shutdown = shutdown.resubscribe();
+            let watermark_slot = Arc::clone(&watermark_slot);
+            let cadence = Duration::from_millis(500);
+            Some(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(cadence);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = watchdog_shutdown.recv() => break,
+                        _ = interval.tick() => {
+                            // Phase 3: drain the latest client watermark.
+                            let observation = watermark_slot
+                                .lock()
+                                .ok()
+                                .and_then(|mut g| g.take())
+                                .map(|r| crate::sync_engine::WatermarkObservation {
+                                    jitter_buf_ms: r.jitter_buf_ms,
+                                    ring_buf_ms: r.ring_buf_ms,
+                                    silence_fill_delta: r.silence_fill_delta,
+                                    underrun_delta: r.underrun_delta,
+                                    jitter_p95_us: r.jitter_p95_us,
+                                });
+                            // Queue depth: we don't have a single backpressure
+                            // queue for the live broadcast path (it encodes
+                            // inline). Pass zero so the watchdog only reacts
+                            // to CPU and watermark pressure, not the absent
+                            // queue.
+                            let decision = {
+                                let mut rt_guard = match rt_arc.lock() {
+                                    Ok(g) => g,
+                                    Err(e) => e.into_inner(),
+                                };
+                                rt_guard.tick(0, 64, 0, observation)
+                            };
+                            if let Ok(mut g) = watchdog_tier.lock() {
+                                *g = decision.tier;
+                            }
+                            watchdog_metrics.set_adaptive_tier(decision.tier.label());
+                            watchdog_metrics
+                                .set_adaptive_predicted_cpu_percent(decision.predicted_cpu);
+                            watchdog_metrics.set_adaptive_queue_ratio(0.0);
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let mut last_applied_tier = DegradationTier::Green;
+
         loop {
             tokio::select! {
                 _ = shutdown.recv() => {
@@ -383,18 +458,46 @@ impl BroadcastTransport {
                     if clients.is_empty() {
                         continue;
                     }
+
+                    // Phase 4: if the watchdog has chosen a new tier, push
+                    // the matching profile into every encoder before we use
+                    // them. We re-baseline per (codec, mode, rate) so the
+                    // sample-rate-specific opus encoders all stay in sync.
+                    if adaptive_enabled {
+                        let tier_now = current_tier
+                            .lock()
+                            .map(|g| *g)
+                            .unwrap_or(DegradationTier::Green);
+                        if tier_now != last_applied_tier {
+                            for ((_, mode, _), encoder) in encoders.iter_mut() {
+                                let profile = tier_encoder_profile(tier_now, *mode);
+                                encoder.apply_tier_profile(profile, *mode);
+                            }
+                            info!(
+                                from = ?last_applied_tier,
+                                to = ?tier_now,
+                                "broadcast adaptive tier transition applied to all encoders"
+                            );
+                            last_applied_tier = tier_now;
+                        }
+                    }
+
                     self.broadcast_frame(
                         frame,
                         &clients,
                         &mut encoders,
                         &mut sequence,
                         &mut tx_stats,
+                        last_applied_tier,
                     ).await;
                 }
             }
         }
 
         capture_handle.abort();
+        if let Some(handle) = watchdog_handle {
+            handle.abort();
+        }
         Ok(())
     }
 
@@ -405,6 +508,7 @@ impl BroadcastTransport {
         encoders: &mut HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder>,
         sequence: &mut u32,
         tx_stats: &mut TxStats,
+        active_tier: DegradationTier,
     ) {
         let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
             HashMap::new();
@@ -419,10 +523,18 @@ impl BroadcastTransport {
         let mut failed_wifi_clients = Vec::new();
         let mut failed_usb_clients = Vec::new();
         for ((codec, mode, preferred_sample_rate), recipients) in grouped {
-            let encoded_frames = encoders
+            let encoder = encoders
                 .entry((codec, mode, preferred_sample_rate))
-                .or_insert_with(|| AudioFrameEncoder::new(codec, mode, preferred_sample_rate))
-                .encode(frame.clone(), mode);
+                .or_insert_with(|| {
+                    let mut e = AudioFrameEncoder::new(codec, mode, preferred_sample_rate);
+                    // Phase 4: apply the current tier profile so a newly
+                    // created encoder for this (codec, mode, rate) tuple
+                    // joins in lock-step with the existing fleet.
+                    let profile = tier_encoder_profile(active_tier, mode);
+                    e.apply_tier_profile(profile, mode);
+                    e
+                });
+            let encoded_frames = encoder.encode(frame.clone(), mode);
             for encoded in encoded_frames {
                 let packet = UdpAudioPacket {
                     version: 1,
@@ -582,8 +694,16 @@ impl UdpTransport {
             );
         }
         let current_audio_mode = Arc::clone(&self.current_audio_mode);
+        let adaptive_runtime_enabled = self.cfg.adaptive_runtime_enabled;
 
         let handle = tokio::spawn(async move {
+            // Phase 5 caveat: MMCSS thread priority must be registered on a
+            // stable OS thread. Tokio worker threads can migrate tasks
+            // between polls, so calling boost_current_thread() inside this
+            // async block is unreliable. Wiring real MMCSS boost requires
+            // moving the capture/encode/send loops onto std::thread, which
+            // is tracked as a follow-up. The thread_priority module is kept
+            // available so the migration can land independently.
             info!(
                 session = %session_id,
                 target = %target,
@@ -672,54 +792,134 @@ impl UdpTransport {
             let mut encode_shutdown = shutdown.resubscribe();
             let encode_audio_mode = Arc::clone(&current_audio_mode);
             let encoder_sample_rate = normalize_encoder_sample_rate(active_format.sample_rate_hz);
-            let encode_handle = tokio::spawn(async move {
-                let mut packet_build_stats = PacketBuildStatsWindow::new();
-                let mut frame_encoder = AudioFrameEncoder::new(
-                    effective_codec,
-                    read_current_audio_mode(&encode_audio_mode),
-                    encoder_sample_rate,
-                );
-                loop {
-                    tokio::select! {
-                        _ = encode_shutdown.recv() => break,
-                        maybe_frame = tokio::time::timeout(Duration::from_millis(30), frame_rx.recv()) => {
-                            match maybe_frame {
-                                Ok(Some(frame)) => {
-                                    let frame_age_ms_before_build = now_ms().saturating_sub(frame.pts_ms);
-                                    let active_mode = read_current_audio_mode(&encode_audio_mode);
-                                    let encoded_frames = frame_encoder.encode(frame, active_mode);
-                                    let mut encoded_channel_closed = false;
-                                    for encoded in encoded_frames {
-                                        packet_build_stats.record_packet_built(
-                                            encoded.frames_per_packet,
-                                            encoded.payload.len(),
-                                            frame_age_ms_before_build,
-                                            FLUSH_REASON_IMMEDIATE_FRAME_READY,
-                                        );
-                                        let encoded_tx_started_at = Instant::now();
-                                        let send_result = encoded_tx.send(encoded).await;
-                                        packet_build_stats.record_encoded_tx_block(encoded_tx_started_at.elapsed());
-                                        packet_build_stats.maybe_log();
-                                        if send_result.is_err() {
-                                            encoded_channel_closed = true;
+            let adaptive_enabled = adaptive_runtime_enabled;
+            let adaptive_tier = Arc::new(StdMutex::new(DegradationTier::Green));
+            // Clone the encoded-frame sender for the watchdog so it can read
+            // queue depth without taking ownership away from the encoder.
+            let watchdog_queue_observer = encoded_tx.clone();
+            let encode_handle = {
+                let adaptive_tier = Arc::clone(&adaptive_tier);
+                tokio::spawn(async move {
+                    let mut packet_build_stats = PacketBuildStatsWindow::new();
+                    let initial_mode = read_current_audio_mode(&encode_audio_mode);
+                    let mut frame_encoder =
+                        AudioFrameEncoder::new(effective_codec, initial_mode, encoder_sample_rate);
+                    let mut last_applied_tier = DegradationTier::Green;
+                    loop {
+                        tokio::select! {
+                            _ = encode_shutdown.recv() => break,
+                            maybe_frame = tokio::time::timeout(Duration::from_millis(30), frame_rx.recv()) => {
+                                match maybe_frame {
+                                    Ok(Some(frame)) => {
+                                        let frame_age_ms_before_build = now_ms().saturating_sub(frame.pts_ms);
+                                        let active_mode = read_current_audio_mode(&encode_audio_mode);
+
+                                        // Phase 4: pull the latest tier the
+                                        // watchdog has chosen and reconfigure
+                                        // the encoder if it changed.
+                                        if adaptive_enabled {
+                                            let current_tier = match adaptive_tier.lock() {
+                                                Ok(g) => *g,
+                                                Err(e) => *e.into_inner(),
+                                            };
+                                            if current_tier != last_applied_tier {
+                                                let profile = tier_encoder_profile(current_tier, active_mode);
+                                                frame_encoder.apply_tier_profile(profile, active_mode);
+                                                info!(
+                                                    from = ?last_applied_tier,
+                                                    to = ?current_tier,
+                                                    bitrate_bps = profile.bitrate_bps,
+                                                    complexity = profile.complexity,
+                                                    force_pcm16 = profile.force_pcm16_fallback,
+                                                    "adaptive runtime tier transition applied"
+                                                );
+                                                last_applied_tier = current_tier;
+                                            }
+                                        }
+
+                                        let encoded_frames = frame_encoder.encode(frame, active_mode);
+                                        let mut encoded_channel_closed = false;
+                                        for encoded in encoded_frames {
+                                            packet_build_stats.record_packet_built(
+                                                encoded.frames_per_packet,
+                                                encoded.payload.len(),
+                                                frame_age_ms_before_build,
+                                                FLUSH_REASON_IMMEDIATE_FRAME_READY,
+                                            );
+                                            let encoded_tx_started_at = Instant::now();
+                                            let send_result = encoded_tx.send(encoded).await;
+                                            packet_build_stats.record_encoded_tx_block(encoded_tx_started_at.elapsed());
+                                            packet_build_stats.maybe_log();
+                                            if send_result.is_err() {
+                                                encoded_channel_closed = true;
+                                                break;
+                                            }
+                                        }
+                                        if encoded_channel_closed {
                                             break;
                                         }
                                     }
-                                    if encoded_channel_closed {
-                                        break;
+                                    Ok(None) => break,
+                                    Err(_) => {
+                                        encode_metrics.inc_capture_underruns();
+                                        packet_build_stats.record_encode_timeout();
+                                        packet_build_stats.maybe_log();
                                     }
-                                }
-                                Ok(None) => break,
-                                Err(_) => {
-                                    encode_metrics.inc_capture_underruns();
-                                    packet_build_stats.record_encode_timeout();
-                                    packet_build_stats.maybe_log();
                                 }
                             }
                         }
                     }
-                }
-            });
+                })
+            };
+
+            // Phase 4 watchdog tick task. Runs at 500ms cadence, samples CPU,
+            // observes the encode-queue depth, decides a tier, publishes it
+            // to the encoder via `adaptive_tier`. Disabled when the operator
+            // passed `--no-adaptive-runtime` so the v1.8.7 baseline remains
+            // available as a rollback path.
+            let watchdog_handle = if adaptive_runtime_enabled {
+                let watchdog_metrics = Arc::clone(&metrics);
+                let watchdog_tier = Arc::clone(&adaptive_tier);
+                let mut watchdog_shutdown = shutdown.resubscribe();
+                let queue_observer = watchdog_queue_observer;
+                let cadence = Duration::from_millis(500);
+                Some(tokio::spawn(async move {
+                    let mut runtime =
+                        AdaptiveRuntime::new(WatchdogConfig::default(), 3.0, 100.0, 100.0, cadence);
+                    let mut interval = tokio::time::interval(cadence);
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        tokio::select! {
+                            _ = watchdog_shutdown.recv() => break,
+                            _ = interval.tick() => {
+                                let queue_capacity = queue_observer.max_capacity() as u32;
+                                let queue_depth = queue_capacity
+                                    .saturating_sub(queue_observer.capacity() as u32);
+                                let decision = runtime.tick(
+                                    queue_depth,
+                                    queue_capacity,
+                                    0,
+                                    None,
+                                );
+                                if let Ok(mut g) = watchdog_tier.lock() {
+                                    *g = decision.tier;
+                                }
+                                watchdog_metrics.set_adaptive_tier(decision.tier.label());
+                                watchdog_metrics
+                                    .set_adaptive_predicted_cpu_percent(decision.predicted_cpu);
+                                let queue_ratio = if queue_capacity == 0 {
+                                    0.0
+                                } else {
+                                    queue_depth as f64 / queue_capacity as f64
+                                };
+                                watchdog_metrics.set_adaptive_queue_ratio(queue_ratio);
+                            }
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
 
             let mut sequence: u32 = 0;
             let mut tx_stats = TxStats::new();
@@ -807,6 +1007,9 @@ impl UdpTransport {
 
             capture_handle.abort();
             encode_handle.abort();
+            if let Some(handle) = watchdog_handle {
+                handle.abort();
+            }
             debug!(session = %session_id, "udp pipeline task exited");
         });
 
@@ -1033,6 +1236,9 @@ struct AudioFrameEncoder {
     output_sample_rate: u32,
     opus: Option<ExperimentalOpusEncoder>,
     opus_frame_buffer: Option<OpusFrameBuffer>,
+    /// Phase 4 — when forced into Red tier, fall back to PCM16 regardless of
+    /// negotiated codec. The flag is consulted on every `encode()` call.
+    force_pcm16_fallback: bool,
 }
 
 impl AudioFrameEncoder {
@@ -1059,12 +1265,20 @@ impl AudioFrameEncoder {
             output_sample_rate,
             opus,
             opus_frame_buffer,
+            force_pcm16_fallback: false,
+        }
+    }
+
+    fn apply_tier_profile(&mut self, profile: TierEncoderProfile, mode: AudioMode) {
+        self.force_pcm16_fallback = profile.force_pcm16_fallback;
+        if let Some(opus) = self.opus.as_mut() {
+            opus.apply_profile(profile, mode);
         }
     }
 
     fn encode(&mut self, frame: AudioFrame, mode: AudioMode) -> Vec<EncodedFrame> {
         let samples = to_fixed_stereo_10ms(&frame, self.output_sample_rate);
-        if self.codec == CodecSelection::Opus {
+        if self.codec == CodecSelection::Opus && !self.force_pcm16_fallback {
             if let (Some(opus), Some(buffer)) =
                 (self.opus.as_mut(), self.opus_frame_buffer.as_mut())
             {
@@ -1215,12 +1429,33 @@ impl ExperimentalOpusEncoder {
         })
     }
 
+    /// Apply a tier-specific encoder profile (Phase 4 watchdog feedback).
+    /// Resets the running mode so the next encode() will reapply the
+    /// per-mode settings on top, then layers on the tier overrides.
+    fn apply_profile(&mut self, profile: TierEncoderProfile, mode: AudioMode) {
+        // Re-baseline first so multiple tier transitions in a row stay
+        // idempotent.
+        apply_opus_mode_settings(&mut self.inner, mode);
+        self.mode = mode;
+        if let Err(err) = self
+            .inner
+            .set_bitrate(LibOpusBitrate::Bits(profile.bitrate_bps))
+        {
+            warn!(error = %err, bitrate = profile.bitrate_bps, "tier bitrate apply failed");
+        }
+        if let Err(err) = self.inner.set_complexity(profile.complexity) {
+            warn!(error = %err, complexity = profile.complexity, "tier complexity apply failed");
+        }
+        if let Err(err) = self.inner.set_vbr(profile.use_vbr) {
+            warn!(error = %err, vbr = profile.use_vbr, "tier vbr apply failed");
+        }
+    }
+
     fn encode(&mut self, frame: &OpusInputFrame, mode: AudioMode) -> anyhow::Result<EncodedFrame> {
         if self.mode != mode {
             apply_opus_mode_settings(&mut self.inner, mode);
             self.mode = mode;
         }
-
         let pcm16 = samples_to_i16(&frame.samples);
         let mut payload = vec![0_u8; 4000];
         let encoded_len = self

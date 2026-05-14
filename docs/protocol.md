@@ -4,6 +4,20 @@
 
 # Protocol v2 Draft
 
+## Release Update (`v1.9.0`)
+
+- 新增可选客户端控制消息 `client_watermark`（`ClientControlMessage::ClientWatermark`），用于驱动服务端 Phase 3 Kalman+PID 同步引擎。
+- 该消息通过既有的 WebSocket 控制通道发送，频率与现有 `client_ping` 一致（默认 1 Hz），字段如下（全部 unsigned）：
+  - `ts_unix_ms`：客户端时间戳
+  - `jitter_buf_ms`：抖动缓冲区当前水位
+  - `ring_buf_ms`：AudioTrack/Oboe ring buffer 队列长度
+  - `silence_fill_delta`：自上次报告以来由 sink 补齐的 silence 帧增量
+  - `underrun_delta`：自上次报告以来 sink 出现的 underrun 增量
+  - `jitter_p95_us`：客户端最近窗口内的网络包到达抖动 p95（微秒）
+- 兼容性：旧服务端因 `serde(tag = "type")` 反序列化失败会安静忽略未知 tag，不影响主路径流量。
+- 新增 `--no-adaptive-runtime` 服务端 CLI 开关，关闭 Phase 4 watchdog 与 Phase 5 wiring，作为本次特性发布的回滚路径。
+- 主路径未变，仍为 `windows_loopback + v2_header + opus`；`legacy_las1 + pcm16` 回滚路径保留。
+
 ## Release Update (`2026-04-24`)
 
 - `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.

@@ -151,6 +151,10 @@ pub struct ServerConfig {
     pub transport_mode: TransportMode,
     pub force_rollback: bool,
     pub reverse_channel_enabled: bool,
+    /// Phase 4 adaptive runtime (CPU watchdog + tier-based encoder degrade).
+    /// Default ON; pass `--no-adaptive-runtime` on the command line to bypass
+    /// for emergency rollback.
+    pub adaptive_runtime_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -181,6 +185,7 @@ impl Default for ServerConfig {
             transport_mode: TransportMode::WiFi,
             force_rollback: false,
             reverse_channel_enabled: false,
+            adaptive_runtime_enabled: true,
         }
     }
 }
@@ -298,6 +303,12 @@ impl ServerConfig {
                 }
                 "--no-reverse-channel" => {
                     self.reverse_channel_enabled = false;
+                }
+                "--no-adaptive-runtime" => {
+                    self.adaptive_runtime_enabled = false;
+                }
+                "--adaptive-runtime" => {
+                    self.adaptive_runtime_enabled = true;
                 }
                 _ => {}
             }

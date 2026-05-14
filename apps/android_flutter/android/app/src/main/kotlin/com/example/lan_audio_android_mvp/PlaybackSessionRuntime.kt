@@ -99,6 +99,12 @@ class PlaybackSessionRuntime(
     private var lastDiagnosedSilenceFillCount: Int = 0
     private var lastDiagnosedSinkSilenceFillCount: Int = 0
     private var lastDiagnosedOboeUnderrunCount: Int = 0
+
+    // Phase 3: track last-reported watermark counters so we can emit
+    // monotonic deltas to the server's adaptive sync engine without
+    // double-counting events the server already saw.
+    private var lastReportedSinkSilenceFillCount: Int = 0
+    private var lastReportedOboeUnderrunCount: Int = 0
     private var balancedQueueBelowFillTarget: Boolean = false
     @Volatile
     private var highQualityPrefillActive = false
@@ -184,6 +190,8 @@ class PlaybackSessionRuntime(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
+        lastReportedSinkSilenceFillCount = 0
+        lastReportedOboeUnderrunCount = 0
         balancedQueueBelowFillTarget = false
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L
@@ -371,6 +379,16 @@ class PlaybackSessionRuntime(
                 Log.e(logTag, "stream error code=$code message=$message")
                 publishError(code, message)
                 scheduleReconnect(code)
+            }
+
+            override fun provideWatermark(): StreamSessionManager.WatermarkSample? {
+                if (generation != streamGeneration) return null
+                return try {
+                    buildWatermarkSample()
+                } catch (t: Throwable) {
+                    Log.w(logTag, "buildWatermarkSample failed: ${t.message}")
+                    null
+                }
             }
         })
         streamManager?.start()
@@ -702,6 +720,32 @@ class PlaybackSessionRuntime(
 
     fun getJitterHistorySnapshot(): List<Int> = computeJitterHistory()
     fun getJitterP50Us(): Int = computeJitterP50()
+
+    /**
+     * Phase 3: build a watermark sample for the server's adaptive sync
+     * engine. Counters are emitted as deltas since the previous report so
+     * the server can compute rates. Caller is responsible for invoking this
+     * on the same thread as playback state mutates (the ping loop runs on a
+     * scheduled executor — a transient stale read is acceptable for control
+     * feedback).
+     */
+    fun buildWatermarkSample(): StreamSessionManager.WatermarkSample {
+        val jitterBufMs = jitterBuffer.bufferedMs()
+        val ringBufMs = stateStore.current().metrics.audioTrackQueuedMs
+        val sinkSilence = sinkSilenceFillTotal
+        val underrun = oboeUnderrunCount
+        val silenceDelta = (sinkSilence - lastReportedSinkSilenceFillCount).coerceAtLeast(0)
+        val underrunDelta = (underrun - lastReportedOboeUnderrunCount).coerceAtLeast(0)
+        lastReportedSinkSilenceFillCount = sinkSilence
+        lastReportedOboeUnderrunCount = underrun
+        return StreamSessionManager.WatermarkSample(
+            jitterBufMs = jitterBufMs.coerceAtLeast(0),
+            ringBufMs = ringBufMs.coerceAtLeast(0),
+            silenceFillDelta = silenceDelta,
+            underrunDelta = underrunDelta,
+            jitterP95Us = computeJitterP95Us().coerceAtLeast(0),
+        )
+    }
 
     private fun decodePacketForPlayback(packet: LasPacket): DecodeResult {
         return when (packet.codec) {
@@ -1205,6 +1249,16 @@ class PlaybackSessionRuntime(
                     publishError(code, message)
                     scheduleReconnect(code)
                 }
+
+                override fun provideWatermark(): StreamSessionManager.WatermarkSample? {
+                    if (generation != streamGeneration) return null
+                    return try {
+                        buildWatermarkSample()
+                    } catch (t: Throwable) {
+                        Log.w(logTag, "buildWatermarkSample failed: ${t.message}")
+                        null
+                    }
+                }
             })
             streamManager?.start()
             ensurePlayoutLoop()
@@ -1260,6 +1314,8 @@ class PlaybackSessionRuntime(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
+        lastReportedSinkSilenceFillCount = 0
+        lastReportedOboeUnderrunCount = 0
         balancedQueueBelowFillTarget = false
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L
