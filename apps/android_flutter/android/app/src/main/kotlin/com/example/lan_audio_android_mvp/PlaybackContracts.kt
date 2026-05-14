@@ -150,7 +150,7 @@ object PlaybackModeProfiles {
                 startBufferMs = 40,
                 maxBufferMs = 180,
                 batchFrames = 1,
-                dropThresholdMs = 30,
+                dropThresholdMs = 80,
                 targetTotalLatencyMs = 70,
                 maxTotalLatencyMs = 110,
                 audioQueueSoftCapMs = 40,

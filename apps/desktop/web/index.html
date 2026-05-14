@@ -471,6 +471,18 @@
             <span id="dumpLabel"></span>
           </label>
 
+          <!-- Mic / Virtual Device Status -->
+          <div class="usb-block" id="micBlock">
+            <div class="usb-block-title">🎤 麦克风反向通道</div>
+            <div class="usb-row">状态: <strong id="micStatusText">未激活</strong></div>
+            <div class="usb-row" id="micWarningRow" style="display:none;color:var(--warn);">
+              <span id="micWarningText"></span>
+            </div>
+            <div class="usb-row" style="font-size:10px;color:var(--muted);margin-top:4px;" id="micHelpText">
+              需要安装 VB-Cable 虚拟音频设备。<a href="#" id="micHelpLink" style="color:var(--accent);">下载 VB-Cable</a>
+            </div>
+          </div>
+
           <!-- USB Panel -->
           <div class="usb-block" id="usbPanel" style="display:none;">
             <div class="usb-block-title" id="usbTitle"></div>
@@ -1098,6 +1110,27 @@
           logPane.appendChild(div);
         });
 
+        // Mic / virtual device status
+        const micStatus = document.getElementById('micStatusText');
+        const micWarningRow = document.getElementById('micWarningRow');
+        const micWarningText = document.getElementById('micWarningText');
+        const micHelpText = document.getElementById('micHelpText');
+        if (snapshot.mic_active) {
+          micStatus.textContent = `活跃 · ${snapshot.mic_peak_db?.toFixed(0) ?? '-'} dB`;
+          micStatus.style.color = 'var(--accent)';
+        } else {
+          micStatus.textContent = state.lang === 'zh' ? '未激活' : 'Inactive';
+          micStatus.style.color = '';
+        }
+        if (snapshot.virtual_device_warning) {
+          micWarningRow.style.display = 'block';
+          micWarningText.textContent = snapshot.virtual_device_warning;
+          micHelpText.style.display = 'block';
+        } else if (snapshot.virtual_device_detected) {
+          micWarningRow.style.display = 'none';
+          micHelpText.style.display = 'none';
+        }
+
         // USB panel visibility
         document.getElementById('usbPanel').style.display =
           (snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0)) ? 'block' : 'none';
@@ -1236,6 +1269,13 @@
           state.lang = e.target.value;
           renderText();
           if (state.snapshot) renderSnapshot(state.snapshot);
+        });
+
+        // VB-Cable download link
+        document.getElementById('micHelpLink').addEventListener('click', (e) => {
+          e.preventDefault();
+          try { tauriInvoke('open_external_url', { url: 'https://vb-audio.com/Cable/' }); }
+          catch (_) { window.open('https://vb-audio.com/Cable/', '_blank'); }
         });
 
         document.getElementById('primaryActionBtn').addEventListener('click', async () => {
