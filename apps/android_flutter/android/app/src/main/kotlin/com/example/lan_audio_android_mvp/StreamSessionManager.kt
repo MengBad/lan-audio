@@ -242,7 +242,7 @@ class StreamSessionManager(
                             "type" to "hello",
                             "protocol_version" to 2,
                             "device_name" to "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
-                            "client_id" to "android-${System.currentTimeMillis()}",
+                            "client_id" to "android-${Build.MANUFACTURER}-${Build.MODEL}".trim().replace(" ", "_"),
                             "udp_port" to localUdpPort,
                             "desired_sample_rate" to preferredSampleRate,
                             "channels" to 2,
@@ -436,6 +436,8 @@ class StreamSessionManager(
             } catch (t: Throwable) {
                 Log.e(logTag, "ws ping failed: ${t.message}")
                 wsReady = false
+                try { webSocket?.close(1001, "ping_failed") } catch (_: Throwable) {}
+                try { webSocket?.cancel() } catch (_: Throwable) {}
                 callback.onWsDisconnected("ws_ping_failed")
             }
         }, 1000L, pingIntervalMs.toLong().coerceAtLeast(250L), TimeUnit.MILLISECONDS)

@@ -15,9 +15,8 @@ import 'power_saving_guide.dart';
 import 'services/mic_capture_service.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
-import 'ui/pages/audio_page.dart';
-import 'ui/pages/home_page.dart';
-import 'ui/pages/settings_page.dart';
+import 'ui/pages/more_page.dart';
+import 'ui/pages/play_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
 const String kUiBuildTag = 'UI build: audio-console-dark-v1.7.2';
@@ -189,11 +188,7 @@ class _MainShellState extends State<MainShell> {
   final MicCaptureService _micService = MicCaptureService();
   bool _micEnabled = false;
   final int _reverseChannelPort = 7878;
-  List<int> _jitterHistoryUs = [];
-  int _jitterP50Us = 0;
-  int _jitterP95Us = 0;
-  int _jitterUnderrun = 0;
-  bool _showJitterGraph = false;
+
   int _androidVolumePct = 50;
   bool _showVolumePill = false;
   final TextEditingController _manualHostController = TextEditingController();
@@ -210,7 +205,6 @@ class _MainShellState extends State<MainShell> {
 
   String _status = 'idle';
   String _wsLog = '';
-  String _audioLog = '';
   String? _selectedServerId;
   ConnectMode _connectMode = ConnectMode.discovered;
   bool _isConnecting = false;
@@ -222,9 +216,6 @@ class _MainShellState extends State<MainShell> {
   AudioModePreference _currentAudioMode = AudioModePreference.balanced;
 
   PlaybackState _playbackState = PlaybackState.stopped;
-  bool _audioTrackInitialized = false;
-  bool _audioTrackStarted = false;
-  bool _playTickBusy = false;
 
   int _sampleRate = 48000;
   int _channels = 2;
@@ -514,15 +505,6 @@ class _MainShellState extends State<MainShell> {
       _serviceJitterP95Ms =
           (metrics['jitter_p95_ms'] as num?)?.toInt() ?? _serviceJitterP95Ms;
 
-      // Jitter graph data
-      _jitterHistoryUs = snapshot.jitterHistoryUs;
-      _jitterP50Us = snapshot.jitterP50Us;
-      _jitterP95Us = snapshot.jitterP95Us;
-      _jitterUnderrun = snapshot.underrunCount;
-      _showJitterGraph = _wsConnected &&
-          (_playbackState == PlaybackState.playing ||
-              _playbackState == PlaybackState.buffering);
-
       if (runtimeState == 'streaming') {
         _playbackState = PlaybackState.playing;
       } else if (runtimeState == 'handshaking' ||
@@ -539,7 +521,6 @@ class _MainShellState extends State<MainShell> {
       _status = runtimeState == 'recovering'
           ? '${tr('重新连接中', 'Reconnecting')}... (${tr('第', '#')} $_reconnectAttempts${tr('次', '')}, ${_reconnectDelayMs}ms)'
           : '${snapshot.state}/${snapshot.rollbackState}';
-      _audioLog = snapshot.state;
       _wsLog = jsonEncode(snapshot.toMap());
     });
   }
@@ -771,118 +752,6 @@ class _MainShellState extends State<MainShell> {
       );
     });
     await _persistConnectHistory();
-  }
-
-  Future<void> _connectHistoryEntry(ConnectHistoryEntry entry) async {
-    await _connectToHost(
-      host: entry.ip,
-      wsPort: entry.port,
-      udpPort: entry.port == 39991 ? 39992 : entry.port + 1,
-      serverName: entry.hostname,
-    );
-  }
-
-  Future<void> _removeConnectHistory(ConnectHistoryEntry entry) async {
-    setState(() {
-      _connectHistory = _connectHistory
-          .where((item) => !(item.ip == entry.ip && item.port == entry.port))
-          .toList();
-    });
-    await _persistConnectHistory();
-  }
-
-  Future<void> _toggleFavorite(ConnectHistoryEntry entry) async {
-    setState(() {
-      _connectHistory = ConnectHistoryStore.sortAndTrim(
-        _connectHistory.map((item) {
-          if (item.ip == entry.ip && item.port == entry.port) {
-            return item.copyWith(isFavorite: !item.isFavorite);
-          }
-          return item;
-        }).toList(),
-      );
-    });
-    await _persistConnectHistory();
-  }
-
-  Future<void> _renameHistoryEntry(ConnectHistoryEntry entry) async {
-    final controller = TextEditingController(text: entry.hostname);
-    final renamed = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(tr('编辑名称', 'Edit name')),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(
-            labelText: tr('设备名称', 'Device name'),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(tr('取消', 'Cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: Text(tr('保存', 'Save')),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (renamed == null || renamed.isEmpty) {
-      return;
-    }
-    setState(() {
-      _connectHistory = ConnectHistoryStore.sortAndTrim(
-        _connectHistory.map((item) {
-          if (item.ip == entry.ip && item.port == entry.port) {
-            return item.copyWith(hostname: renamed);
-          }
-          return item;
-        }).toList(),
-      );
-    });
-    await _persistConnectHistory();
-  }
-
-  Future<void> _showHistoryActions(ConnectHistoryEntry entry) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(entry.isFavorite ? Icons.star_border : Icons.star),
-              title: Text(entry.isFavorite
-                  ? tr('取消收藏', 'Unfavorite')
-                  : tr('收藏', 'Favorite')),
-              onTap: () {
-                Navigator.of(context).pop();
-                _toggleFavorite(entry);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: Text(tr('编辑名称', 'Edit name')),
-              onTap: () {
-                Navigator.of(context).pop();
-                _renameHistoryEntry(entry);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: Text(tr('删除', 'Delete')),
-              onTap: () {
-                Navigator.of(context).pop();
-                _removeConnectHistory(entry);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -1131,24 +1000,6 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  Future<void> _connectQuickRecent() async {
-    final host = _mostRecentHost();
-    if (host == null) {
-      return;
-    }
-    final known = _servers.values.where((s) => s.host == host).toList();
-    final wsPort = known.isNotEmpty ? known.first.wsPort : 39991;
-    final udpPort = known.isNotEmpty ? known.first.udpPort : 39992;
-    final serverName =
-        known.isNotEmpty ? known.first.serverName : 'recent:$host';
-    await _connectToHost(
-      host: host,
-      wsPort: wsPort,
-      udpPort: udpPort,
-      serverName: serverName,
-    );
-  }
-
   Future<void> _connectToHost({
     required String host,
     required int wsPort,
@@ -1223,7 +1074,7 @@ class _MainShellState extends State<MainShell> {
         'type': 'hello',
         'protocol_version': 2,
         'device_name': 'flutter-android',
-        'client_id': 'flutter-${DateTime.now().millisecondsSinceEpoch}',
+        'client_id': 'flutter-${Platform.localHostname}',
         'udp_port': localUdpPort,
         'desired_sample_rate': 48000,
         'channels': 2,
@@ -1304,7 +1155,6 @@ class _MainShellState extends State<MainShell> {
         _udpBytes = 0;
         _udpLoss = 0;
         _lastSeq = null;
-        _audioLog = '';
       });
       await _recordConnectHistory(
         host: host,
@@ -1431,11 +1281,9 @@ class _MainShellState extends State<MainShell> {
 
     if (packet.hasConfigChanged) {
       // TODO(protocol-v2): when LAS2/LAV2 header is enabled, refresh playback config here.
-      _audioLog = 'protocol hint: config_changed';
     }
     if (packet.hasDiscontinuity) {
       // TODO(protocol-v2): reset jitter/decoder state on discontinuity.
-      _audioLog = 'protocol hint: discontinuity';
     }
 
     _udpPackets += 1;
@@ -1469,100 +1317,6 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  Future<void> _startPlayback() async {
-    if (kUseBackgroundPlaybackService) {
-      final selected =
-          _selectedServerId == null ? null : _servers[_selectedServerId!];
-      final manual = _manualHostController.text.trim();
-      final host = selected?.host ??
-          _serviceTargetHost ??
-          (manual.isEmpty ? null : manual);
-      if (host == null || host.isEmpty) {
-        setState(() {
-          _status = tr('请先选择服务器', 'please select server first');
-        });
-        return;
-      }
-      final wsPort = selected?.wsPort ?? 39991;
-      final udpPort = selected?.udpPort ?? 39992;
-      final serverName =
-          selected?.serverName ?? _serviceTargetName ?? 'manual:$host';
-      await _connectToHost(
-        host: host,
-        wsPort: wsPort,
-        udpPort: udpPort,
-        serverName: serverName,
-      );
-      return;
-    }
-    if (_playbackState != PlaybackState.stopped) {
-      return;
-    }
-    _jitter.clear();
-    _audioTrackInitialized = false;
-    _audioTrackStarted = false;
-    _playTickBusy = false;
-
-    setState(() {
-      _playbackState = PlaybackState.buffering;
-      _audioLog = 'playback buffering';
-    });
-
-    _playTimer?.cancel();
-    _playTimer = Timer.periodic(const Duration(milliseconds: 10), (_) async {
-      if (_playTickBusy) {
-        return;
-      }
-      _playTickBusy = true;
-      try {
-        final frame = _jitter.pop();
-        if (frame == null) {
-          if (_playbackState != PlaybackState.buffering) {
-            setState(() {
-              _playbackState = PlaybackState.buffering;
-            });
-          }
-          _audioLog = 'buffer underrun or no packet';
-          _playTickBusy = false;
-          return;
-        }
-
-        if (!_audioTrackInitialized) {
-          await _audioOutput.init(
-            sampleRate: frame.sampleRate,
-            channels: frame.channels,
-            frameSamplesPerChannel:
-                frame.frameDurationMs * frame.sampleRate ~/ 1000,
-          );
-          _audioTrackInitialized = true;
-        }
-
-        if (!_audioTrackStarted) {
-          await _audioOutput.start();
-          _audioTrackStarted = true;
-        }
-
-        await _audioOutput.writePcm16(frame.payload);
-
-        if (_playbackState != PlaybackState.playing) {
-          setState(() {
-            _playbackState = PlaybackState.playing;
-          });
-        } else {
-          setState(() {});
-        }
-        _audioLog = 'playing pcm frame';
-      } catch (e) {
-        setState(() {
-          _audioLog = 'AudioTrack init/write failed: $e';
-          _playbackState = PlaybackState.stopped;
-        });
-      } finally {
-        _playTickBusy = false;
-      }
-    });
-  }
-
   Future<void> _stopPlayback() async {
     // stop mic if active
     if (_micEnabled) {
@@ -1593,9 +1347,6 @@ class _MainShellState extends State<MainShell> {
     try {
       await _audioOutput.release();
     } catch (_) {}
-    _audioTrackInitialized = false;
-    _audioTrackStarted = false;
-
     if (mounted) {
       setState(() {
         _playbackState = PlaybackState.stopped;
@@ -1721,8 +1472,6 @@ class _MainShellState extends State<MainShell> {
     }
     return '$_uiBufferedMs';
   }
-
-  String get _metricFpsText => '--';
 
   String get _metricUnderrunText => '$_uiUnderrun';
 
@@ -1921,9 +1670,8 @@ class _MainShellState extends State<MainShell> {
           IndexedStack(
             index: _currentTabIndex,
             children: [
-              _buildHomePage(servers, modeItems),
-              _buildAudioPage(),
-              _buildSettingsPage(servers),
+              _buildPlayPage(modeItems),
+              _buildMorePage(servers),
             ],
           ),
           // Volume pill overlay
@@ -1969,24 +1717,20 @@ class _MainShellState extends State<MainShell> {
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: '主页',
+            icon: Icon(Icons.play_circle_outline),
+            label: '播放',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.equalizer),
-            label: '音频',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: '设置',
+            icon: Icon(Icons.more_horiz),
+            label: '更多',
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHomePage(List<DiscoveryServer> servers, List<ModeSelectorItem> modeItems) {
-    return HomePage(
+  Widget _buildPlayPage(List<ModeSelectorItem> modeItems) {
+    return PlayPage(
       isZh: _isZh,
       consoleState: _consoleState,
       statusChipLabel: _statusChipLabel(),
@@ -1995,66 +1739,20 @@ class _MainShellState extends State<MainShell> {
       wsConnected: _wsConnected,
       playbackStopped: _playbackState == PlaybackState.stopped,
       metricBufferText: _metricBufferText,
-      metricFpsText: _metricFpsText,
       metricUnderrunText: _metricUnderrunText,
-      underrunCount: _uiUnderrun,
+      tcpRoundTripMs: _tcpRoundTripMs,
       modeItems: modeItems,
       currentModeId: _modeId(_currentAudioMode),
       modeSelectorEnabled: _modeSelectorEnabled,
       onModeSelected: (id) => _setAudioMode(_modeFromId(id)),
       onStopPlayback: _stopPlayback,
       onRetryConnection: _connectSelected,
-      servers: servers
-          .map((s) => QuickConnectServerData(
-                host: s.host,
-                wsPort: s.wsPort,
-                udpPort: s.udpPort,
-                serverName: s.serverName,
-              ))
-          .toList(),
-      mostRecentHost: _mostRecentHost(),
-      onConnectQuickRecent: _connectQuickRecent,
-      connectHistory: _connectHistory,
-      onConnectHistoryEntry: _connectHistoryEntry,
-      onRemoveHistoryEntry: _removeConnectHistory,
-      onShowHistoryActions: _showHistoryActions,
+      serverName: _serviceTargetName,
     );
   }
 
-  Widget _buildAudioPage() {
-    return AudioPage(
-      isZh: _isZh,
-      eqEnabled: _eqEnabled,
-      eqLowDb: _eqLowDb,
-      eqMidDb: _eqMidDb,
-      eqHighDb: _eqHighDb,
-      onSetEq: _setEq,
-      onApplyEqPreset: _applyEqPreset,
-      loudnessNormalizationEnabled: _loudnessNormalizationEnabled,
-      onSetLoudnessNormalization: _setLoudnessNormalization,
-      micService: _micService,
-      micEnabled: _micEnabled,
-      serviceTargetHost: _serviceTargetHost,
-      reverseChannelPort: _reverseChannelPort,
-      onToggleMic: _toggleMicCapture,
-      showJitterGraph: _showJitterGraph,
-      jitterHistoryUs: _jitterHistoryUs,
-      jitterP50Us: _jitterP50Us,
-      jitterP95Us: _jitterP95Us,
-      jitterUnderrun: _jitterUnderrun,
-      wsConnected: _wsConnected,
-      playbackLabel: _playbackLabel(),
-      audioLog: _audioLog,
-      onStartPlayback: _startPlayback,
-      onStopPlayback: _stopPlayback,
-      playbackStopped: _playbackState == PlaybackState.stopped,
-      currentModeLabel: _audioModeLabel(_currentAudioMode),
-      underrunCount: _uiUnderrun,
-    );
-  }
-
-  Widget _buildSettingsPage(List<DiscoveryServer> servers) {
-    return SettingsPage(
+  Widget _buildMorePage(List<DiscoveryServer> servers) {
+    return MorePage(
       isZh: _isZh,
       connectMode: _connectMode == ConnectMode.discovered
           ? 0
@@ -2076,7 +1774,7 @@ class _MainShellState extends State<MainShell> {
       discoveryTimedOut: _discoveryTimedOut,
       manualHostController: _manualHostController,
       servers: servers
-          .map((s) => SettingsServerData(
+          .map((s) => MoreServerData(
                 serverId: s.serverId,
                 serverName: s.serverName,
                 host: s.host,
@@ -2101,6 +1799,22 @@ class _MainShellState extends State<MainShell> {
       },
       connectActionLabel: _connectActionLabel(),
       wsConnected: _wsConnected,
+      connectionStatusText: _wsConnected
+          ? '${tr('已连接', 'Connected')} ${_serviceTargetHost ?? ''}'
+          : tr('未连接', 'Disconnected'),
+      eqEnabled: _eqEnabled,
+      eqLowDb: _eqLowDb,
+      eqMidDb: _eqMidDb,
+      eqHighDb: _eqHighDb,
+      onSetEq: _setEq,
+      onApplyEqPreset: _applyEqPreset,
+      micService: _micService,
+      micEnabled: _micEnabled,
+      serviceTargetHost: _serviceTargetHost,
+      reverseChannelPort: _reverseChannelPort,
+      onToggleMic: _toggleMicCapture,
+      loudnessNormalizationEnabled: _loudnessNormalizationEnabled,
+      onSetLoudnessNormalization: _setLoudnessNormalization,
       onOpenPowerSavingGuide: _openPowerSavingGuide,
       onCheckUpdate: () => _checkForUpdate(
         silentDelayMs: 0,

@@ -3,310 +3,558 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LAN Audio Desktop Console</title>
+    <title>LAN Audio</title>
     <style>
       :root {
         --bg: #0c0f14;
-        --bg2: #131720;
         --panel: #1e2433;
-        --panel2: #252b3b;
-        --text: #f0f2f7;
-        --muted: #8892a4;
-        --faint: #4a5568;
         --line: rgba(255,255,255,0.09);
-        --line-strong: rgba(255,255,255,0.14);
         --accent: #00d4aa;
         --accent-dim: rgba(0,212,170,0.12);
-        --ok: #00d4aa;
-        --warn: #f59e0b;
         --error: #ef4444;
+        --warn: #f59e0b;
+        --text: #f0f2f7;
+        --muted: #8892a4;
+        --mono: "SF Mono", Consolas, "Courier New", monospace;
       }
-      * { box-sizing: border-box; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        margin: 0;
-        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-        background: radial-gradient(circle at top left, rgba(0,212,170,0.10), transparent 32%), var(--bg);
+        font-family: -apple-system, "SF Pro Display", "Segoe UI", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* App container */
+      .app { max-width: 480px; margin: 16px auto; padding: 0 14px; }
+
+      /* Header */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+      .title { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
+      .lang-toggle {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 6px;
+        font-size: 12px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .lang-toggle:focus { outline: 1px solid var(--accent); }
+
+      /* Update banner */
+      .update-banner {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        margin-bottom: 8px;
+        color: var(--accent);
+      }
+      .update-banner.visible { display: flex; }
+      .update-banner button {
+        margin-left: auto;
+        background: transparent;
+        border: 1px solid rgba(0,212,170,0.35);
+        border-radius: 5px;
+        color: var(--accent);
+        font-size: 11px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+
+      /* Status row */
+      .row-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .status-dot {
+        width: 9px; height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex-shrink: 0;
+      }
+      .status-dot.running { background: var(--accent); box-shadow: 0 0 8px rgba(0,212,170,0.6); }
+      .status-dot.error   { background: var(--error);  box-shadow: 0 0 8px rgba(239,68,68,0.6); }
+      .status-dot.busy    { background: var(--warn); }
+      .addr {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 2px;
+        word-break: break-all;
+      }
+
+      /* QR + connect inline row */
+      .qr-row {
+        display: none;
+        grid-template-columns: 80px 1fr;
+        gap: 12px;
+        align-items: center;
+        margin: 14px 0;
+      }
+      .qr-row.visible { display: grid; }
+      .qr-code {
+        width: 80px; height: 80px;
+        border-radius: 6px;
+        background: #0b111a;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+      .qr-code svg { width: 72px; height: 72px; }
+      .qr-info-title {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .copy-btn {
+        background: var(--accent-dim);
+        border: none;
+        border-radius: 5px;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 500;
+        padding: 4px 10px;
+        cursor: pointer;
+        transition: opacity 0.15s;
+      }
+      .copy-btn:hover { opacity: 0.85; }
+      .copy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      /* Primary action */
+      .primary {
+        width: 100%;
+        height: 40px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #07110f;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-top: 10px;
+        transition: opacity 0.15s, background 0.15s;
+      }
+      .primary:hover { opacity: 0.9; }
+      .primary:disabled { opacity: 0.4; cursor: not-allowed; }
+      .primary.stop { background: var(--error); color: #fff; }
+
+      .muted { color: var(--muted); font-size: 12px; }
+      .error-text { color: var(--error); font-size: 12px; margin-top: 8px; }
+
+      .guidance-panel {
+        margin-top: 6px;
+        padding: 6px 8px;
+        border: 1px solid rgba(14,165,233,0.2);
+        border-radius: 6px;
+        background: rgba(14,165,233,0.05);
+        font-size: 11px;
+      }
+      .guidance-panel summary { cursor: pointer; font-weight: 500; color: var(--text); }
+      .guidance-panel pre {
+        margin: 4px 0 0;
+        white-space: pre-wrap;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+        font-family: var(--mono);
+      }
+
+      hr.divider {
+        border: 0;
+        border-top: 1px solid rgba(255,255,255,0.09);
+        margin: 14px 0;
+      }
+
+      /* Setting fields */
+      .field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0;
+        font-size: 13px;
+      }
+      .field select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 13px;
+        min-width: 140px;
+        cursor: pointer;
+      }
+      .field select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+      .field select:disabled { opacity: 0.5; cursor: not-allowed; }
+      .field-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .field-toggle input[type="checkbox"] {
+        accent-color: var(--accent);
+        width: 14px; height: 14px;
+      }
+
+      /* Debug section */
+      details.debug { margin-top: 8px; }
+      details.debug summary {
+        padding: 8px 0;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--muted);
+        user-select: none;
+        list-style: none;
+      }
+      details.debug summary::-webkit-details-marker { display: none; }
+      .debug-content { padding: 8px 0; font-size: 12px; }
+
+      .debug-meta {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.6;
+        font-family: var(--mono);
+      }
+      .debug-meta div { word-break: break-all; }
+
+      .debug-groups {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .group-title {
+        font-size: 9px;
+        color: var(--muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+      }
+      .kv {
+        font-size: 10px;
+        line-height: 1.6;
+        font-family: var(--mono);
         color: var(--text);
       }
-      .app { max-width: 720px; margin: 24px auto; padding: 0 16px 24px; display: flex; flex-direction: column; gap: 14px; }
-      .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-      .title { margin: 0; font-size: 22px; font-weight: 700; }
-      .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
-      .lang-toggle { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 6px 10px; color: var(--text); font-size: 13px; }
-      .card { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; padding: 20px; box-shadow: 0 12px 36px rgba(0,0,0,0.20); }
-      .card--hero { padding: 24px; }
-      .status-line { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; margin-bottom: 6px; }
-      .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #6b7a99; box-shadow: 0 0 12px currentColor; flex-shrink: 0; }
-      .status-dot.running { background: var(--ok); }
-      .status-dot.error { background: var(--error); }
-      .status-dot.busy { background: var(--warn); }
-      .status-sub { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
-      .main-control { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-      .primary { border: 0; border-radius: 8px; font-size: 15px; font-weight: 700; padding: 12px 28px; background: var(--accent); color: #07110f; cursor: pointer; transition: opacity 0.15s; }
-      .primary.stop { background: var(--error); color: #fff; }
-      .primary:disabled { opacity: 0.5; cursor: not-allowed; }
-      .hint { color: var(--muted); font-size: 13px; }
-      .connection-panel { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-      .qr-code { width: 110px; height: 110px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #0b111a; overflow: hidden; }
-      .qr-code svg { width: 96px; height: 96px; }
-      .conn-info { display: flex; flex-direction: column; gap: 4px; }
-      .conn-addr { font-size: 14px; font-weight: 600; word-break: break-all; }
-      .conn-uri { font-size: 12px; color: var(--muted); font-family: Consolas, monospace; word-break: break-all; }
-      .health-strip { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
-      .health-item { color: var(--text); }
-      .health-label { color: var(--muted); margin-right: 4px; font-size: 12px; }
-      .error-text { margin-top: 8px; color: var(--error); font-size: 13px; }
-      .guidance-panel { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(14,165,233,0.24); border-radius: 8px; background: rgba(14,165,233,0.08); font-size: 13px; }
-      .guidance-panel summary { cursor: pointer; font-weight: 700; }
-      .guidance-panel pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--muted); font-family: Consolas, monospace; font-size: 12px; line-height: 1.4; }
-      .card-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
-      .card-header h2 { margin: 0; font-size: 14px; font-weight: 700; }
-      .card-header .chevron { color: var(--muted); font-size: 12px; transition: transform 0.2s; }
-      .card-header .chevron.open { transform: rotate(90deg); }
-      .card-body { margin-top: 12px; }
-      .card-body.collapsed { display: none; }
-      .source-picker { display: flex; gap: 8px; margin-bottom: 10px; }
-      .source-btn { border: 1px solid var(--line); background: var(--bg2); color: var(--text); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
-      .source-btn.active { border-color: rgba(0,212,170,0.40); background: var(--accent-dim); color: var(--accent); }
-      .source-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .toggle { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text); font-size: 13px; }
-      .device-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 4px; margin-top: 10px; }
-      .copy-btn { border: 1px solid var(--line); border-radius: 6px; background: var(--bg2); color: var(--text); padding: 4px 10px; font-size: 12px; cursor: pointer; }
-      .copy-btn:hover { border-color: var(--line-strong); }
-      .copy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .row { display: grid; grid-template-columns: 100px 1fr; gap: 6px; align-items: baseline; font-size: 13px; margin-bottom: 4px; }
-      .row .label { color: var(--muted); }
-      .row .value { word-break: break-word; }
-      .address-actions { display: flex; align-items: center; gap: 8px; }
-      .address-value { word-break: break-word; }
-      .device-current { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-      .device-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-      .device-recent li { font-size: 13px; }
-      .usb-panel { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-      .usb-actions { display: flex; gap: 8px; margin-bottom: 6px; }
-      .usb-device-list { display: grid; gap: 6px; }
-      .usb-device { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
-      .usb-meta { color: var(--muted); }
-      details.footer-section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
-      details.footer-section summary { padding: 12px 0; cursor: pointer; font-weight: 700; font-size: 13px; color: var(--muted); }
-      .debug-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
-      .group-title { font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 700; }
-      .kv { font-size: 11px; line-height: 1.5; }
-      .kv div { margin-bottom: 2px; }
-      .log-pane { max-height: 200px; overflow: auto; border-top: 1px solid var(--line); padding: 8px 0 10px; font-family: Consolas, monospace; font-size: 11px; line-height: 1.5; }
-      .log-line { white-space: pre-wrap; margin-bottom: 3px; }
-      @media (max-width: 600px) {
-        .connection-panel { grid-template-columns: 1fr; }
-        .qr-code { margin: 0 auto; }
-        .debug-groups { grid-template-columns: 1fr; }
-        .row { grid-template-columns: 1fr; }
+      .kv div { opacity: 0.85; }
+
+      .debug-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
       }
+      .debug-actions button {
+        background: var(--accent-dim);
+        border: none;
+        border-radius: 5px;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 500;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      .debug-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      .health-strip { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+      .health-label { color: var(--muted); margin-right: 4px; }
+
+      /* USB block inside debug */
+      .usb-block {
+        margin-top: 10px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      .usb-block-title {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .usb-block-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+      .usb-block-actions button {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--text);
+        font-size: 11px;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      .usb-block-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .usb-row { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+      .usb-row strong { color: var(--text); font-weight: 500; }
+      .usb-device-list { display: grid; gap: 4px; margin-top: 6px; }
+      .usb-device { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+      .usb-meta { color: var(--muted); }
+
+      /* Logs */
+      .log-block {
+        margin-top: 10px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      .log-title {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .log-pane {
+        max-height: 120px;
+        overflow: auto;
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      .log-line { white-space: pre-wrap; margin-bottom: 2px; }
+
+      /* Hidden compatibility nodes (kept for legacy JS) */
+      .legacy-hidden { display: none !important; }
     </style>
   </head>
   <body>
     <div class="app">
       <!-- Header -->
-      <header class="header">
-        <div>
-          <h1 class="title" id="title"></h1>
-          <div class="sub" id="subtitle"></div>
-        </div>
+      <div class="header">
+        <div class="title" id="title">LAN Audio</div>
         <select class="lang-toggle" id="langSelect">
           <option value="zh">中文</option>
           <option value="en">English</option>
         </select>
-      </header>
+      </div>
 
-      <!-- Hero Status Card -->
-      <section class="card card--hero">
-        <div id="updateBanner" class="status-sub" style="display:none; margin-bottom: 8px;">
-          <span id="updateBannerText"></span>
-          <button class="copy-btn" id="updateBannerBtn" type="button" style="margin-left: 8px;"></button>
+      <!-- Update banner -->
+      <div class="update-banner" id="updateBanner">
+        <span id="updateBannerText"></span>
+        <button id="updateBannerBtn" type="button"></button>
+      </div>
+
+      <!-- Status -->
+      <div class="row-status">
+        <span id="statusDot" class="status-dot"></span>
+        <span id="statusHeadline"></span>
+      </div>
+      <div class="addr" id="addrValue"></div>
+
+      <!-- QR + connection (only when running) -->
+      <div class="qr-row" id="qrPanel">
+        <div class="qr-code" id="qrCode"></div>
+        <div>
+          <div class="qr-info-title" id="qrTitle"></div>
+          <button class="copy-btn" id="copyAddrBtn" type="button" style="margin-top:6px;"></button>
         </div>
-        <div class="status-line">
-          <span id="statusDot" class="status-dot"></span>
-          <span id="statusHeadline"></span>
-        </div>
-        <div class="status-sub" id="statusSubline"></div>
-        <div class="main-control">
-          <button id="primaryActionBtn" class="primary"></button>
-          <div class="hint" id="nextStep"></div>
-        </div>
-        <div class="connection-panel" id="qrPanel" style="display:none;">
-          <div class="qr-code" id="qrCode"></div>
-          <div class="conn-info">
-            <div class="device-subtitle" id="qrTitle"></div>
-            <div class="conn-addr" id="addrValue"></div>
-            <div style="display:flex;gap:6px;align-items:center;">
-              <button class="copy-btn" id="copyAddrBtn" type="button"></button>
+      </div>
+
+      <!-- Primary action -->
+      <button class="primary" id="primaryActionBtn"></button>
+      <div class="muted" id="nextStep" style="margin-top:6px; text-align:center;"></div>
+
+      <!-- Error + guidance -->
+      <div class="error-text" id="errorText"></div>
+      <details class="guidance-panel" id="firewallGuide" style="display:none;">
+        <summary id="firewallGuideTitle"></summary>
+        <pre id="firewallGuideBody"></pre>
+      </details>
+
+      <hr class="divider" />
+
+      <!-- Settings -->
+      <div class="field">
+        <span id="audioSourceLabel">音频源</span>
+        <select id="audioSourceSelect">
+          <option value="windows_loopback" data-i18n="loopback">系统音频</option>
+          <option value="synthetic" data-i18n="synthetic">测试音</option>
+        </select>
+      </div>
+      <div class="field">
+        <span id="codecLabelTop">编码</span>
+        <select id="codecSelect">
+          <option value="opus" data-i18n="opusExperimental">Opus</option>
+          <option value="pcm16" data-i18n="pcm16">PCM16</option>
+        </select>
+      </div>
+      <label class="field-toggle">
+        <input type="checkbox" id="fallbackToggle" />
+        <span id="fallbackLabel"></span>
+      </label>
+
+      <hr class="divider" />
+
+      <!-- Debug (collapses everything technical) -->
+      <details class="debug" id="debugDetails">
+        <summary id="debugSummary">▸ 调试信息</summary>
+        <div class="debug-content">
+          <!-- Health strip -->
+          <div class="health-strip" id="healthStrip">
+            <span class="health-label" id="healthStreamLabel"></span><span id="healthStreamValue"></span>
+            · <span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span>
+          </div>
+
+          <!-- Technical readouts (data plane / protocol / version / session / mode / codec) -->
+          <div class="debug-meta">
+            <div><span id="dataPlaneLabel">数据面</span>: <span id="dataPlaneValue"></span></div>
+            <div><span id="codecLabel">Codec</span>: <span id="codecValue"></span></div>
+            <div><span id="protocolLabel">协议</span>: <span id="protocolValue"></span></div>
+            <div><span id="versionLabel">版本</span>: <span id="versionValue"></span></div>
+            <div><span id="sessionLabel">会话</span>: <span id="sessionValue"></span></div>
+            <div><span id="modeLabel">模式</span>: <span id="modeValue"></span></div>
+          </div>
+
+          <!-- Capture metrics + state -->
+          <div class="debug-groups">
+            <div>
+              <div class="group-title" id="groupTx"></div>
+              <div class="kv" id="debugTx"></div>
             </div>
-            <div class="conn-uri" id="qrUriValue"></div>
-            <div class="status-sub" id="qrSubtitle"></div>
+            <div>
+              <div class="group-title" id="groupCapture"></div>
+              <div class="kv" id="debugCapture"></div>
+            </div>
+            <div>
+              <div class="group-title" id="groupStatus"></div>
+              <div class="kv" id="debugState"></div>
+            </div>
           </div>
-        </div>
-        <div class="health-strip" id="healthStrip">
-          <div class="health-item"><span class="health-label" id="healthStreamLabel"></span><span id="healthStreamValue"></span></div>
-          <div class="health-item"><span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span></div>
-          <div class="health-item"><span class="health-label" id="healthSourceLabel"></span><span id="healthSourceValue"></span></div>
-        </div>
-        <div class="error-text" id="errorText"></div>
-        <details class="guidance-panel" id="firewallGuide" style="display:none;">
-          <summary id="firewallGuideTitle"></summary>
-          <pre id="firewallGuideBody"></pre>
-        </details>
-      </section>
 
-      <!-- Settings Card (collapsible, default collapsed) -->
-      <section class="card" id="settingsCard">
-        <div class="card-header" id="settingsToggle">
-          <h2 id="sourceTitle"></h2>
-          <span class="chevron" id="settingsChevron">▸</span>
-        </div>
-        <div class="card-body collapsed" id="settingsBody">
-          <div class="source-picker">
-            <button id="sourceLoopback" class="source-btn"></button>
-            <button id="sourceSynthetic" class="source-btn"></button>
+          <!-- Diagnostics actions -->
+          <div class="debug-actions">
+            <button id="safeModeBtn" type="button"></button>
+            <button id="exportDiagBtn" type="button"></button>
           </div>
-          <div class="device-subtitle" id="codecTitle"></div>
-          <div class="source-picker">
-            <button id="codecPcm16" class="source-btn"></button>
-            <button id="codecOpus" class="source-btn"></button>
-          </div>
-          <div class="device-subtitle" id="dataPlaneTitle"></div>
-          <div class="source-picker">
-            <button id="dataPlaneLegacy" class="source-btn"></button>
-            <button id="dataPlaneV2Header" class="source-btn"></button>
-          </div>
-          <label class="toggle"><input type="checkbox" id="fallbackToggle" /><span id="fallbackLabel"></span></label>
-          <label class="toggle"><button class="copy-btn" id="safeModeBtn" type="button"></button><span id="safeModeHint"></span></label>
-          <label class="toggle"><input type="checkbox" id="dumpToggle" /><span id="dumpLabel"></span></label>
-          <div style="margin-top:10px;">
-            <button class="copy-btn" id="exportDiagBtn" type="button"></button>
-          </div>
-        </div>
-      </section>
+          <label class="field-toggle">
+            <input type="checkbox" id="dumpToggle" />
+            <span id="dumpLabel"></span>
+          </label>
 
-      <!-- Device & Session Card (only when running) -->
-      <section class="card" id="deviceCard" style="display:none;">
-        <h2 class="card-header" style="cursor:default;"><span id="deviceTitle"></span></h2>
-        <div class="row"><span class="label" id="sessionLabel"></span><span class="value" id="sessionValue"></span></div>
-        <div class="row"><span class="label" id="modeLabel"></span><span class="value" id="modeValue"></span></div>
-        <div class="row"><span class="label" id="codecLabel"></span><span class="value" id="codecValue"></span></div>
-        <div class="row"><span class="label" id="protocolLabel"></span><span class="value" id="protocolValue"></span></div>
-        <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
-        <div class="row"><span class="label" id="connectionTipLabel"></span><span class="value" id="connectionTipValue"></span></div>
-        <div class="device-subtitle" id="currentDeviceLabel"></div>
-        <div class="device-current" id="currentDeviceValue"></div>
-        <div class="device-subtitle" id="recentDeviceLabel"></div>
-        <ul class="device-recent" id="deviceRecentList"></ul>
-        <div class="usb-panel" id="usbPanel">
-          <div class="device-subtitle" id="usbTitle"></div>
-          <div class="usb-actions">
-            <button class="copy-btn" id="usbRefreshBtn" type="button"></button>
-            <button class="copy-btn" id="usbDisableBtn" type="button"></button>
+          <!-- USB Panel -->
+          <div class="usb-block" id="usbPanel" style="display:none;">
+            <div class="usb-block-title" id="usbTitle"></div>
+            <div class="usb-block-actions">
+              <button id="usbRefreshBtn" type="button"></button>
+              <button id="usbDisableBtn" type="button"></button>
+            </div>
+            <div class="usb-row"><strong id="usbStateLabel"></strong>: <span id="usbStateValue"></span></div>
+            <div class="usb-row"><strong id="usbForwardLabel"></strong>: <span id="usbForwardValue"></span></div>
+            <div class="usb-device-list" id="usbDeviceList"></div>
           </div>
-          <div class="row"><span class="label" id="usbStateLabel"></span><span class="value" id="usbStateValue"></span></div>
-          <div class="row"><span class="label" id="usbForwardLabel"></span><span class="value" id="usbForwardValue"></span></div>
-          <div class="usb-device-list" id="usbDeviceList"></div>
-        </div>
-      </section>
 
-      <!-- Hidden fields for renderText compatibility -->
-      <span id="addrLabel" style="display:none;"></span>
-      <span id="sourceLabel" style="display:none;"></span>
-      <span id="dataPlaneLabel" style="display:none;"></span>
-      <span id="dataPlaneValue" style="display:none;"></span>
-      <span id="sourceValue" style="display:none;"></span>
-      <span id="strategyLabel" style="display:none;"></span>
-      <span id="strategyValue" style="display:none;"></span>
-      <span id="grayLabel" style="display:none;"></span>
-      <span id="grayValue" style="display:none;"></span>
-      <span id="healthTitle" style="display:none;"></span>
-      <span id="advancedSummary" style="display:none;"></span>
-      <span id="advancedPathLabel" style="display:none;"></span>
-      <span id="advancedDataPathValue" style="display:none;"></span>
-      <span id="advancedRollbackLabel" style="display:none;"></span>
-      <span id="advancedExportLabel" style="display:none;"></span>
-      <button id="advancedSafeModeBtn" style="display:none;" type="button"></button>
-
-      <!-- Footer: Debug + Logs -->
-      <details class="footer-section">
-        <summary id="debugSummary"></summary>
-        <div class="debug-groups">
-          <div><div class="group-title" id="groupTx"></div><div class="kv" id="debugTx"></div></div>
-          <div><div class="group-title" id="groupCapture"></div><div class="kv" id="debugCapture"></div></div>
-          <div><div class="group-title" id="groupStatus"></div><div class="kv" id="debugState"></div></div>
+          <!-- Logs -->
+          <div class="log-block">
+            <div class="log-title" id="logSummaryLabel">运行日志</div>
+            <div class="log-pane" id="logPane"></div>
+          </div>
         </div>
       </details>
-      <details class="footer-section">
-        <summary id="logSummary"></summary>
-        <div class="log-pane" id="logPane"></div>
-      </details>
+
+      <!-- Hidden compatibility shims for any JS still referencing old IDs -->
+      <div class="legacy-hidden" aria-hidden="true">
+        <span id="subtitle"></span>
+        <span id="statusSubline"></span>
+        <span id="qrSubtitle"></span>
+        <span id="qrUriValue"></span>
+        <span id="healthSourceLabel"></span>
+        <span id="healthSourceValue"></span>
+        <span id="healthTitle"></span>
+        <span id="sourceLabel"></span>
+        <span id="sourceValue"></span>
+        <span id="strategyLabel"></span>
+        <span id="strategyValue"></span>
+        <span id="grayLabel"></span>
+        <span id="grayValue"></span>
+        <span id="connectionTipLabel"></span>
+        <span id="connectionTipValue"></span>
+        <span id="currentDeviceLabel"></span>
+        <span id="currentDeviceValue"></span>
+        <span id="recentDeviceLabel"></span>
+        <ul id="deviceRecentList"></ul>
+        <span id="deviceTitle"></span>
+        <span id="sourceTitle"></span>
+        <span id="dataPlaneTitle"></span>
+        <span id="codecTitle"></span>
+        <span id="advancedSummary"></span>
+        <span id="advancedPathLabel"></span>
+        <span id="advancedDataPathValue"></span>
+        <span id="advancedRollbackLabel"></span>
+        <span id="advancedExportLabel"></span>
+        <span id="logSummary"></span>
+        <button id="advancedSafeModeBtn" type="button"></button>
+        <span id="addrLabel"></span>
+        <span id="codecSelectLabel"></span>
+        <span id="safeModeHint"></span>
+        <button id="sourceLoopback" type="button"></button>
+        <button id="sourceSynthetic" type="button"></button>
+        <button id="dataPlaneLegacy" type="button"></button>
+        <button id="dataPlaneV2Header" type="button"></button>
+        <button id="codecPcm16" type="button"></button>
+        <button id="codecOpus" type="button"></button>
+        <span id="deviceCard"></span>
+        <span id="settingsToggle"></span>
+        <span id="settingsBody"></span>
+        <span id="settingsChevron"></span>
+      </div>
     </div>
 
     <script>
       const I18N = {
         zh: {
-          title: 'LAN Audio 音频推流控制台',
+          title: 'LAN Audio',
           subtitle: 'Windows 系统音频推送到 Android 手机',
-          sourceTitle: '音频源设置',
-          dataPlaneTitle: '数据面',
-          codecTitle: 'Codec（推荐路径）',
-          deviceTitle: '设备 / 会话',
+          audioSourceLabel: '音频源',
+          codecLabelTop: '编码',
           loopback: '系统音频',
           synthetic: '测试音',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
           opusExperimental: 'Opus',
-          fallback: '采集失败自动回退到测试音',
+          fallback: '采集失败回退测试音',
           safeMode: '安全模式',
           safeModeEnable: '切回安全模式',
           safeModeDisable: '恢复推荐路径',
-          safeModeHint: '回滚到 legacy_las1 + pcm16，用于排障',
-          rollbackConfirm: '切换到回滚模式将使用 PCM16 编码，延迟更高但兼容性更好。\n确认切换？',
-          advancedSummary: '高级选项',
-          advancedPath: '当前数据面路径',
-          advancedRollback: '回滚路径',
-          advancedExport: '诊断报告',
+          safeModeHint: '回滚到 legacy_las1 + pcm16,用于排障',
+          rollbackConfirm: '切换到回滚模式将使用 PCM16 编码,延迟更高但兼容性更好。\n确认切换?',
           qrTitle: '扫码连接',
           qrSubtitle: 'Android 端扫码后会自动填入并连接。',
-          dump: '导出 capture wav（调试）',
+          dump: '导出 capture wav(调试)',
           exportDiag: '导出诊断包',
-          exportDiagDone: '诊断包已导出：{path}',
+          exportDiagDone: '诊断包已导出: {path}',
           updateBannerText: '发现新版本 v{version}',
           updateBannerBtn: '前往下载',
           address: '连接地址',
-          copy: '复制',
-          copied: '已复制地址',
-          session: '会话状态',
-          source: '当前音频源',
+          copy: '复制地址',
+          copied: '已复制',
+          session: '会话',
+          source: '音频源',
           dataPlane: '数据面',
-          mode: '当前模式',
-          strategy: '模式策略',
+          mode: '模式',
+          strategy: '策略',
           codec: 'Codec',
-          grayMode: '灰度状态',
+          grayMode: '灰度',
           recommendedConnection: '推荐连接',
           protocol: '协议',
           version: '版本',
-          healthTitle: '运行健康摘要',
-          healthStream: '推流状态',
-          healthDevices: '设备',
-          healthSource: '音频源',
-          grayOn: '推荐路径',
-          grayOff: '回滚路径',
-          codecFallback: 'Opus 需要 V2 Header；当前有效 Codec 为 PCM16',
-          codecExperimentalActive: 'Opus 稳定链路已启用',
           healthOk: '正常',
           healthNotStarted: '未启动',
           healthError: '异常',
-          noDevice: '暂无设备连接',
-          noRecentDevice: '暂无最近设备',
-          currentDevice: '当前连接设备',
-          recentDevice: '最近设备',
-          start: '启动服务',
+          noDevice: '无设备',
+          start: '启动推流',
           stop: '停止推流',
-          busy: '处理中...',
+          busy: '处理中…',
           state_not_started: '未启动',
           state_starting: '启动中',
           state_running: '运行中',
@@ -328,73 +576,62 @@
           source_synthetic: '测试音',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
-          headlineNoDevice: '{state} · 未连接设备',
-          headlineWithDevice: '{state} · 已连接 {count} 台设备（{ip}）',
-          subRunning: '服务在线，可在手机端发现并连接。',
-          subStopped: '服务未启动，手机暂时无法连接。',
-          subError: '服务异常，请检查日志后重新启动。',
-          nextStart: '下一步：点击"启动服务"，然后在手机端连接本机地址。',
-          nextStop: '当前正在提供推流服务，可随时停止。',
-          debugSummary: '调试信息（默认折叠）',
-          logSummary: '运行日志（默认折叠）',
-          groupTx: '发送情况',
-          groupCapture: '音频采集',
-          groupStatus: '运行状态',
-          sentPackets: '已发送包数',
-          sentBytes: '已发送字节',
-          activeSessions: '活跃会话数',
-          captureState: '采集状态',
-          captureFrames: '采集帧数',
-          captureErrors: '采集错误数',
-          captureUnderruns: '采集欠载',
-          bufferedMs: '缓冲毫秒',
-          latePackets: '迟到包',
-          droppedPackets: '丢弃包',
-          rttMs: 'RTT(ms)',
-          reconnectCount: '重连次数',
-          decodeErrors: '解码错误',
-          sinkWriteGap: 'Sink 写入间隔 P95',
-          capturePeak: '峰值',
-          captureRms: '均方根',
-          serviceStatus: '服务状态',
-          sessionStatus: '会话状态',
+          headlineNoDevice: '{state} · 无设备',
+          headlineWithDevice: '{state} · {count} 台设备',
+          debugSummary: '▸ 调试信息',
+          debugMetaDataPlane: '数据面',
+          debugMetaCodec: 'Codec',
+          debugMetaProtocol: '协议',
+          debugMetaVersion: '版本',
+          debugMetaSession: '会话',
+          debugMetaMode: '模式',
+          healthStreamLabel: '推流',
+          healthDevicesLabel: '设备',
+          logSummaryLabel: '运行日志',
+          groupTx: '发送',
+          groupCapture: '采集',
+          groupStatus: '状态',
+          captureUnderruns: '欠载',
+          bufferedMs: '缓冲ms',
+          latePackets: '迟到',
+          droppedPackets: '丢弃',
+          rttMs: 'RTT',
+          reconnectCount: '重连',
+          decodeErrors: '解码错',
+          sinkWriteGap: 'Sink P95',
+          serviceStatus: '服务',
+          sessionStatus: '会话',
           audioSource: '音频源',
           captureDevice: '采集设备',
           sampleRate: '采样率',
           channels: '声道',
-          usbTitle: 'USB 模式（adb）',
+          usbTitle: 'USB 模式(adb)',
           usbRefresh: '刷新设备',
           usbDisable: '停用 USB',
           usbEnable: '启用 USB',
           usbState: 'USB 状态',
           usbForward: 'Forward 端口',
           usbStateOn: 'USB 已连接 · {serial}',
-          usbStateOff: '未启用（Wi-Fi）',
+          usbStateOff: '未启用(Wi-Fi)',
           usbNoDevices: '未检测到 adb 在线设备'
         },
         en: {
-          title: 'LAN Audio Streaming Console',
+          title: 'LAN Audio',
           subtitle: 'Stream Windows system audio to Android devices',
-          sourceTitle: 'Audio Source',
-          dataPlaneTitle: 'Data Plane',
-          codecTitle: 'Codec (Recommended Path)',
-          deviceTitle: 'Devices / Session',
+          audioSourceLabel: 'Audio Source',
+          codecLabelTop: 'Codec',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
           opusExperimental: 'Opus',
-          fallback: 'Fallback to test tone when capture fails',
+          fallback: 'Fallback to test tone on capture failure',
           safeMode: 'Safe mode',
           safeModeEnable: 'Switch to safe mode',
           safeModeDisable: 'Restore recommended path',
           safeModeHint: 'Rollback to legacy_las1 + pcm16 for troubleshooting',
           rollbackConfirm: 'Switching to rollback mode uses PCM16 encoding. Latency is higher, but compatibility is better.\nContinue?',
-          advancedSummary: 'Advanced Options',
-          advancedPath: 'Current data-plane path',
-          advancedRollback: 'Rollback path',
-          advancedExport: 'Diagnostics report',
           qrTitle: 'Scan to connect',
           qrSubtitle: 'Scan from Android to fill and connect automatically.',
           dump: 'Export capture wav (debug)',
@@ -403,36 +640,25 @@
           updateBannerText: 'New version v{version} is available',
           updateBannerBtn: 'Open release page',
           address: 'Connect Address',
-          copy: 'Copy',
-          copied: 'Address copied',
+          copy: 'Copy address',
+          copied: 'Copied',
           session: 'Session',
-          source: 'Audio Source',
+          source: 'Source',
           dataPlane: 'Data Plane',
-          mode: 'Current Mode',
-          strategy: 'Mode Strategy',
+          mode: 'Mode',
+          strategy: 'Strategy',
           codec: 'Codec',
-          grayMode: 'Gray Status',
-          recommendedConnection: 'Recommended Link',
+          grayMode: 'Gray',
+          recommendedConnection: 'Recommended',
           protocol: 'Protocol',
           version: 'Version',
-          healthTitle: 'Runtime Health',
-          healthStream: 'Streaming',
-          healthDevices: 'Devices',
-          healthSource: 'Source',
-          grayOn: 'Recommended path',
-          grayOff: 'Rollback path',
-          codecFallback: 'Opus requires V2 Header; effective codec is PCM16',
-          codecExperimentalActive: 'Opus stable path is active',
           healthOk: 'Healthy',
           healthNotStarted: 'Not started',
           healthError: 'Abnormal',
-          noDevice: 'No device connected',
-          noRecentDevice: 'No recent devices',
-          currentDevice: 'Current Device',
-          recentDevice: 'Recent Devices',
-          start: 'Start Service',
+          noDevice: 'No device',
+          start: 'Start Streaming',
           stop: 'Stop Streaming',
-          busy: 'Processing...',
+          busy: 'Processing…',
           state_not_started: 'Not Started',
           state_starting: 'Starting',
           state_running: 'Running',
@@ -445,7 +671,7 @@
           session_reconfiguring: 'Reconfiguring',
           session_recovering: 'Recovering',
           session_closed: 'Closed',
-          session_waiting_for_device: 'Waiting for mobile device',
+          session_waiting_for_device: 'Waiting for device',
           session_starting: 'Service starting',
           session_stopping: 'Service stopping',
           session_error: 'Service error',
@@ -454,49 +680,44 @@
           source_synthetic: 'Test Tone',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
-          headlineNoDevice: '{state} · No device connected',
-          headlineWithDevice: '{state} · {count} device(s) connected ({ip})',
-          subRunning: 'Service is online. Discover and connect from the phone.',
-          subStopped: 'Service is offline. Phone cannot connect yet.',
-          subError: 'Service has an error. Check logs and restart.',
-          nextStart: 'Next: click Start Service, then connect from your phone.',
-          nextStop: 'Streaming service is available. You can stop it anytime.',
-          debugSummary: 'Debug Metrics (collapsed by default)',
-          logSummary: 'Runtime Logs (collapsed by default)',
-          groupTx: 'Sending',
+          headlineNoDevice: '{state} · no device',
+          headlineWithDevice: '{state} · {count} device(s)',
+          debugSummary: '▸ Debug Info',
+          debugMetaDataPlane: 'Data Plane',
+          debugMetaCodec: 'Codec',
+          debugMetaProtocol: 'Protocol',
+          debugMetaVersion: 'Version',
+          debugMetaSession: 'Session',
+          debugMetaMode: 'Mode',
+          healthStreamLabel: 'Stream',
+          healthDevicesLabel: 'Devices',
+          logSummaryLabel: 'Runtime logs',
+          groupTx: 'Send',
           groupCapture: 'Capture',
           groupStatus: 'State',
-          sentPackets: 'Sent packets',
-          sentBytes: 'Sent bytes',
-          activeSessions: 'Active sessions',
-          captureState: 'Capture state',
-          captureFrames: 'Captured frames',
-          captureErrors: 'Capture errors',
-          captureUnderruns: 'Capture underruns',
-          bufferedMs: 'Buffered ms',
-          latePackets: 'Late packets',
-          droppedPackets: 'Dropped packets',
-          rttMs: 'RTT (ms)',
-          reconnectCount: 'Reconnect count',
-          decodeErrors: 'Decode errors',
-          sinkWriteGap: 'Sink write gap P95',
-          capturePeak: 'Peak',
-          captureRms: 'RMS',
-          serviceStatus: 'Service status',
-          sessionStatus: 'Session status',
-          audioSource: 'Audio source',
-          captureDevice: 'Capture device',
-          sampleRate: 'Sample rate',
-          channels: 'Channels',
-          usbTitle: 'USB Mode (adb)',
-          usbRefresh: 'Refresh Devices',
+          captureUnderruns: 'Underrun',
+          bufferedMs: 'Buf ms',
+          latePackets: 'Late',
+          droppedPackets: 'Drop',
+          rttMs: 'RTT',
+          reconnectCount: 'Reconn',
+          decodeErrors: 'Decode err',
+          sinkWriteGap: 'Sink P95',
+          serviceStatus: 'Service',
+          sessionStatus: 'Session',
+          audioSource: 'Source',
+          captureDevice: 'Device',
+          sampleRate: 'Rate',
+          channels: 'Ch',
+          usbTitle: 'USB mode (adb)',
+          usbRefresh: 'Refresh',
           usbDisable: 'Disable USB',
           usbEnable: 'Enable USB',
-          usbState: 'USB Status',
-          usbForward: 'Forward Ports',
-          usbStateOn: 'USB connected · {serial}',
+          usbState: 'USB',
+          usbForward: 'Forward',
+          usbStateOn: 'USB · {serial}',
           usbStateOff: 'Disabled (Wi-Fi)',
-          usbNoDevices: 'No online adb devices detected'
+          usbNoDevices: 'No online adb devices'
         }
       };
 
@@ -564,7 +785,7 @@
           'Windows 防火墙放行步骤 / Windows Firewall steps:\n' +
           '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n' +
           '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n' +
-          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991';
+          '3. 端口 39991, TCP+UDP, 允许连接 / Allow TCP+UDP port 39991';
         if (message.includes('connection refused') || message.includes('econnrefused') || message.includes('refused')) {
           return {
             title: state.lang === 'zh'
@@ -576,7 +797,7 @@
         if (message.includes('timeout') || message.includes('timed out') || message.includes('etimedout')) {
           return {
             title: state.lang === 'zh'
-              ? '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991'
+              ? '设备不在同一局域网, 或 PC 防火墙未放行 UDP/TCP 39991'
               : 'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
             body: firewallSteps,
           };
@@ -584,7 +805,7 @@
         if (message.includes('auth') || message.includes('version') || message.includes('incompatible')) {
           return {
             title: state.lang === 'zh'
-              ? '版本不兼容，请检查双端版本号'
+              ? '版本不兼容, 请检查双端版本号'
               : 'Version mismatch. Check both app versions',
             body:
               '确认 Windows 与 Android 都是同一发布版本。\n' +
@@ -630,11 +851,6 @@
         return `[${hh}:${mm}:${ss}] ${m[2]}`;
       }
 
-      function extractIp(entry) {
-        const m = entry && entry.match(/\(([^)]+)\)$/);
-        return m ? m[1] : '-';
-      }
-
       function getMainAction(snapshot) {
         if (!snapshot) return { action: null, label: t('busy'), stop: false };
         if (state.busy || snapshot.service_status === 'starting' || snapshot.service_status === 'stopping') {
@@ -649,19 +865,9 @@
       function buildHeadline(snapshot) {
         const stateText = t(`state_${snapshot.service_status}`);
         if (snapshot.connected_devices > 0) {
-          const ip = extractIp(snapshot.recent_clients?.[0] || '');
-          return trf('headlineWithDevice', { state: stateText, count: snapshot.connected_devices, ip });
+          return trf('headlineWithDevice', { state: stateText, count: snapshot.connected_devices });
         }
         return trf('headlineNoDevice', { state: stateText });
-      }
-
-      function buildSubline(snapshot) {
-        if (snapshot.transport_mode === 'usb' && snapshot.usb_serial) {
-          return trf('usbStateOn', { serial: snapshot.usb_serial });
-        }
-        if (snapshot.service_status === 'running') return t('subRunning');
-        if (snapshot.service_status === 'error') return t('subError');
-        return t('subStopped');
       }
 
       async function refreshAdbDevices(force = false) {
@@ -731,69 +937,50 @@
         });
       }
 
-      function streamHealth(snapshot) {
-        const runtime = runtimeSnapshot(snapshot);
-        if (snapshot.service_status === 'error') return t('healthError');
-        if (snapshot.service_status !== 'running') return t('healthNotStarted');
-        if (runtime.state && runtime.state !== 'streaming' && runtime.state !== 'disconnected') {
-          return runtime.state;
-        }
-        return t('healthOk');
-      }
-
       function renderText() {
         document.documentElement.lang = state.lang === 'zh' ? 'zh-CN' : 'en';
         document.getElementById('title').textContent = t('title');
-        document.getElementById('subtitle').textContent = t('subtitle');
-        document.getElementById('sourceTitle').textContent = t('sourceTitle');
-        document.getElementById('dataPlaneTitle').textContent = t('dataPlaneTitle');
-        document.getElementById('codecTitle').textContent = t('codecTitle');
-        document.getElementById('deviceTitle').textContent = t('deviceTitle');
-        document.getElementById('sourceLoopback').textContent = t('loopback');
-        document.getElementById('sourceSynthetic').textContent = t('synthetic');
-        document.getElementById('dataPlaneLegacy').textContent = t('legacy');
-        document.getElementById('dataPlaneV2Header').textContent = t('v2Header');
-        document.getElementById('codecPcm16').textContent = t('pcm16');
-        document.getElementById('codecOpus').textContent = t('opusExperimental');
+        document.getElementById('audioSourceLabel').textContent = t('audioSourceLabel');
+        document.getElementById('codecLabelTop').textContent = t('codecLabelTop');
         document.getElementById('fallbackLabel').textContent = t('fallback');
-        document.getElementById('safeModeHint').textContent = t('safeModeHint');
         document.getElementById('dumpLabel').textContent = t('dump');
         document.getElementById('exportDiagBtn').textContent = t('exportDiag');
         document.getElementById('updateBannerBtn').textContent = t('updateBannerBtn');
-        document.getElementById('addrLabel').textContent = t('address');
         document.getElementById('copyAddrBtn').textContent = t('copy');
-        document.getElementById('sessionLabel').textContent = t('session');
-        document.getElementById('sourceLabel').textContent = t('source');
-        document.getElementById('dataPlaneLabel').textContent = t('dataPlane');
-        document.getElementById('modeLabel').textContent = t('mode');
-        document.getElementById('strategyLabel').textContent = t('strategy');
-        document.getElementById('codecLabel').textContent = t('codec');
-        document.getElementById('grayLabel').textContent = t('grayMode');
-        document.getElementById('connectionTipLabel').textContent = t('recommendedConnection');
-        document.getElementById('protocolLabel').textContent = t('protocol');
-        document.getElementById('versionLabel').textContent = t('version');
-        document.getElementById('currentDeviceLabel').textContent = t('currentDevice');
-        document.getElementById('recentDeviceLabel').textContent = t('recentDevice');
+        document.getElementById('qrTitle').textContent = t('qrTitle');
+        document.getElementById('debugSummary').textContent = t('debugSummary');
+        document.getElementById('groupTx').textContent = t('groupTx');
+        document.getElementById('groupCapture').textContent = t('groupCapture');
+        document.getElementById('groupStatus').textContent = t('groupStatus');
         document.getElementById('usbTitle').textContent = t('usbTitle');
         document.getElementById('usbRefreshBtn').textContent = t('usbRefresh');
         document.getElementById('usbDisableBtn').textContent = t('usbDisable');
         document.getElementById('usbStateLabel').textContent = t('usbState');
         document.getElementById('usbForwardLabel').textContent = t('usbForward');
-        document.getElementById('healthTitle').textContent = t('healthTitle');
-        document.getElementById('healthStreamLabel').textContent = `${t('healthStream')}:`;
-        document.getElementById('healthDevicesLabel').textContent = `${t('healthDevices')}:`;
-        document.getElementById('healthSourceLabel').textContent = `${t('healthSource')}:`;
-        document.getElementById('debugSummary').textContent = t('debugSummary');
-        document.getElementById('advancedSummary').textContent = t('advancedSummary');
-        document.getElementById('advancedPathLabel').textContent = t('advancedPath');
-        document.getElementById('advancedRollbackLabel').textContent = t('advancedRollback');
-        document.getElementById('advancedExportLabel').textContent = t('advancedExport');
-        document.getElementById('qrTitle').textContent = t('qrTitle');
-        document.getElementById('qrSubtitle').textContent = t('qrSubtitle');
-        document.getElementById('logSummary').textContent = t('logSummary');
-        document.getElementById('groupTx').textContent = t('groupTx');
-        document.getElementById('groupCapture').textContent = t('groupCapture');
-        document.getElementById('groupStatus').textContent = t('groupStatus');
+
+        // Debug-meta labels (data plane / codec / protocol / version / session / mode)
+        document.getElementById('dataPlaneLabel').textContent = t('debugMetaDataPlane');
+        document.getElementById('codecLabel').textContent = t('debugMetaCodec');
+        document.getElementById('protocolLabel').textContent = t('debugMetaProtocol');
+        document.getElementById('versionLabel').textContent = t('debugMetaVersion');
+        document.getElementById('sessionLabel').textContent = t('debugMetaSession');
+        document.getElementById('modeLabel').textContent = t('debugMetaMode');
+
+        document.getElementById('healthStreamLabel').textContent = t('healthStreamLabel');
+        document.getElementById('healthDevicesLabel').textContent = t('healthDevicesLabel');
+        document.getElementById('logSummaryLabel').textContent = t('logSummaryLabel');
+
+        // Localize <select> option labels
+        const audioSel = document.getElementById('audioSourceSelect');
+        for (const opt of audioSel.options) {
+          const k = opt.getAttribute('data-i18n');
+          if (k) opt.textContent = t(k);
+        }
+        const codecSel = document.getElementById('codecSelect');
+        for (const opt of codecSel.options) {
+          const k = opt.getAttribute('data-i18n');
+          if (k) opt.textContent = t(k);
+        }
       }
 
       function renderSnapshot(snapshot) {
@@ -801,104 +988,80 @@
         const runtime = runtimeSnapshot(snapshot);
         const runtimeMetrics = runtime.metrics || {};
         const main = getMainAction(snapshot);
+
+        // Status dot + headline
         const dot = document.getElementById('statusDot');
         dot.className = 'status-dot';
         if (snapshot.service_status === 'running') dot.classList.add('running');
         else if (snapshot.service_status === 'error') dot.classList.add('error');
         else if (snapshot.service_status === 'starting' || snapshot.service_status === 'stopping') dot.classList.add('busy');
-
         document.getElementById('statusHeadline').textContent = buildHeadline(snapshot);
-        document.getElementById('statusSubline').textContent = buildSubline(snapshot);
-        document.getElementById('nextStep').textContent = main.action === 'start' ? t('nextStart') : t('nextStop');
 
+        // Address
+        document.getElementById('addrValue').textContent = snapshot.connect_address || '';
+
+        // Primary button
         const primary = document.getElementById('primaryActionBtn');
         primary.textContent = main.label;
         primary.disabled = !main.action;
         primary.className = `primary${main.stop ? ' stop' : ''}`;
         primary.dataset.action = main.action || '';
 
-        document.getElementById('healthStreamValue').textContent = streamHealth(snapshot);
-        document.getElementById('healthDevicesValue').textContent = String(snapshot.connected_devices);
-        document.getElementById('healthSourceValue').textContent = sourceName(snapshot.audio_source);
-
-        document.getElementById('addrValue').textContent = snapshot.connect_address;
-        document.getElementById('sessionValue').textContent = t(`session_${runtime.state}`) || runtime.state || snapshot.session_status;
-        document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
-        document.getElementById('dataPlaneValue').textContent = dataPlaneName(runtime.data_plane || snapshot.data_plane_format);
-        document.getElementById('modeValue').textContent = runtime.mode || snapshot.current_audio_mode || 'balanced';
-        document.getElementById('strategyValue').textContent =
-          `${snapshot.mode_profile?.start_buffer_ms ?? '-'}-${snapshot.mode_profile?.max_buffer_ms ?? '-'} ms · ` +
-          `batch ${snapshot.mode_profile?.batch_frames ?? '-'}`;
-        const isSafeMode = runtime.rollback_state === 'forced_legacy_las1_pcm16';
-        const codecText = snapshot.codec_selection === 'opus'
-          ? ((runtime.effective_codec || snapshot.effective_codec) === 'opus'
-            ? `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecExperimentalActive')}`
-            : `${runtime.effective_codec || snapshot.effective_codec} · ${t('codecFallback')}`)
-          : (runtime.effective_codec || snapshot.effective_codec);
-        document.getElementById('codecValue').textContent = codecText;
-        document.getElementById('grayValue').textContent = runtime.rollback_state || (isSafeMode ? t('grayOff') : t('grayOn'));
-        document.getElementById('connectionTipValue').textContent = snapshot.recommended_connection;
-        document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
-        document.getElementById('versionValue').textContent = snapshot.version;
-        setErrorText(snapshot.error_message || humanizeNegotiationError(runtime.last_error));
-        const banner = document.getElementById('updateBanner');
-        if (snapshot.update_banner?.latest_version) {
-          banner.style.display = 'block';
-          document.getElementById('updateBannerText').textContent =
-            trf('updateBannerText', { version: snapshot.update_banner.latest_version });
-        } else {
-          banner.style.display = 'none';
-          document.getElementById('updateBannerText').textContent = '';
+        // Settings <select> reflect current snapshot
+        const sourceSelect = document.getElementById('audioSourceSelect');
+        if (sourceSelect.value !== snapshot.audio_source) {
+          sourceSelect.value = snapshot.audio_source;
         }
+        const codecSelect = document.getElementById('codecSelect');
+        if (codecSelect.value !== snapshot.codec_selection) {
+          codecSelect.value = snapshot.codec_selection;
+        }
+        document.getElementById('fallbackToggle').checked = !!snapshot.fallback_to_synthetic;
+        document.getElementById('dumpToggle').checked = !!snapshot.capture_dump_wav;
 
-        document.getElementById('sourceLoopback').classList.toggle('active', snapshot.audio_source === 'windows_loopback');
-        document.getElementById('sourceSynthetic').classList.toggle('active', snapshot.audio_source === 'synthetic');
-        document.getElementById('dataPlaneLegacy').classList.toggle('active', snapshot.data_plane_format === 'legacy_las1');
-        document.getElementById('dataPlaneV2Header').classList.toggle('active', snapshot.data_plane_format === 'v2_header');
-        document.getElementById('codecPcm16').classList.toggle('active', snapshot.codec_selection === 'pcm16');
-        document.getElementById('codecOpus').classList.toggle('active', snapshot.codec_selection === 'opus');
-        document.getElementById('fallbackToggle').checked = snapshot.fallback_to_synthetic;
-        document.getElementById('dumpToggle').checked = snapshot.capture_dump_wav;
+        // Safe mode button
+        const isSafeMode = runtime.rollback_state === 'forced_legacy_las1_pcm16'
+          || (snapshot.data_plane_format === 'legacy_las1' && snapshot.codec_selection === 'pcm16');
         const safeModeBtn = document.getElementById('safeModeBtn');
         safeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
         safeModeBtn.title = t('safeModeHint');
-        const advancedSafeModeBtn = document.getElementById('advancedSafeModeBtn');
-        advancedSafeModeBtn.textContent = isSafeMode ? t('safeModeDisable') : t('safeModeEnable');
-        advancedSafeModeBtn.title = t('safeModeHint');
-        document.getElementById('advancedDataPathValue').textContent =
-          `${snapshot.audio_source} + ${runtime.data_plane || snapshot.data_plane_format} + ${runtime.effective_codec || snapshot.effective_codec}`;
 
-        // Show/hide device card based on service status
-        document.getElementById('deviceCard').style.display = snapshot.service_status === 'running' ? 'block' : 'none';
-        // Show/hide USB panel based on transport mode
-        document.getElementById('usbPanel').style.display = snapshot.transport_mode === 'usb' ? 'block' : 'none';
-
-        const recent = snapshot.recent_clients || [];
-        const activeClients = recent.slice(0, snapshot.connected_devices || 0);
-        const currentDevice = snapshot.connected_devices > 0
-          ? `${snapshot.connected_devices} / 4 · ${runtime.mode || snapshot.current_audio_mode || 'balanced'} · RTT ${runtimeMetrics.rtt_ms ?? 0}ms`
-          : t('noDevice');
-        document.getElementById('currentDeviceValue').textContent = currentDevice;
-
-        const recentList = document.getElementById('deviceRecentList');
-        recentList.innerHTML = '';
-        const displayClients = activeClients.length > 0 ? activeClients : recent;
-        if (displayClients.length === 0) {
-          const li = document.createElement('li');
-          li.textContent = t('noRecentDevice');
-          recentList.appendChild(li);
+        // Update banner
+        const banner = document.getElementById('updateBanner');
+        if (snapshot.update_banner?.latest_version) {
+          banner.classList.add('visible');
+          document.getElementById('updateBannerText').textContent =
+            trf('updateBannerText', { version: snapshot.update_banner.latest_version });
         } else {
-          displayClients.forEach((item, index) => {
-            const li = document.createElement('li');
-            const prefix = index < activeClients.length ? `#${index + 1} ` : '';
-            li.textContent =
-              `${prefix}${item} · ${runtime.mode || snapshot.current_audio_mode || 'balanced'} · ` +
-              `RTT ${runtimeMetrics.rtt_ms ?? 0}ms`;
-            recentList.appendChild(li);
-          });
+          banner.classList.remove('visible');
+          document.getElementById('updateBannerText').textContent = '';
         }
 
-        const m = snapshot.metrics;
+        // Errors
+        setErrorText(snapshot.error_message || humanizeNegotiationError(runtime.last_error));
+
+        // Health strip
+        document.getElementById('healthStreamValue').textContent =
+          snapshot.service_status === 'running' ? t('healthOk')
+          : snapshot.service_status === 'error' ? t('healthError')
+          : t('healthNotStarted');
+        document.getElementById('healthDevicesValue').textContent =
+          snapshot.connected_devices > 0 ? String(snapshot.connected_devices) : t('noDevice');
+
+        // Debug-meta values (data plane / codec / protocol / version / session / mode)
+        document.getElementById('sessionValue').textContent =
+          t(`session_${runtime.state}`) || runtime.state || snapshot.session_status || '';
+        document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
+        document.getElementById('dataPlaneValue').textContent =
+          dataPlaneName(runtime.data_plane || snapshot.data_plane_format);
+        document.getElementById('modeValue').textContent =
+          runtime.mode || snapshot.current_audio_mode || 'balanced';
+        document.getElementById('codecValue').textContent =
+          runtime.effective_codec || snapshot.effective_codec || '';
+        document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
+        document.getElementById('versionValue').textContent = snapshot.version || '';
+
+        // Debug groups (compact)
         document.getElementById('debugTx').innerHTML =
           `<div>${t('bufferedMs')}: ${runtimeMetrics.buffered_ms ?? 0}</div>` +
           `<div>${t('captureUnderruns')}: ${runtimeMetrics.underrun ?? 0}</div>` +
@@ -911,47 +1074,50 @@
           `<div>${t('decodeErrors')}: ${runtimeMetrics.decode_errors ?? 0}</div>` +
           `<div>${t('sinkWriteGap')}: ${runtimeMetrics.sink_write_gap_ms_p95 ?? 0}</div>`;
 
+        const m = snapshot.metrics || {};
         document.getElementById('debugState').innerHTML =
           `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
-          `<div>${t('sessionStatus')}: ${runtime.state || snapshot.session_status}</div>` +
+          `<div>${t('sessionStatus')}: ${runtime.state || snapshot.session_status || '-'}</div>` +
           `<div>${t('protocol')}: v${snapshot.protocol_version}</div>` +
+          `<div>${t('version')}: ${snapshot.version || '-'}</div>` +
           `<div>${t('audioSource')}: ${snapshot.audio_source}</div>` +
           `<div>${t('dataPlane')}: ${runtime.data_plane || snapshot.data_plane_format}</div>` +
-          `<div>${t('mode')}: ${runtime.mode || snapshot.current_audio_mode}</div>` +
-          `<div>${t('codec')}: ${runtime.effective_codec || snapshot.effective_codec}</div>` +
-          `<div>${t('strategy')}: ${JSON.stringify(snapshot.mode_profile || {})}</div>` +
-          `<div>service_snapshot: ${JSON.stringify(runtime)}</div>` +
-          `<div>capabilities: ${Object.entries(snapshot.capabilities || {}).filter(([, v]) => v).map(([k]) => k).join(', ')}</div>` +
-          `<div>${t('captureDevice')}: ${m.capture_device_name}</div>` +
-          `<div>${t('sampleRate')}: ${m.capture_sample_rate}</div>` +
-          `<div>${t('channels')}: ${m.capture_channels}</div>`;
+          `<div>${t('mode')}: ${runtime.mode || snapshot.current_audio_mode || '-'}</div>` +
+          `<div>${t('codec')}: ${runtime.effective_codec || snapshot.effective_codec || '-'}</div>` +
+          `<div>${t('captureDevice')}: ${m.capture_device_name ?? '-'}</div>` +
+          `<div>${t('sampleRate')}: ${m.capture_sample_rate ?? '-'}</div>` +
+          `<div>${t('channels')}: ${m.capture_channels ?? '-'}</div>`;
 
+        // Logs (last 50)
         const logPane = document.getElementById('logPane');
         logPane.innerHTML = '';
-        (snapshot.logs || []).forEach((line) => {
+        const logs = snapshot.logs || [];
+        const tail = logs.slice(Math.max(0, logs.length - 50));
+        tail.forEach((line) => {
           const div = document.createElement('div');
           div.className = 'log-line';
           div.textContent = formatLogLine(line);
           logPane.appendChild(div);
         });
 
+        // USB panel visibility
+        document.getElementById('usbPanel').style.display =
+          (snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0)) ? 'block' : 'none';
+
+        // Disable controls during busy
         const disabled = state.busy;
-        document.getElementById('sourceLoopback').disabled = disabled;
-        document.getElementById('sourceSynthetic').disabled = disabled;
-        document.getElementById('dataPlaneLegacy').disabled = disabled;
-        document.getElementById('dataPlaneV2Header').disabled = disabled;
-        document.getElementById('codecPcm16').disabled = disabled;
-        document.getElementById('codecOpus').disabled = disabled;
+        document.getElementById('audioSourceSelect').disabled = disabled;
+        document.getElementById('codecSelect').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
-        document.getElementById('safeModeBtn').disabled = disabled;
-        document.getElementById('advancedSafeModeBtn').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
-        document.getElementById('copyAddrBtn').disabled = disabled;
+        document.getElementById('safeModeBtn').disabled = disabled;
+        document.getElementById('copyAddrBtn').disabled = disabled || !snapshot.connect_address;
         document.getElementById('usbRefreshBtn').disabled = disabled;
         document.getElementById('usbDisableBtn').disabled = disabled || snapshot.transport_mode !== 'usb';
         document.getElementById('exportDiagBtn').disabled = disabled;
         document.getElementById('updateBannerBtn').disabled = disabled || !snapshot.update_banner?.release_url;
 
+        // QR
         renderConnectionQr(snapshot);
         renderUsbPanel(snapshot);
       }
@@ -961,12 +1127,12 @@
         const uri = `lan-audio://${snapshot.local_ip}:${snapshot.ws_port}`;
         document.getElementById('qrUriValue').textContent = uri;
         if (snapshot.service_status !== 'running') {
-          panel.style.display = 'none';
+          panel.classList.remove('visible');
           state.qrKey = '';
           document.getElementById('qrCode').innerHTML = '';
           return;
         }
-        panel.style.display = 'grid';
+        panel.classList.add('visible');
         if (state.qrKey === uri) return;
         state.qrKey = uri;
         try {
@@ -997,15 +1163,21 @@
         }
       }
 
-      async function applySettings(nextAudioSource = null) {
+      // Derive data plane from codec: opus -> v2_header, pcm16 -> legacy_las1.
+      function deriveDataPlaneFromCodec(codec) {
+        return codec === 'opus' ? 'v2_header' : 'legacy_las1';
+      }
+
+      async function applySettings(overrides = {}) {
         if (!state.snapshot) return;
+        const audioSource = overrides.audio_source ?? document.getElementById('audioSourceSelect').value;
+        const codec = overrides.codec_selection ?? document.getElementById('codecSelect').value;
+        const dataPlane = overrides.data_plane_format ?? deriveDataPlaneFromCodec(codec);
         await call('update_service_settings', {
           settings: {
-            audio_source: nextAudioSource || state.snapshot.audio_source,
-            data_plane_format:
-              document.getElementById('dataPlaneV2Header').classList.contains('active') ? 'v2_header' : 'legacy_las1',
-            codec_selection:
-              document.getElementById('codecOpus').classList.contains('active') ? 'opus' : 'pcm16',
+            audio_source: audioSource,
+            data_plane_format: dataPlane,
+            codec_selection: codec,
             allow_loopback_v2_header_gray: false,
             fallback_to_synthetic: document.getElementById('fallbackToggle').checked,
             capture_dump_wav: document.getElementById('dumpToggle').checked,
@@ -1029,7 +1201,10 @@
         if (!state.snapshot) return;
         try {
           await navigator.clipboard.writeText(state.snapshot.connect_address);
-          document.getElementById('statusSubline').textContent = t('copied');
+          const btn = document.getElementById('copyAddrBtn');
+          const original = btn.textContent;
+          btn.textContent = t('copied');
+          setTimeout(() => { btn.textContent = original; }, 1200);
         } catch {
           setErrorText(state.snapshot.connect_address);
         }
@@ -1038,7 +1213,14 @@
       async function exportDiagnostics() {
         try {
           const path = await tauriInvoke('export_support_bundle');
-          document.getElementById('statusSubline').textContent = trf('exportDiagDone', { path });
+          setErrorText('');
+          const headline = document.getElementById('statusHeadline');
+          const original = headline.textContent;
+          headline.textContent = trf('exportDiagDone', { path });
+          setTimeout(() => {
+            if (state.snapshot) headline.textContent = buildHeadline(state.snapshot);
+            else headline.textContent = original;
+          }, 2400);
         } catch (error) {
           setErrorText(String(error));
         }
@@ -1065,49 +1247,23 @@
           if (action === 'stop') await call('stop_service');
         });
 
-        // Settings card toggle
-        document.getElementById('settingsToggle').addEventListener('click', () => {
-          const body = document.getElementById('settingsBody');
-          const chevron = document.getElementById('settingsChevron');
-          const isOpen = !body.classList.contains('collapsed');
-          body.classList.toggle('collapsed');
-          chevron.classList.toggle('open');
-          chevron.textContent = isOpen ? '▸' : '▾';
+        // Select-driven settings (data plane derived from codec)
+        document.getElementById('audioSourceSelect').addEventListener('change', (e) => {
+          applySettings({ audio_source: e.target.value });
+        });
+        document.getElementById('codecSelect').addEventListener('change', (e) => {
+          const codec = e.target.value;
+          applySettings({ codec_selection: codec, data_plane_format: deriveDataPlaneFromCodec(codec) });
         });
 
-        document.getElementById('sourceLoopback').addEventListener('click', () => applySettings('windows_loopback'));
-        document.getElementById('sourceSynthetic').addEventListener('click', () => applySettings('synthetic'));
-        document.getElementById('dataPlaneLegacy').addEventListener('click', async () => {
-          document.getElementById('dataPlaneLegacy').classList.add('active');
-          document.getElementById('dataPlaneV2Header').classList.remove('active');
-          document.getElementById('codecPcm16').classList.add('active');
-          document.getElementById('codecOpus').classList.remove('active');
-          await applySettings();
-        });
-        document.getElementById('dataPlaneV2Header').addEventListener('click', async () => {
-          document.getElementById('dataPlaneLegacy').classList.remove('active');
-          document.getElementById('dataPlaneV2Header').classList.add('active');
-          await applySettings();
-        });
-        document.getElementById('codecPcm16').addEventListener('click', async () => {
-          document.getElementById('codecPcm16').classList.add('active');
-          document.getElementById('codecOpus').classList.remove('active');
-          await applySettings();
-        });
-        document.getElementById('codecOpus').addEventListener('click', async () => {
-          document.getElementById('dataPlaneLegacy').classList.remove('active');
-          document.getElementById('dataPlaneV2Header').classList.add('active');
-          document.getElementById('codecPcm16').classList.remove('active');
-          document.getElementById('codecOpus').classList.add('active');
-          await applySettings();
-        });
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
-        document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
-        document.getElementById('advancedSafeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
+
+        document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
         document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);
         document.getElementById('updateBannerBtn').addEventListener('click', openReleasePage);
+
         document.getElementById('usbRefreshBtn').addEventListener('click', async () => {
           await refreshAdbDevices(true);
           await refresh();
