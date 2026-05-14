@@ -14,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, Instant};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -24,6 +24,7 @@ use crate::data_plane::DataPlaneRouter;
 use crate::metrics::Metrics;
 
 pub const MAX_CLIENTS: usize = 4;
+const USB_PENDING_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone)]
 pub struct SessionServer {
@@ -42,7 +43,7 @@ pub struct ClientRegistry {
 
 struct ClientRegistryInner {
     clients: HashMap<Uuid, ClientHandle>,
-    pending_usb_clients: VecDeque<Uuid>,
+    pending_usb_clients: VecDeque<(Uuid, Instant)>,
     pending_usb_streams: VecDeque<Arc<Mutex<OwnedWriteHalf>>>,
 }
 
@@ -205,16 +206,19 @@ impl SessionServer {
                 udp_port,
                 desired_sample_rate,
                 channels,
-            } => (
+            } => {
+                let client_key = format!("legacy-{}-{}", client_name, peer.ip());
+                (
                 client_name,
-                "legacy-client".to_string(),
+                client_key,
                 udp_port,
                 desired_sample_rate,
                 channels,
                 false,
                 legacy_client_capabilities(),
                 self.cfg.current_audio_mode,
-            ),
+                )
+            }
             SessionHello::V2(hello) => {
                 info!(
                     session = %session_id,
@@ -262,35 +266,6 @@ impl SessionServer {
             TransportMode::WiFi => TransportType::Wifi,
             TransportMode::Usb { .. } => TransportType::Usb,
         };
-
-        if self.registry.client_count().await >= MAX_CLIENTS {
-            let _ = conn_state.fail(ConnectionState::Closed, FailureCode::NegotiationMismatch);
-            if v2_session {
-                let hello_ack = ControlMessageV2::HelloAck(HelloAck {
-                    protocol_version: PROTOCOL_VERSION_V2,
-                    accepted: false,
-                    session_id,
-                    current_audio_mode: server_audio_mode,
-                    transport_type,
-                    mode_profile: audio_mode_profile(server_audio_mode),
-                    capabilities: default_server_capabilities(),
-                    message: "too_many_clients".to_string(),
-                });
-                ws_tx
-                    .send(Message::Text(serde_json::to_string(&hello_ack)?))
-                    .await?;
-            } else {
-                ws_tx
-                    .send(Message::Text(serde_json::to_string(
-                        &ServerControlMessage::ServerError {
-                            code: "too_many_clients".to_string(),
-                            message: "too many clients".to_string(),
-                        },
-                    )?))
-                    .await?;
-            }
-            return Ok(());
-        }
 
         let (control_tx, mut control_rx) = mpsc::unbounded_channel::<String>();
         let writer_task = tokio::spawn(async move {
@@ -412,7 +387,14 @@ impl SessionServer {
         loop {
             tokio::select! {
                 _ = shutdown.recv() => break,
-                msg = ws_rx.next() => {
+                msg = timeout(Duration::from_secs(30), ws_rx.next()) => {
+                    let msg = match msg {
+                        Ok(inner) => inner,
+                        Err(_) => {
+                            warn!(session = %session_id, "websocket read timeout (30s), closing stale session");
+                            break;
+                        }
+                    };
                     match msg {
                         Some(Ok(Message::Text(text))) => {
                             let text = text.to_string();
@@ -523,26 +505,55 @@ impl ClientRegistry {
         let mut broadcasts: Vec<(mpsc::UnboundedSender<String>, String)> = Vec::new();
         let replaced_client = {
             let mut guard = self.inner.lock().await;
-            if guard.clients.len() >= MAX_CLIENTS {
-                return Err(anyhow!("too_many_clients"));
-            }
-            if !guard.clients.is_empty() && !check_multi_client_allowed_with_guard(&guard) {
-                return Err(anyhow!("multi_client_upgrade_required"));
-            }
 
             let mut replaced = None;
-            if matches!(request.transport_kind, ClientTransportKind::Usb { .. }) {
+            // Replace any existing session with the same client_key (same device reconnecting)
+            let existing_id = guard
+                .clients
+                .values()
+                .find(|client| client.client_key == request.client_key)
+                .map(|client| client.id);
+            if let Some(existing_id) = existing_id {
+                replaced = remove_client_locked(&mut guard, existing_id);
+            } else if matches!(request.transport_kind, ClientTransportKind::Usb { .. }) {
+                // Also replace any existing USB client (only one USB session allowed)
                 let existing_usb_id = guard
                     .clients
                     .values()
                     .find(|client| {
                         matches!(client.transport, Some(ClientTransportTarget::Usb(_)))
-                            || client.client_key == request.client_key
                     })
                     .map(|client| client.id);
                 if let Some(existing_usb_id) = existing_usb_id {
                     replaced = remove_client_locked(&mut guard, existing_usb_id);
                 }
+            } else if let ClientTransportKind::Wifi(new_addr) = &request.transport_kind {
+                // For WiFi: replace existing session from the same IP only when
+                // the device name matches (same device reconnecting with a new client_id).
+                let new_ip = new_addr.ip();
+                let existing_same_device = guard
+                    .clients
+                    .values()
+                    .find(|client| {
+                        client.name == request.name
+                            && if let Some(ClientTransportTarget::Wifi(addr)) = &client.transport {
+                                addr.ip() == new_ip
+                            } else {
+                                false
+                            }
+                    })
+                    .map(|client| client.id);
+                if let Some(existing_id) = existing_same_device {
+                    replaced = remove_client_locked(&mut guard, existing_id);
+                }
+            }
+
+            // Check capacity AFTER replacement — a reconnecting client may have freed its own slot
+            if guard.clients.len() >= MAX_CLIENTS {
+                return Err(anyhow!("too_many_clients"));
+            }
+            if !guard.clients.is_empty() && replaced.is_none() && !check_multi_client_allowed_with_guard(&guard) {
+                return Err(anyhow!("multi_client_upgrade_required"));
             }
 
             let mut client = ClientHandle {
@@ -570,7 +581,7 @@ impl ClientRegistry {
                         client.transport = Some(ClientTransportTarget::Usb(stream));
                     } else {
                         info!(serial, client = %client.name, "usb client waiting for forwarded tcp data stream");
-                        guard.pending_usb_clients.push_back(client.id);
+                        guard.pending_usb_clients.push_back((client.id, Instant::now()));
                     }
                 }
             }
@@ -659,7 +670,22 @@ impl ClientRegistry {
         let stream = Arc::new(Mutex::new(write_half));
         let attached_client = {
             let mut guard = self.inner.lock().await;
-            if let Some(client_id) = guard.pending_usb_clients.pop_front() {
+            // Clean up expired pending USB clients
+            let now = Instant::now();
+            let mut expired = Vec::new();
+            guard.pending_usb_clients.retain(|(id, ts)| {
+                if now.duration_since(*ts) > Duration::from_secs(USB_PENDING_TIMEOUT_SECS) {
+                    expired.push(*id);
+                    false
+                } else {
+                    true
+                }
+            });
+            for id in expired {
+                warn!(client_id = %id, "removing expired pending USB client");
+                remove_client_locked(&mut guard, id);
+            }
+            if let Some((client_id, _)) = guard.pending_usb_clients.pop_front() {
                 if let Some(client) = guard.clients.get_mut(&client_id) {
                     client.transport = Some(ClientTransportTarget::Usb(Arc::clone(&stream)));
                     Some(client.name.clone())
@@ -695,8 +721,8 @@ impl ClientRegistry {
         if !prefers_usb_transport {
             return None;
         }
-        if !guard.pending_usb_clients.iter().any(|id| *id == client_id) {
-            guard.pending_usb_clients.push_back(client_id);
+        if !guard.pending_usb_clients.iter().any(|(id, _)| *id == client_id) {
+            guard.pending_usb_clients.push_back((client_id, Instant::now()));
         }
         Some(name)
     }
@@ -746,7 +772,7 @@ impl ClientRegistry {
 }
 
 fn remove_client_locked(guard: &mut ClientRegistryInner, client_id: Uuid) -> Option<ClientHandle> {
-    guard.pending_usb_clients.retain(|id| *id != client_id);
+    guard.pending_usb_clients.retain(|(id, _)| *id != client_id);
     guard.clients.remove(&client_id)
 }
 
