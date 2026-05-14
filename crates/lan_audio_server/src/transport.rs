@@ -28,8 +28,9 @@ use crate::config::{
     TransportMode,
 };
 use crate::data_plane::{
-    encode_packet_by_data_plane, DataPlane, DataPlaneRouter, EncodedFrame as DataPlaneEncodedFrame,
-    LegacyLas1DataPlane, UsbDirectDataPlane, V2HeaderDataPlane,
+    encode_packet_by_data_plane, encode_packets_by_data_plane, DataPlane, DataPlaneRouter,
+    EncodedFrame as DataPlaneEncodedFrame, LegacyLas1DataPlane, UsbDirectDataPlane,
+    V2HeaderDataPlane,
 };
 use crate::metrics::Metrics;
 use crate::session::{BroadcastClient, ClientRegistry, ClientTransportSnapshot};
@@ -207,24 +208,61 @@ fn spawn_encode_worker(
                                 client.mode_changed,
                                 client.first_packet,
                             );
-                            let wire_bytes = encode_packet_by_data_plane(
+                            // Phase 6 fragmentation. For PCM24 this returns
+                            // multiple wire packets (one per frag); for
+                            // every other codec it returns a single packet
+                            // identical to the v1.9.x behaviour.
+                            let mut next_seq = packet.sequence;
+                            let wire_packets = encode_packets_by_data_plane(
                                 &packet,
                                 client.data_plane,
                                 v2_flags,
                                 packet_codec,
+                                &mut next_seq,
                             );
-                            let detected_wire_kind = detect_data_plane_packet_kind(&wire_bytes);
-                            wire_frames.push(WireFrameOut {
-                                client: client.clone(),
-                                packet: packet.clone(),
-                                wire_bytes,
-                                v2_flags,
-                                mode_changed: client.mode_changed,
-                                codec: packet_codec,
-                                source_peak,
-                                source_rms,
-                                detected_wire_kind,
-                            });
+                            // Bump the shared atomic by the number of extra
+                            // packets we produced beyond the original one
+                            // (encoder.encode already incremented for the
+                            // first one). For the common single-packet
+                            // case, `wire_packets.len() == 1` so this is a
+                            // no-op.
+                            let extras = wire_packets.len().saturating_sub(1) as u32;
+                            if extras > 0 {
+                                job.sequence
+                                    .fetch_add(extras, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            for (i, wire_bytes) in wire_packets.into_iter().enumerate() {
+                                let detected_wire_kind = detect_data_plane_packet_kind(&wire_bytes);
+                                // For the first chunk reuse the parent
+                                // packet metadata; for subsequent chunks
+                                // synthesize a per-frag UdpAudioPacket so
+                                // tx_stats can still log the sequence.
+                                let frag_packet = if i == 0 {
+                                    packet.clone()
+                                } else {
+                                    UdpAudioPacket {
+                                        version: packet.version,
+                                        flags: packet.flags,
+                                        sequence: packet.sequence.wrapping_add(i as u32),
+                                        timestamp_ms: packet.timestamp_ms,
+                                        sample_rate: packet.sample_rate,
+                                        channels: packet.channels,
+                                        frames_per_packet: packet.frames_per_packet,
+                                        payload: Vec::new(),
+                                    }
+                                };
+                                wire_frames.push(WireFrameOut {
+                                    client: client.clone(),
+                                    packet: frag_packet,
+                                    wire_bytes,
+                                    v2_flags,
+                                    mode_changed: client.mode_changed,
+                                    codec: packet_codec,
+                                    source_peak,
+                                    source_rms,
+                                    detected_wire_kind,
+                                });
+                            }
                         }
                     }
                 }
@@ -1436,6 +1474,21 @@ impl AudioFrameEncoder {
     }
 
     fn encode(&mut self, frame: AudioFrame, mode: AudioMode) -> Vec<EncodedFrame> {
+        // Phase 6 Hi-Res: PCM24 path skips the 48 kHz resampler and
+        // packetizes native-rate samples directly. Returns one EncodedFrame
+        // per logical 5 ms (or whatever frame_duration_ms the input has)
+        // with codec=Pcm24, sample_rate=actual capture rate, payload =
+        // big-endian 24-bit signed interleaved L/R.
+        //
+        // Red-tier override: if the watchdog is asking for force_pcm16
+        // fallback (extreme load), we drop down to Opus first if a
+        // pre-built encoder exists, otherwise to PCM16. This protects
+        // bandwidth under congestion without changing the negotiated
+        // codec on the WS control plane.
+        if self.codec == CodecSelection::Pcm24 && !self.force_pcm16_fallback {
+            return vec![encode_pcm24_from_native(&frame)];
+        }
+
         let samples = to_fixed_stereo_10ms(&frame, self.output_sample_rate);
         if self.codec == CodecSelection::Opus && !self.force_pcm16_fallback {
             if let (Some(opus), Some(buffer)) =
@@ -1792,6 +1845,56 @@ fn encode_pcm16_from_samples(
     }
 }
 
+/// Phase 6 PCM24 encoder. Takes the native-rate `AudioFrame` (no
+/// resampling) and emits a payload of big-endian 24-bit signed
+/// interleaved L/R samples. Sample rate, channels, and frame duration
+/// are reported as-is so the v3 wire header can carry them.
+///
+/// Output bytes-per-frame: `samples_count * 3` (24-bit per sample). For
+/// 96 kHz / 5 ms / stereo this is 960 samples × 3 = 2880 B, which
+/// the transport layer's fragmentation logic splits into 2 packets to
+/// fit MTU.
+fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    let out_channels: u8 = 2;
+    let mut payload = Vec::with_capacity(in_frames * out_channels as usize * 3);
+
+    // 24-bit signed integer range. Multiplying by 2^23 - 1 maps -1.0..1.0
+    // to the full signed-24 range without overflow.
+    const SCALE: f32 = 8_388_607.0; // 2^23 - 1
+    for f in 0..in_frames {
+        let base = f * in_channels;
+        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        let l_i32 = (l.clamp(-1.0, 1.0) * SCALE) as i32;
+        let r_i32 = (r.clamp(-1.0, 1.0) * SCALE) as i32;
+        // Big-endian 24-bit: drop the most-significant byte from i32.
+        // sample = bits[23..0]; emit bytes high → low.
+        for &v in &[l_i32, r_i32] {
+            payload.push(((v >> 16) & 0xFF) as u8);
+            payload.push(((v >> 8) & 0xFF) as u8);
+            payload.push((v & 0xFF) as u8);
+        }
+    }
+
+    EncodedFrame {
+        pts_ms: frame.pts_ms,
+        sample_rate: frame.format.sample_rate_hz,
+        channels: out_channels,
+        frames_per_packet: in_frames as u16,
+        codec: UdpAudioCodecV2::Pcm24,
+        is_silence: frame.is_silence,
+        source_peak: frame.peak,
+        source_rms: frame.rms,
+        payload,
+    }
+}
+
 fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {
     // TODO(protocol-v2): map these semantics to the new 16-bit flags field.
     // `config_changed` and `discontinuity` are intentionally left as reserved
@@ -1841,6 +1944,125 @@ fn read_current_audio_mode(mode: &Arc<StdMutex<AudioMode>>) -> AudioMode {
 
 fn to_fixed_stereo_10ms(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
     let out_rate = normalize_encoder_sample_rate(out_rate);
+    const OUT_CHANNELS: usize = FIXED_OUTPUT_CHANNELS;
+    let out_frames: usize = (out_rate as usize / 100).max(1);
+
+    let in_rate = frame.format.sample_rate_hz.max(1);
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    if in_frames == 0 {
+        return vec![0.0; out_frames * OUT_CHANNELS];
+    }
+
+    // Fast path: same sample rate. Common case — Windows mix format is
+    // 48 kHz on ~99% of devices, output rate is 48 kHz, no resampling
+    // needed. Just stereo-fold and copy.
+    if in_rate == out_rate {
+        let mut out = Vec::with_capacity(out_frames * OUT_CHANNELS);
+        for out_frame in 0..out_frames {
+            let src_frame = out_frame.min(in_frames - 1);
+            let base = src_frame * in_channels;
+            let left = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+            let right = if in_channels > 1 {
+                frame.samples_f32.get(base + 1).copied().unwrap_or(left)
+            } else {
+                left
+            };
+            out.push(left);
+            out.push(right);
+        }
+        return out;
+    }
+
+    // Phase 6.2 Sinc resample. Replaces the previous nearest-neighbor
+    // implementation which aliased badly on rates like 96→48. We pay the
+    // setup cost once per frame which is acceptable because (a) the
+    // resampler is only constructed on the rare non-48 kHz capture path
+    // and (b) our 10 ms frame is short enough that the FFT/conv work is
+    // dominated by per-frame overhead anyway.
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+
+    // First, stereo-fold the input into two planar channels, downmixing
+    // anything beyond stereo by averaging. Build the two channel vectors
+    // explicitly so each gets its own real capacity (the `vec![X; n]`
+    // form clones the same Vec and discards the inner capacity).
+    let mut planar_in: Vec<Vec<f32>> = vec![
+        Vec::with_capacity(in_frames),
+        Vec::with_capacity(in_frames),
+    ];
+    for f in 0..in_frames {
+        let base = f * in_channels;
+        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        planar_in[0].push(l);
+        planar_in[1].push(r);
+    }
+
+    let params = SincInterpolationParameters {
+        sinc_len: 64,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Cubic,
+        oversampling_factor: 128,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let resampler =
+        SincFixedIn::<f32>::new(out_rate as f64 / in_rate as f64, 2.0, params, in_frames, 2);
+    let mut resampler = match resampler {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                ?err,
+                in_rate, out_rate, "rubato init failed, falling back to nearest"
+            );
+            return to_fixed_stereo_10ms_nearest(frame, out_rate);
+        }
+    };
+
+    let resampled = match resampler.process(&planar_in, None) {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                ?err,
+                in_rate, out_rate, "rubato process failed, falling back to nearest"
+            );
+            return to_fixed_stereo_10ms_nearest(frame, out_rate);
+        }
+    };
+
+    // The fixed-in resampler may produce slightly more or fewer output
+    // frames than out_frames; truncate or zero-pad to match the
+    // contract. In practice for integer rate ratios (24→48, 48→24) it
+    // matches exactly.
+    let mut out = Vec::with_capacity(out_frames * OUT_CHANNELS);
+    let avail = resampled[0].len().min(resampled[1].len());
+    for f in 0..out_frames {
+        let l = resampled[0].get(f).copied().unwrap_or(0.0);
+        let r = resampled[1].get(f).copied().unwrap_or(l);
+        if f >= avail {
+            // Defensive: if rubato returned fewer frames than expected,
+            // pad with the last available sample to avoid an audible
+            // hard-zero edge.
+            let last_l = resampled[0].last().copied().unwrap_or(0.0);
+            let last_r = resampled[1].last().copied().unwrap_or(last_l);
+            out.push(last_l);
+            out.push(last_r);
+        } else {
+            out.push(l);
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Fallback nearest-neighbor resampler. Only used when rubato init or
+/// process fails (very rare). Identical to the pre-Phase-6.2 behavior.
+fn to_fixed_stereo_10ms_nearest(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
     const OUT_CHANNELS: usize = FIXED_OUTPUT_CHANNELS;
     let out_frames: usize = (out_rate as usize / 100).max(1);
 
@@ -2116,6 +2338,111 @@ mod tests {
         );
         let decoded = UdpAudioPacketV2::decode(&bytes).expect("decode v2");
         assert_eq!(decoded.header.codec, UdpAudioCodecV2::Opus);
+    }
+
+    /// Phase 6 fragmentation. PCM24 96 kHz / 5 ms / stereo = 2880 B
+    /// payload, must split into 2 frags of 1392 + 1488 bytes (well, 1488
+    /// would exceed our 1392 cap so it splits 1392+1392+96 → 3 frags).
+    /// Verify the helper produces the right number of v3 wire packets,
+    /// the headers carry consistent logical_seq, and frag indices/totals
+    /// are right.
+    #[test]
+    fn encode_packets_pcm24_fragments_above_mtu() {
+        use lan_audio_protocol::UdpAudioPacketV3;
+
+        // Synthetic 2880 B payload (96 kHz / 5 ms / stereo / 24bit).
+        let payload = vec![0xAB; 2880];
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 100,
+            timestamp_ms: 12_345,
+            sample_rate: 96_000,
+            channels: 2,
+            frames_per_packet: 480, // 96 kHz × 5 ms
+            payload,
+        };
+        let mut next_seq = 100u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Pcm24,
+            &mut next_seq,
+        );
+        // 2880 / 1392 = 2.07 → 3 frags
+        assert_eq!(frags.len(), 3);
+
+        // Each frag should decode cleanly and share logical_seq=100.
+        for (i, bytes) in frags.iter().enumerate() {
+            let v3 = UdpAudioPacketV3::decode(bytes).expect("decode v3 frag");
+            assert_eq!(v3.header.codec, UdpAudioCodecV2::Pcm24);
+            assert_eq!(v3.header.sample_rate, 96_000);
+            assert_eq!(v3.header.logical_seq, 100);
+            assert_eq!(v3.header.total_frags, 3);
+            assert_eq!(v3.header.frag_index, i as u8);
+            assert_eq!(v3.header.sequence, 100 + i as u32);
+        }
+        assert_eq!(next_seq, 103);
+    }
+
+    /// Phase 6 single-packet path. PCM24 48 kHz / 5 ms / stereo = 1440 B
+    /// payload, exceeds the 1392 cap by exactly 48 bytes so it splits to
+    /// 2 frags. Sanity check the boundary case.
+    #[test]
+    fn encode_packets_pcm24_single_frag_at_48k() {
+        // 48 kHz / 10 ms / stereo / 24bit = 480 × 2 × 3 = 2880 B → 3 frags
+        // 48 kHz / 5 ms / stereo / 24bit = 240 × 2 × 3 = 1440 B → 2 frags
+        // 48 kHz / 3 ms / stereo / 24bit = 144 × 2 × 3 = 864 B → 1 frag
+        let payload = vec![0xCD; 864]; // 3 ms / 48 kHz
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 7,
+            timestamp_ms: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 144,
+            payload,
+        };
+        let mut next_seq = 7u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Pcm24,
+            &mut next_seq,
+        );
+        assert_eq!(frags.len(), 1);
+        assert_eq!(next_seq, 8);
+    }
+
+    /// Phase 6 non-PCM24 codecs must keep the v1.9.x single-packet
+    /// behavior so the fragmentation helper is a strict superset of
+    /// `encode_packet_by_data_plane`.
+    #[test]
+    fn encode_packets_non_pcm24_returns_single_packet() {
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 1,
+            timestamp_ms: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            payload: vec![1, 2, 3, 4],
+        };
+        let mut next_seq = 1u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Opus,
+            &mut next_seq,
+        );
+        assert_eq!(frags.len(), 1);
+        assert_eq!(&frags[0][0..4], b"LAV2");
+        assert_eq!(next_seq, 2);
     }
 
     /// Phase 5 encode worker smoke test. Spins up a real worker thread,

@@ -190,28 +190,29 @@ class MorePage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SegmentedButton<int>(
-            segments: [
-              ButtonSegment(
-                value: 0,
-                label: Text(tr('发现设备', 'Discovered')),
-              ),
-              ButtonSegment(
-                value: 1,
-                label: Text(tr('手动地址', 'Manual')),
-              ),
-              ButtonSegment(
-                value: 2,
-                label: Text(tr('USB（adb）', 'USB (adb)')),
-              ),
-            ],
-            selected: <int>{connectMode},
-            onSelectionChanged: (selection) {
-              onConnectModeChanged(selection.first);
-            },
+        SegmentedButton<int>(
+          style: SegmentedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 12),
           ),
+          segments: [
+            ButtonSegment(
+              value: 0,
+              label: Text(tr('发现设备', 'Discovered')),
+            ),
+            ButtonSegment(
+              value: 1,
+              label: Text(tr('手动地址', 'Manual')),
+            ),
+            ButtonSegment(
+              value: 2,
+              label: Text(tr('USB(adb)', 'USB(adb)')),
+            ),
+          ],
+          selected: <int>{connectMode},
+          onSelectionChanged: (selection) {
+            onConnectModeChanged(selection.first);
+          },
         ),
         const SizedBox(height: 10),
         if (probeRunning || nsdDiscoveryRunning)
@@ -440,8 +441,8 @@ class MorePage extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 tr(
-                  'PCM 24 Hi-Res 直通路径正在开发，当前会自动回退到 Opus。',
-                  'PCM 24 Hi-Res passthrough is in development; the server will fall back to Opus.',
+                  '已启用 PCM 24 Hi-Res 直通。需要桌面 mix format 设为 96 kHz 才能听到完整 Hi-Res 效果。LAN 带宽消耗 ~5 Mbps。',
+                  'PCM 24 Hi-Res passthrough enabled. Set Windows mix format to 96 kHz to hear full Hi-Res. LAN bandwidth ~5 Mbps.',
                 ),
                 style: const TextStyle(fontSize: 12, color: AudioConsoleColors.amber),
               ),
@@ -734,21 +735,15 @@ class MorePage extends StatelessWidget {
   }
 
   /// Phase 7 codec picker chip. `value` of `null` selects the auto/default.
-  /// `pcm24` is rendered greyed-out because the Hi-Res passthrough path is
-  /// not implemented yet — selecting it tells the server to fall back to
-  /// Opus, and surfaces the warning text in the parent card.
+  /// All codec values are real selections; the parent card's hint text
+  /// surfaces caveats (e.g. PCM 24 needs 96 kHz mix format on the Windows
+  /// side to actually be Hi-Res).
   Widget _codecChip(String? value, String label) {
     final selected = preferredCodec == value;
-    final disabled = value == 'pcm24';
     final bg = selected ? AudioConsoleColors.teal : AudioConsoleColors.surface;
-    final fg = selected
-        ? AudioConsoleColors.bg
-        : (disabled ? AudioConsoleColors.text3 : AudioConsoleColors.text);
+    final fg = selected ? AudioConsoleColors.bg : AudioConsoleColors.text;
     return InkWell(
       onTap: () {
-        // We still allow tapping pcm24 — it will be applied as a request,
-        // and the server's downgrade plus the in-card hint inform the user
-        // that passthrough is not yet available.
         onPreferredCodecChanged(value);
       },
       borderRadius: BorderRadius.circular(8),

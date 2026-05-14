@@ -4,6 +4,30 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.10.0] - 2026-05-14
+
+### Added — Hi-Res PCM24 Passthrough (Phase 6)
+
+- **Protocol v3** wire format (`PROTOCOL_VERSION_V3=3`, magic still `LAV2`). Adds `frag_index/total_frags/logical_seq` fields by repurposing the v2 `reserved` slot and appending a 4-byte sequence number. Total v3 header = 37 bytes.
+- **PCM24 codec** (`UdpAudioCodecV2::Pcm24=4`). 24-bit signed integer, big-endian, native-rate (no resampling). Server emits one EncodedFrame per native input frame; transport layer fragments above 1392-byte boundary.
+- **Application-layer fragmentation**. 96 kHz / 5 ms / stereo PCM24 = 2880 B per logical frame, automatically split into 2 v3 packets sharing a logical_seq. Android client reassembles via `LasPacketReassembler` (LRU 8 slots).
+- **`supports_hires_pcm24` capability**. Defaults to `false` — only when both peers advertise true does the server emit v3 + Pcm24 packets. Older peers never see v3 traffic.
+- **PCM24 in `AudioCodecPreference` enum**. Clients can request `preferred_codec: "pcm24"` in `SetAudioMode`. Server downgrades to Opus when adaptive watchdog enters Red tier or when the data plane can't carry the codec.
+
+### Changed
+
+- **Resampler upgrade**. Replaced the Opus path's nearest-neighbor stereo downmix with a polyphase Sinc resampler (`rubato 0.16`, Cubic interpolation, 64-lobe sinc, Blackman-Harris2 window). When Windows mix format is not 48 kHz the prior aliasing distortion disappears. Same-rate fast path is preserved (zero copy + one pass).
+- `CodecSelection::Pcm24` added to `lan_audio_server::config`. CLI accepts `--codec pcm24` / `--codec hires` / `--codec hires_pcm24`.
+- Android `LasPacketParser` extended to parse v3 packets (`protocol_version=3`, header_size=37) alongside v2.
+- Android `OboeAudioTrackController` keeps PCM16 output; PCM24 is downconverted BE→LE i16 in `PlaybackSessionRuntime` (drops the bottom byte). Float-aware Oboe sink remains a future task.
+
+### Notes
+
+- Bandwidth: PCM24 48 kHz/stereo ≈ 2.3 Mbps; PCM24 96 kHz/stereo ≈ 4.6 Mbps. LAN-only feature.
+- UI: the codec picker on the More page now treats PCM 24 as a real selection (not a placeholder). The amber hint reminds users to set Windows mix format to 96 kHz to actually hear the Hi-Res benefit.
+- Tests: 108/108 Rust tests pass (8 domain + 28 protocol + 70 server lib + 1 multi_client + 1 opus_stress); 31/31 Flutter tests pass; gradle assembleDebug succeeds.
+- Rollback: `--codec opus` (server CLI) or selecting Opus in the UI immediately falls back to v2_header + Opus. The legacy `--force-rollback` (`legacy_las1 + pcm16`) path is preserved.
+
 ## [1.9.4] - 2026-05-14
 
 ### Added

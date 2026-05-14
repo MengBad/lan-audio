@@ -17,12 +17,26 @@ pub const REVERSE_TCP_PORT: u16 = 7878;
 pub const REVERSE_CONTROL_PORT: u16 = 7879;
 
 pub const PROTOCOL_VERSION_V2: u8 = 2;
+pub const PROTOCOL_VERSION_V3: u8 = 3;
 
 pub const AUDIO_MAGIC: [u8; 4] = *b"LAS1";
 pub const AUDIO_HEADER_LEN: usize = 4 + 1 + 1 + 4 + 8 + 4 + 1 + 2 + 2;
 
 pub const UDP_AUDIO_MAGIC_V2: [u8; 4] = *b"LAV2";
 pub const UDP_AUDIO_HEADER_V2_LEN: usize = 4 + 1 + 2 + 2 + 4 + 8 + 1 + 1 + 4 + 2 + 2 + 2;
+
+/// Phase 6 v3 header. Layout extends v2 by:
+/// - reusing the 16-bit `reserved` slot as `frag_index_u8 | total_frags_u8`
+///   (little-endian: byte 0 = frag_index, byte 1 = total_frags)
+/// - appending a 4-byte `logical_seq` u32 at the end of the header so all
+///   frags belonging to the same logical frame share an identifier the
+///   reassembler can key on
+///
+/// `total_frags == 1` (single packet, no fragmentation) is the common case
+/// for 48 kHz, where one v3 packet carries one logical frame and
+/// `logical_seq == sequence`.
+pub const UDP_AUDIO_MAGIC_V3: [u8; 4] = *b"LAV2";
+pub const UDP_AUDIO_HEADER_V3_LEN: usize = UDP_AUDIO_HEADER_V2_LEN + 4;
 
 pub const UDP_FLAG_V2_SILENCE: u16 = 1 << 0;
 pub const UDP_FLAG_V2_CONFIG_CHANGED: u16 = 1 << 1;
@@ -107,6 +121,11 @@ pub struct ProtocolCapabilities {
     pub supports_usb_tethering: bool,
     pub supports_usb_direct_future: bool,
     pub supports_reverse_channel: bool,
+    /// Phase 6 capability. The peer can encode (server) or decode (client)
+    /// PCM24 hi-res passthrough on the v3 data plane. Defaults to
+    /// `false` so older peers stay on the Opus / Pcm16 path.
+    #[serde(default)]
+    pub supports_hires_pcm24: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -360,6 +379,11 @@ pub enum UdpAudioCodecV2 {
     Pcm16 = 1,
     F32 = 2,
     Opus = 3,
+    /// Phase 6 Hi-Res passthrough. 24-bit signed integer samples in
+    /// big-endian, interleaved per channel. No compression. Sample rate
+    /// is whatever the wire header reports — the encoder does not
+    /// resample. Only valid on v3 packets.
+    Pcm24 = 4,
 }
 
 impl UdpAudioCodecV2 {
@@ -368,6 +392,7 @@ impl UdpAudioCodecV2 {
             1 => Some(Self::Pcm16),
             2 => Some(Self::F32),
             3 => Some(Self::Opus),
+            4 => Some(Self::Pcm24),
             _ => None,
         }
     }
@@ -393,6 +418,165 @@ pub struct UdpAudioHeaderV2 {
 pub struct UdpAudioPacketV2 {
     pub header: UdpAudioHeaderV2,
     pub payload: Vec<u8>,
+}
+
+/// Phase 6 v3 wire header. Adds two pieces of information for Hi-Res
+/// passthrough: per-packet fragmentation indices (so a single 96 kHz / 5 ms
+/// PCM24 logical frame can be split across multiple UDP packets to fit MTU)
+/// and a `logical_seq` so the receiver can reassemble frags belonging to
+/// the same logical frame even when the wire-level `sequence` advances per
+/// packet.
+///
+/// Wire layout matches `UdpAudioHeaderV2` byte-for-byte for the first
+/// `UDP_AUDIO_HEADER_V2_LEN` bytes, with two semantic differences:
+/// - `protocol_version = 3`
+/// - The `reserved` u16 slot is repurposed to hold
+///   `frag_index | total_frags` (LE: byte 0 = frag_index, byte 1 = total).
+///   Then a fresh `logical_seq u32` is appended.
+///
+/// `total_frags == 1` (no fragmentation) means `frag_index == 0` and
+/// `logical_seq == sequence`. The 48 kHz / 5 ms common case fits in a
+/// single packet so the fragmentation overhead is just 4 bytes per packet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UdpAudioHeaderV3 {
+    pub magic: [u8; 4],
+    pub protocol_version: u8,
+    pub header_size: u16,
+    pub flags: u16,
+    pub sequence: u32,
+    pub timestamp_ms: u64,
+    pub codec: UdpAudioCodecV2,
+    pub channels: u8,
+    pub sample_rate: u32,
+    pub frame_duration_ms: u16,
+    pub payload_size: u16,
+    pub frag_index: u8,
+    pub total_frags: u8,
+    pub logical_seq: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UdpAudioPacketV3 {
+    pub header: UdpAudioHeaderV3,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum HeaderV3CodecError {
+    #[error("packet too short")]
+    TooShort,
+    #[error("invalid magic")]
+    InvalidMagic,
+    #[error("unsupported protocol version")]
+    UnsupportedVersion,
+    #[error("invalid header size")]
+    InvalidHeaderSize,
+    #[error("invalid codec")]
+    InvalidCodec,
+    #[error("payload length mismatch")]
+    PayloadLengthMismatch,
+    #[error("invalid fragmentation header")]
+    InvalidFragHeader,
+}
+
+impl UdpAudioHeaderV3 {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(UDP_AUDIO_HEADER_V3_LEN);
+        out.extend_from_slice(&self.magic);
+        out.push(self.protocol_version);
+        out.extend_from_slice(&self.header_size.to_le_bytes());
+        out.extend_from_slice(&self.flags.to_le_bytes());
+        out.extend_from_slice(&self.sequence.to_le_bytes());
+        out.extend_from_slice(&self.timestamp_ms.to_le_bytes());
+        out.push(self.codec as u8);
+        out.push(self.channels);
+        out.extend_from_slice(&self.sample_rate.to_le_bytes());
+        out.extend_from_slice(&self.frame_duration_ms.to_le_bytes());
+        out.extend_from_slice(&self.payload_size.to_le_bytes());
+        out.push(self.frag_index);
+        out.push(self.total_frags);
+        out.extend_from_slice(&self.logical_seq.to_le_bytes());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, HeaderV3CodecError> {
+        if bytes.len() < UDP_AUDIO_HEADER_V3_LEN {
+            return Err(HeaderV3CodecError::TooShort);
+        }
+
+        let magic = [bytes[0], bytes[1], bytes[2], bytes[3]];
+        if magic != UDP_AUDIO_MAGIC_V3 {
+            return Err(HeaderV3CodecError::InvalidMagic);
+        }
+
+        let protocol_version = bytes[4];
+        if protocol_version != PROTOCOL_VERSION_V3 {
+            return Err(HeaderV3CodecError::UnsupportedVersion);
+        }
+
+        let header_size = u16::from_le_bytes(bytes[5..7].try_into().expect("slice len"));
+        if header_size as usize != UDP_AUDIO_HEADER_V3_LEN {
+            return Err(HeaderV3CodecError::InvalidHeaderSize);
+        }
+
+        let flags = u16::from_le_bytes(bytes[7..9].try_into().expect("slice len"));
+        let sequence = u32::from_le_bytes(bytes[9..13].try_into().expect("slice len"));
+        let timestamp_ms = u64::from_le_bytes(bytes[13..21].try_into().expect("slice len"));
+        let codec = UdpAudioCodecV2::from_u8(bytes[21]).ok_or(HeaderV3CodecError::InvalidCodec)?;
+        let channels = bytes[22];
+        let sample_rate = u32::from_le_bytes(bytes[23..27].try_into().expect("slice len"));
+        let frame_duration_ms = u16::from_le_bytes(bytes[27..29].try_into().expect("slice len"));
+        let payload_size = u16::from_le_bytes(bytes[29..31].try_into().expect("slice len"));
+        let frag_index = bytes[31];
+        let total_frags = bytes[32];
+        if total_frags == 0 || frag_index >= total_frags {
+            return Err(HeaderV3CodecError::InvalidFragHeader);
+        }
+        let logical_seq = u32::from_le_bytes(bytes[33..37].try_into().expect("slice len"));
+
+        Ok(Self {
+            magic,
+            protocol_version,
+            header_size,
+            flags,
+            sequence,
+            timestamp_ms,
+            codec,
+            channels,
+            sample_rate,
+            frame_duration_ms,
+            payload_size,
+            frag_index,
+            total_frags,
+            logical_seq,
+        })
+    }
+}
+
+impl UdpAudioPacketV3 {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut header = self.header.clone();
+        header.payload_size = self.payload.len() as u16;
+
+        let mut out = header.encode();
+        out.extend_from_slice(&self.payload);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, HeaderV3CodecError> {
+        if bytes.len() < UDP_AUDIO_HEADER_V3_LEN {
+            return Err(HeaderV3CodecError::TooShort);
+        }
+        let header = UdpAudioHeaderV3::decode(bytes)?;
+        let payload_end = UDP_AUDIO_HEADER_V3_LEN + header.payload_size as usize;
+        if bytes.len() != payload_end {
+            return Err(HeaderV3CodecError::PayloadLengthMismatch);
+        }
+        Ok(Self {
+            header,
+            payload: bytes[UDP_AUDIO_HEADER_V3_LEN..payload_end].to_vec(),
+        })
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -703,12 +887,23 @@ mod tests {
             supports_usb_tethering: true,
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
+            supports_hires_pcm24: false,
         };
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
         assert_eq!(decoded, caps);
     }
 
+    #[test]
+    fn v6_capabilities_back_compat_without_hires() {
+        // Older clients did not send `supports_hires_pcm24`. The serde
+        // default (false) must apply.
+        let json = "{\"supports_pcm16\":true}";
+        let decoded: ProtocolCapabilities =
+            serde_json::from_str(json).expect("deserialize caps without hires");
+        assert!(!decoded.supports_hires_pcm24);
+        assert!(decoded.supports_pcm16);
+    }
     #[test]
     fn v2_control_message_hello_round_trip() {
         let msg = ControlMessageV2::Hello(Hello {
@@ -734,6 +929,7 @@ mod tests {
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
+                supports_hires_pcm24: false,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -770,6 +966,7 @@ mod tests {
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
+                supports_hires_pcm24: false,
             },
             message: "ok".to_string(),
         });
@@ -817,6 +1014,7 @@ mod tests {
                 supports_usb_tethering: true,
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
+                supports_hires_pcm24: false,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -1017,6 +1215,141 @@ mod tests {
     }
 
     #[test]
+    fn udp_v3_packet_round_trip_unfragmented() {
+        // Common case: 48 kHz / 5 ms PCM24 stereo fits in one packet
+        // (864 B payload + 37 B header = 901 B < MTU). total_frags=1
+        // means logical_seq == sequence and the receiver hands the
+        // payload to the decoder with no reassembly.
+        let packet = UdpAudioPacketV3 {
+            header: UdpAudioHeaderV3 {
+                magic: UDP_AUDIO_MAGIC_V3,
+                protocol_version: PROTOCOL_VERSION_V3,
+                header_size: UDP_AUDIO_HEADER_V3_LEN as u16,
+                flags: 0,
+                sequence: 42,
+                timestamp_ms: 1_700_000_000,
+                codec: UdpAudioCodecV2::Pcm24,
+                channels: 2,
+                sample_rate: 48_000,
+                frame_duration_ms: 5,
+                payload_size: 0,
+                frag_index: 0,
+                total_frags: 1,
+                logical_seq: 42,
+            },
+            payload: vec![0xAA; 864],
+        };
+        let encoded = packet.encode();
+        let decoded = UdpAudioPacketV3::decode(&encoded).expect("decode v3 packet");
+        assert_eq!(decoded.payload, packet.payload);
+        assert_eq!(decoded.header.codec, UdpAudioCodecV2::Pcm24);
+        assert_eq!(decoded.header.frag_index, 0);
+        assert_eq!(decoded.header.total_frags, 1);
+        assert_eq!(decoded.header.logical_seq, 42);
+        assert_eq!(decoded.header.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn udp_v3_packet_round_trip_fragmented() {
+        // 96 kHz / 5 ms PCM24 stereo = 2880 B per logical frame, must be
+        // split into 2 frags. Each frag carries half (1440 B) and shares
+        // the same logical_seq. Wire-level sequence advances per packet.
+        let header_template = UdpAudioHeaderV3 {
+            magic: UDP_AUDIO_MAGIC_V3,
+            protocol_version: PROTOCOL_VERSION_V3,
+            header_size: UDP_AUDIO_HEADER_V3_LEN as u16,
+            flags: 0,
+            sequence: 0,
+            timestamp_ms: 1_700_000_000,
+            codec: UdpAudioCodecV2::Pcm24,
+            channels: 2,
+            sample_rate: 96_000,
+            frame_duration_ms: 5,
+            payload_size: 0,
+            frag_index: 0,
+            total_frags: 2,
+            logical_seq: 7,
+        };
+        let frag0 = UdpAudioPacketV3 {
+            header: UdpAudioHeaderV3 {
+                sequence: 100,
+                frag_index: 0,
+                total_frags: 2,
+                ..header_template.clone()
+            },
+            payload: vec![0x11; 1440],
+        };
+        let frag1 = UdpAudioPacketV3 {
+            header: UdpAudioHeaderV3 {
+                sequence: 101,
+                frag_index: 1,
+                total_frags: 2,
+                ..header_template
+            },
+            payload: vec![0x22; 1440],
+        };
+        let d0 = UdpAudioPacketV3::decode(&frag0.encode()).unwrap();
+        let d1 = UdpAudioPacketV3::decode(&frag1.encode()).unwrap();
+        assert_eq!(d0.header.logical_seq, d1.header.logical_seq);
+        assert_eq!(d0.header.frag_index, 0);
+        assert_eq!(d1.header.frag_index, 1);
+        assert_ne!(d0.header.sequence, d1.header.sequence);
+    }
+
+    #[test]
+    fn udp_v3_rejects_invalid_frag_header() {
+        let packet = UdpAudioPacketV3 {
+            header: UdpAudioHeaderV3 {
+                magic: UDP_AUDIO_MAGIC_V3,
+                protocol_version: PROTOCOL_VERSION_V3,
+                header_size: UDP_AUDIO_HEADER_V3_LEN as u16,
+                flags: 0,
+                sequence: 1,
+                timestamp_ms: 0,
+                codec: UdpAudioCodecV2::Pcm24,
+                channels: 2,
+                sample_rate: 96_000,
+                frame_duration_ms: 5,
+                payload_size: 0,
+                frag_index: 5, // Invalid: >= total
+                total_frags: 2,
+                logical_seq: 0,
+            },
+            payload: vec![],
+        };
+        let bytes = packet.encode();
+        let err = UdpAudioPacketV3::decode(&bytes).unwrap_err();
+        assert_eq!(err, HeaderV3CodecError::InvalidFragHeader);
+    }
+
+    #[test]
+    fn udp_v3_rejects_v2_protocol_version() {
+        // A v2-version packet must NOT decode as v3 even if the magic is
+        // identical. v3 receivers strictly require protocol_version=3.
+        let packet = UdpAudioPacketV3 {
+            header: UdpAudioHeaderV3 {
+                magic: UDP_AUDIO_MAGIC_V3,
+                protocol_version: PROTOCOL_VERSION_V2, // v2 byte
+                header_size: UDP_AUDIO_HEADER_V3_LEN as u16,
+                flags: 0,
+                sequence: 1,
+                timestamp_ms: 0,
+                codec: UdpAudioCodecV2::Opus,
+                channels: 2,
+                sample_rate: 48_000,
+                frame_duration_ms: 10,
+                payload_size: 0,
+                frag_index: 0,
+                total_frags: 1,
+                logical_seq: 1,
+            },
+            payload: vec![],
+        };
+        let err = UdpAudioPacketV3::decode(&packet.encode()).unwrap_err();
+        assert_eq!(err, HeaderV3CodecError::UnsupportedVersion);
+    }
+
+    #[test]
     fn detect_data_plane_packet_kind_by_magic() {
         assert_eq!(
             detect_data_plane_packet_kind(b"LAS1xxxxxxxx"),
@@ -1095,6 +1428,7 @@ mod tests {
             supports_usb_tethering: true,
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
+            supports_hires_pcm24: false,
         };
         let json = serde_json::to_string(&caps).unwrap();
         assert!(json.contains("supports_reverse_channel"));

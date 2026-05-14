@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use lan_audio_protocol::{
-    DataPlanePath, UdpAudioCodecV2, UdpAudioHeaderV2, UdpAudioPacket, UdpAudioPacketV2,
-    PROTOCOL_VERSION_V2, UDP_AUDIO_HEADER_V2_LEN, UDP_AUDIO_MAGIC_V2,
+    DataPlanePath, UdpAudioCodecV2, UdpAudioHeaderV2, UdpAudioHeaderV3, UdpAudioPacket,
+    UdpAudioPacketV2, UdpAudioPacketV3, PROTOCOL_VERSION_V2, PROTOCOL_VERSION_V3,
+    UDP_AUDIO_HEADER_V2_LEN, UDP_AUDIO_HEADER_V3_LEN, UDP_AUDIO_MAGIC_V2, UDP_AUDIO_MAGIC_V3,
 };
 use thiserror::Error;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -330,6 +331,97 @@ pub fn encode_packet_by_data_plane(
             v2.encode()
         }
     }
+}
+
+/// Phase 6 multi-packet variant. Returns one wire-bytes Vec per UDP
+/// datagram that should be sent. For everything except PCM24 this
+/// returns a single-element Vec identical to `encode_packet_by_data_plane`.
+/// For PCM24 the payload is fragmented to fit a per-packet target of
+/// `MAX_PCM24_FRAG_PAYLOAD_BYTES`, with a v3 header carrying
+/// `frag_index/total_frags/logical_seq` for reassembly.
+///
+/// `next_sequence` is a monotonic counter the worker hands in; the helper
+/// advances it as packets are produced and returns the new value via the
+/// out-parameter so the worker stays in sync with the wire-level
+/// `sequence` field.
+pub fn encode_packets_by_data_plane(
+    packet: &UdpAudioPacket,
+    data_plane: DataPlaneFormat,
+    v2_flags: u16,
+    codec: UdpAudioCodecV2,
+    next_sequence: &mut u32,
+) -> Vec<Vec<u8>> {
+    // Non-PCM24: single packet, advance sequence by one to match the
+    // existing per-encoded-frame semantics.
+    if codec != UdpAudioCodecV2::Pcm24 {
+        let bytes = encode_packet_by_data_plane(packet, data_plane, v2_flags, codec);
+        *next_sequence = next_sequence.wrapping_add(1);
+        return vec![bytes];
+    }
+
+    // PCM24 + legacy_las1 is impossible (the legacy header has no codec
+    // discriminator). Caller's responsibility to never pair these — but
+    // be defensive and degrade to an empty result so the dispatcher's
+    // failed-client logic doesn't block.
+    if data_plane == DataPlaneFormat::LegacyLas1 {
+        return vec![];
+    }
+
+    // Slice payload into frags. The slicing is per-byte (not per-sample)
+    // since the receiver reassembles bytes 1:1; samples align as long as
+    // the slice boundary is on a 6-byte stride (3 B/sample × 2 ch). We
+    // round MAX down to the nearest multiple of 6 to preserve alignment.
+    const MAX_PCM24_FRAG_PAYLOAD_BYTES: usize = 1392; // = floor(1400/6)*6
+    let total_payload = packet.payload.len();
+    let total_frags_u = if total_payload == 0 {
+        1
+    } else {
+        total_payload.div_ceil(MAX_PCM24_FRAG_PAYLOAD_BYTES).max(1)
+    };
+    if total_frags_u > u8::MAX as usize {
+        // Shouldn't happen at sane sample rates (48 kHz/5 ms → 1 frag,
+        // 96 kHz/5 ms → 2 frags). Defensive empty result.
+        return vec![];
+    }
+    let total_frags = total_frags_u as u8;
+    let logical_seq = packet.sequence;
+
+    let mut out = Vec::with_capacity(total_frags_u);
+    for frag_index in 0..total_frags_u {
+        let start = frag_index * MAX_PCM24_FRAG_PAYLOAD_BYTES;
+        let end = ((frag_index + 1) * MAX_PCM24_FRAG_PAYLOAD_BYTES).min(total_payload);
+        let chunk = packet.payload[start..end].to_vec();
+
+        let frame_duration_ms = if packet.sample_rate == 0 {
+            0
+        } else {
+            (u32::from(packet.frames_per_packet) * 1000 / packet.sample_rate) as u16
+        };
+
+        let header = UdpAudioHeaderV3 {
+            magic: UDP_AUDIO_MAGIC_V3,
+            protocol_version: PROTOCOL_VERSION_V3,
+            header_size: UDP_AUDIO_HEADER_V3_LEN as u16,
+            flags: v2_flags,
+            sequence: *next_sequence,
+            timestamp_ms: packet.timestamp_ms,
+            codec,
+            channels: packet.channels,
+            sample_rate: packet.sample_rate,
+            frame_duration_ms,
+            payload_size: chunk.len() as u16,
+            frag_index: frag_index as u8,
+            total_frags,
+            logical_seq,
+        };
+        *next_sequence = next_sequence.wrapping_add(1);
+        let v3 = UdpAudioPacketV3 {
+            header,
+            payload: chunk,
+        };
+        out.push(v3.encode());
+    }
+    out
 }
 
 #[cfg(test)]

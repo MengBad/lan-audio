@@ -805,9 +805,11 @@ fn build_service_snapshot(
     let requested_codec = match cfg.codec_selection {
         CodecSelection::Pcm16 => AudioCodecPreference::Pcm16,
         CodecSelection::Opus => AudioCodecPreference::Opus,
+        CodecSelection::Pcm24 => AudioCodecPreference::Pcm24,
     };
     let effective_codec = match effective_codec {
         "opus" => AudioCodecPreference::Opus,
+        "pcm24" => AudioCodecPreference::Pcm24,
         _ => AudioCodecPreference::Pcm16,
     };
     let rollback_state = if matches!(data_plane, DataPlanePath::LegacyLas1)
@@ -904,6 +906,7 @@ fn default_protocol_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
         supports_reverse_channel: true,
+        supports_hires_pcm24: false,
     }
 }
 
@@ -963,6 +966,7 @@ fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
         .build()?;
 
     TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "check_updates" => {

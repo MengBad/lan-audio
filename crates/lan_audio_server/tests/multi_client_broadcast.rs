@@ -188,5 +188,6 @@ fn test_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }

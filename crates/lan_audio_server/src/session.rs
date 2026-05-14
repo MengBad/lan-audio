@@ -442,13 +442,15 @@ impl SessionServer {
                                         let normalized_preferred_sample_rate =
                                             preferred_sample_rate.map(normalize_preferred_sample_rate);
                                         // Phase 7: translate the wire enum to the
-                                        // server's internal CodecSelection. We
-                                        // accept Pcm16 / Opus today; PCM24 would
-                                        // require the Hi-Res passthrough path
-                                        // landing first (see docs/hires_pcm24.md).
+                                        // server's internal CodecSelection. Phase 6
+                                        // adds Pcm24 for the Hi-Res passthrough path.
+                                        // The server's data-plane gating
+                                        // (set_client_mode) downgrades to Pcm16 if
+                                        // legacy_las1 is in effect.
                                         let codec_request = preferred_codec.map(|p| match p {
                                             AudioCodecPreference::Opus => CodecSelection::Opus,
                                             AudioCodecPreference::Pcm16 => CodecSelection::Pcm16,
+                                            AudioCodecPreference::Pcm24 => CodecSelection::Pcm24,
                                         });
                                         self.set_current_audio_mode(mode);
                                         self.registry
@@ -744,6 +746,15 @@ impl ClientRegistry {
                         Some(CodecSelection::Pcm16)
                     }
                     (CodecSelection::Pcm16, _) => Some(CodecSelection::Pcm16),
+                    // Phase 6 Hi-Res. PCM24 only on v2_header (which
+                    // carries v3 packets when codec=Pcm24); legacy_las1
+                    // can't carry the new codec field, fall back to Pcm16.
+                    (CodecSelection::Pcm24, DataPlaneFormat::V2Header) => {
+                        Some(CodecSelection::Pcm24)
+                    }
+                    (CodecSelection::Pcm24, DataPlaneFormat::LegacyLas1) => {
+                        Some(CodecSelection::Pcm16)
+                    }
                 };
                 if let Some(resolved) = allowed {
                     client.codec = resolved;
@@ -994,6 +1005,7 @@ fn legacy_client_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: false,
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }
 
@@ -1054,6 +1066,7 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }
 

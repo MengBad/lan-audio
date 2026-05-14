@@ -43,7 +43,12 @@ class StreamSessionManager(
             transportType: String,
         )
         fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String)
-        fun onAudioModeChanged(mode: String, applied: Boolean, reason: String)
+        fun onAudioModeChanged(
+            mode: String,
+            applied: Boolean,
+            reason: String,
+            effectiveCodec: String? = null,
+        )
         fun onClientCountUpdated(count: Int)
         fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int)
         fun onError(code: String, message: String)
@@ -287,6 +292,12 @@ class StreamSessionManager(
                                 "supports_stable_audio_track" to true,
                                 "supports_usb_tethering" to true,
                                 "supports_usb_direct_future" to false,
+                                // Phase 6 Hi-Res. We can decode v3 PCM24
+                                // packets via the BE→LE downconversion in
+                                // PlaybackSessionRuntime; we don't need
+                                // the float-aware Oboe path to advertise
+                                // the capability.
+                                "supports_hires_pcm24" to true,
                             ),
                         ),
                     )
@@ -372,10 +383,13 @@ class StreamSessionManager(
                                 val mode = msg.optString("mode", currentAudioMode)
                                 val applied = msg.optBoolean("applied", false)
                                 val reason = msg.optString("reason", "")
+                                val effectiveCodec = msg
+                                    .optString("effective_codec", "")
+                                    .takeIf { it.isNotEmpty() }
                                 if (applied) {
                                     currentAudioMode = mode
                                 }
-                                callback.onAudioModeChanged(mode, applied, reason)
+                                callback.onAudioModeChanged(mode, applied, reason, effectiveCodec)
                                 callback.onLog("v2_audio_mode_changed:$mode")
                             }
                             "client_list" -> {

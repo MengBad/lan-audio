@@ -242,9 +242,11 @@ pub(crate) fn build_service_snapshot(
     let requested_codec = match cfg.codec_selection {
         CodecSelection::Pcm16 => AudioCodecPreference::Pcm16,
         CodecSelection::Opus => AudioCodecPreference::Opus,
+        CodecSelection::Pcm24 => AudioCodecPreference::Pcm24,
     };
     let effective_codec = match effective_codec {
         "opus" => AudioCodecPreference::Opus,
+        "pcm24" => AudioCodecPreference::Pcm24,
         _ => AudioCodecPreference::Pcm16,
     };
     let rollback_state = if matches!(data_plane, DataPlanePath::LegacyLas1)
@@ -340,6 +342,8 @@ pub(crate) fn default_protocol_capabilities() -> ProtocolCapabilities {
         supports_stable_audio_track: true,
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
+        supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }
 
