@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -32,6 +33,7 @@ use crate::data_plane::{
 };
 use crate::metrics::Metrics;
 use crate::session::{BroadcastClient, ClientRegistry, ClientTransportSnapshot};
+use crate::thread_priority::{boost_current_thread, MmcssTask};
 use crate::watchdog::{DegradationTier, WatchdogConfig};
 
 #[derive(Clone)]
@@ -65,6 +67,189 @@ struct EncodedFrame {
 }
 
 const FLUSH_REASON_IMMEDIATE_FRAME_READY: &str = "immediate_frame_ready";
+
+// ---- Phase 5 encode worker --------------------------------------------------
+//
+// One dedicated `std::thread` owns the encoder pool and runs all opus / pcm16
+// work synchronously. The thread name is `lan-audio-encode` so it is visible
+// in profilers, and on Windows it registers the MMCSS "Audio" task at thread
+// entry so the kernel scheduler treats it like a real-time audio thread.
+//
+// The async transport layer hands the worker `EncodeJob` envelopes
+// (capture-side metadata + the recipient list) and gets back `EncodeResult`
+// envelopes (one wire frame per recipient). Bridging is asymmetric on
+// purpose:
+//   * Async  -> worker : `std::sync::mpsc` (worker uses sync `recv()`)
+//   * Worker -> async  : `tokio::sync::mpsc::unbounded_channel`
+//                        (worker uses sync `send()` because tokio unbounded
+//                        senders are cheap and lock-free; async side polls
+//                        with `recv().await`)
+
+struct EncodeJob {
+    frame: AudioFrame,
+    clients: Vec<BroadcastClient>,
+    active_tier: DegradationTier,
+    /// Shared sequence counter. The worker increments it once per encoded
+    /// packet so the async dispatch loop never races on it.
+    sequence: Arc<std::sync::atomic::AtomicU32>,
+    /// Reserved for future end-to-end latency telemetry. The worker echoes
+    /// it back on the result so the dispatch loop can compute encode time.
+    #[allow(dead_code)]
+    job_received_at: Instant,
+}
+
+struct WireFrameOut {
+    client: BroadcastClient,
+    packet: UdpAudioPacket,
+    wire_bytes: Vec<u8>,
+    v2_flags: u16,
+    mode_changed: bool,
+    codec: UdpAudioCodecV2,
+    source_peak: f32,
+    source_rms: f32,
+    detected_wire_kind: DataPlanePacketKind,
+}
+
+struct EncodeResult {
+    wire_frames: Vec<WireFrameOut>,
+    /// Reserved for future end-to-end latency telemetry.
+    #[allow(dead_code)]
+    job_received_at: Instant,
+}
+
+/// Spawn the encode worker on a dedicated `std::thread`. The thread runs to
+/// completion when the input channel is dropped — there's no separate
+/// shutdown signal because `std_mpsc::Receiver::recv()` already returns
+/// `Err` once all senders are gone.
+fn spawn_encode_worker(
+    job_rx: std_mpsc::Receiver<EncodeJob>,
+    result_tx: mpsc::UnboundedSender<EncodeResult>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("lan-audio-encode".to_string())
+        .spawn(move || {
+            // Phase 5: register MMCSS for the encode thread. The handle
+            // lives for the whole worker — only dropped when the loop
+            // exits. On non-Windows this is a no-op.
+            let _mmcss = boost_current_thread(MmcssTask::Audio);
+            info!(
+                target: "lan_audio_server::encode_worker",
+                "encode worker started"
+            );
+
+            let mut encoders: HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder> =
+                HashMap::new();
+            let mut last_applied_tier = DegradationTier::Green;
+
+            while let Ok(job) = job_rx.recv() {
+                // Re-baseline encoders if the watchdog tier just changed.
+                if job.active_tier != last_applied_tier {
+                    for ((_, mode, _), encoder) in encoders.iter_mut() {
+                        let profile = tier_encoder_profile(job.active_tier, *mode);
+                        encoder.apply_tier_profile(profile, *mode);
+                    }
+                    info!(
+                        target: "lan_audio_server::encode_worker",
+                        from = ?last_applied_tier,
+                        to = ?job.active_tier,
+                        "tier transition applied to encoder pool"
+                    );
+                    last_applied_tier = job.active_tier;
+                }
+
+                let mut wire_frames: Vec<WireFrameOut> = Vec::with_capacity(job.clients.len());
+
+                // Group recipients by encoder key so each (codec, mode, rate)
+                // tuple encodes the frame once, then fans out to all matching
+                // recipients.
+                let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
+                    HashMap::new();
+                for client in job.clients.iter().cloned() {
+                    let preferred_sample_rate =
+                        normalize_encoder_sample_rate(client.preferred_sample_rate);
+                    grouped
+                        .entry((client.codec, client.audio_mode, preferred_sample_rate))
+                        .or_default()
+                        .push(client);
+                }
+
+                for ((codec, mode, sample_rate), recipients) in grouped {
+                    let encoder = encoders
+                        .entry((codec, mode, sample_rate))
+                        .or_insert_with(|| {
+                            let mut e = AudioFrameEncoder::new(codec, mode, sample_rate);
+                            let profile = tier_encoder_profile(job.active_tier, mode);
+                            e.apply_tier_profile(profile, mode);
+                            e
+                        });
+                    let encoded_frames = encoder.encode(job.frame.clone(), mode);
+                    for encoded in encoded_frames {
+                        let packet_codec = encoded.codec;
+                        let source_peak = encoded.source_peak;
+                        let source_rms = encoded.source_rms;
+                        let seq = job
+                            .sequence
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let packet = UdpAudioPacket {
+                            version: 1,
+                            flags: legacy_flags_for_frame(&encoded),
+                            sequence: seq,
+                            timestamp_ms: encoded.pts_ms,
+                            sample_rate: encoded.sample_rate,
+                            channels: encoded.channels,
+                            frames_per_packet: encoded.frames_per_packet,
+                            payload: encoded.payload,
+                        };
+
+                        for client in &recipients {
+                            let v2_flags = v2_flags_for_frame(
+                                &packet,
+                                client.mode_changed,
+                                client.first_packet,
+                            );
+                            let wire_bytes = encode_packet_by_data_plane(
+                                &packet,
+                                client.data_plane,
+                                v2_flags,
+                                packet_codec,
+                            );
+                            let detected_wire_kind = detect_data_plane_packet_kind(&wire_bytes);
+                            wire_frames.push(WireFrameOut {
+                                client: client.clone(),
+                                packet: packet.clone(),
+                                wire_bytes,
+                                v2_flags,
+                                mode_changed: client.mode_changed,
+                                codec: packet_codec,
+                                source_peak,
+                                source_rms,
+                                detected_wire_kind,
+                            });
+                        }
+                    }
+                }
+
+                let result = EncodeResult {
+                    wire_frames,
+                    job_received_at: job.job_received_at,
+                };
+                if result_tx.send(result).is_err() {
+                    warn!(
+                        target: "lan_audio_server::encode_worker",
+                        "result channel closed; encode worker exiting"
+                    );
+                    break;
+                }
+            }
+
+            info!(
+                target: "lan_audio_server::encode_worker",
+                "encode worker stopped"
+            );
+            // _mmcss drops here, reverting MMCSS registration on Windows.
+        })
+        .expect("spawn encode worker thread")
+}
 
 #[derive(Debug)]
 struct CaptureHandoffStatsWindow {
@@ -366,9 +551,16 @@ impl BroadcastTransport {
             }
         });
 
-        let mut encoders: HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder> =
-            HashMap::new();
-        let mut sequence: u32 = 0;
+        // Phase 5 encode worker: all opus / pcm16 encoding runs on a
+        // dedicated `std::thread` with MMCSS "Audio" registered. This
+        // protects the audio pipeline from the noise of tokio worker
+        // threads picking up other futures, which used to make MMCSS
+        // registration unreliable in v1.9.0.
+        let (job_tx, job_rx) = std_mpsc::channel::<EncodeJob>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<EncodeResult>();
+        let encode_worker_handle = spawn_encode_worker(job_rx, result_tx);
+        let sequence = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
         let mut tx_stats = TxStats::new();
 
         // Phase 4 adaptive runtime: drives a CPU + queue-pressure watchdog
@@ -459,37 +651,47 @@ impl BroadcastTransport {
                         continue;
                     }
 
-                    // Phase 4: if the watchdog has chosen a new tier, push
-                    // the matching profile into every encoder before we use
-                    // them. We re-baseline per (codec, mode, rate) so the
-                    // sample-rate-specific opus encoders all stay in sync.
-                    if adaptive_enabled {
-                        let tier_now = current_tier
+                    // Read the latest watchdog tier and forward it to the
+                    // encode worker via the job envelope. The worker
+                    // applies tier transitions in lock-step with the
+                    // encode call so the bitrate change always lands on
+                    // a packet boundary.
+                    let tier_now = if adaptive_enabled {
+                        current_tier
                             .lock()
                             .map(|g| *g)
-                            .unwrap_or(DegradationTier::Green);
-                        if tier_now != last_applied_tier {
-                            for ((_, mode, _), encoder) in encoders.iter_mut() {
-                                let profile = tier_encoder_profile(tier_now, *mode);
-                                encoder.apply_tier_profile(profile, *mode);
-                            }
-                            info!(
-                                from = ?last_applied_tier,
-                                to = ?tier_now,
-                                "broadcast adaptive tier transition applied to all encoders"
-                            );
-                            last_applied_tier = tier_now;
-                        }
+                            .unwrap_or(DegradationTier::Green)
+                    } else {
+                        DegradationTier::Green
+                    };
+                    if tier_now != last_applied_tier {
+                        info!(
+                            from = ?last_applied_tier,
+                            to = ?tier_now,
+                            "broadcast adaptive tier transition forwarded to encode worker"
+                        );
+                        last_applied_tier = tier_now;
                     }
 
-                    self.broadcast_frame(
+                    let job = EncodeJob {
                         frame,
-                        &clients,
-                        &mut encoders,
-                        &mut sequence,
-                        &mut tx_stats,
-                        last_applied_tier,
-                    ).await;
+                        clients,
+                        active_tier: tier_now,
+                        sequence: Arc::clone(&sequence),
+                        job_received_at: Instant::now(),
+                    };
+
+                    if job_tx.send(job).is_err() {
+                        warn!("encode worker channel closed; broadcast transport stopping");
+                        break;
+                    }
+                }
+                maybe_result = result_rx.recv() => {
+                    let Some(result) = maybe_result else {
+                        warn!("encode result channel closed; broadcast transport stopping");
+                        break;
+                    };
+                    self.dispatch_wire_frames(result.wire_frames, &mut tx_stats).await;
                 }
             }
         }
@@ -498,102 +700,59 @@ impl BroadcastTransport {
         if let Some(handle) = watchdog_handle {
             handle.abort();
         }
+        // Drop the job sender so the worker exits cleanly.
+        drop(job_tx);
+        if let Err(err) = encode_worker_handle.join() {
+            warn!(?err, "encode worker thread panicked");
+        }
         Ok(())
     }
 
-    async fn broadcast_frame(
-        &self,
-        frame: AudioFrame,
-        clients: &[BroadcastClient],
-        encoders: &mut HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder>,
-        sequence: &mut u32,
-        tx_stats: &mut TxStats,
-        active_tier: DegradationTier,
-    ) {
-        let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
-            HashMap::new();
-        for client in clients.iter().cloned() {
-            let preferred_sample_rate = normalize_encoder_sample_rate(client.preferred_sample_rate);
-            grouped
-                .entry((client.codec, client.audio_mode, preferred_sample_rate))
-                .or_default()
-                .push(client);
-        }
+    /// Phase 5 dispatch path. Takes wire frames produced by the encode
+    /// worker, fans them out to recipients via the appropriate data plane,
+    /// and updates `tx_stats` / `metrics` / `registry` based on send
+    /// outcome. Failed sends record per-client failure for the existing
+    /// drop-and-cleanup logic.
+    async fn dispatch_wire_frames(&self, wire_frames: Vec<WireFrameOut>, tx_stats: &mut TxStats) {
+        let mut failed_wifi_clients: Vec<Uuid> = Vec::new();
+        let mut failed_usb_clients: Vec<Uuid> = Vec::new();
 
-        let mut failed_wifi_clients = Vec::new();
-        let mut failed_usb_clients = Vec::new();
-        for ((codec, mode, preferred_sample_rate), recipients) in grouped {
-            let encoder = encoders
-                .entry((codec, mode, preferred_sample_rate))
-                .or_insert_with(|| {
-                    let mut e = AudioFrameEncoder::new(codec, mode, preferred_sample_rate);
-                    // Phase 4: apply the current tier profile so a newly
-                    // created encoder for this (codec, mode, rate) tuple
-                    // joins in lock-step with the existing fleet.
-                    let profile = tier_encoder_profile(active_tier, mode);
-                    e.apply_tier_profile(profile, mode);
-                    e
-                });
-            let encoded_frames = encoder.encode(frame.clone(), mode);
-            for encoded in encoded_frames {
-                let packet = UdpAudioPacket {
-                    version: 1,
-                    flags: legacy_flags_for_frame(&encoded),
-                    sequence: *sequence,
-                    timestamp_ms: encoded.pts_ms,
-                    sample_rate: encoded.sample_rate,
-                    channels: encoded.channels,
-                    frames_per_packet: encoded.frames_per_packet,
-                    payload: encoded.payload,
-                };
-                *sequence = (*sequence).wrapping_add(1);
-
-                for client in &recipients {
-                    let v2_flags =
-                        v2_flags_for_frame(&packet, client.mode_changed, client.first_packet);
-                    let wire_frame = DataPlaneEncodedFrame::new(encode_packet_by_data_plane(
-                        &packet,
-                        client.data_plane,
-                        v2_flags,
-                        encoded.codec,
-                    ));
-                    let plane = self.sender_for_client(client);
-                    match plane.send_frame(&wire_frame).await {
-                        Ok(()) => {
-                            self.metrics.inc_packets(wire_frame.len());
-                            tx_stats.observe(
-                                &packet,
-                                wire_frame.len(),
-                                Duration::from_millis(0),
-                                client.data_plane,
-                                detect_data_plane_packet_kind(wire_frame.bytes()),
-                                v2_flags,
-                                client.mode_changed,
-                                encoded.codec,
-                                encoded.source_peak,
-                                encoded.source_rms,
-                            );
+        for wire in wire_frames {
+            let plane = self.sender_for_client(&wire.client);
+            let frame_len = wire.wire_bytes.len();
+            let dataplane_frame = DataPlaneEncodedFrame::new(wire.wire_bytes);
+            match plane.send_frame(&dataplane_frame).await {
+                Ok(()) => {
+                    self.metrics.inc_packets(frame_len);
+                    tx_stats.observe(
+                        &wire.packet,
+                        frame_len,
+                        Duration::from_millis(0),
+                        wire.client.data_plane,
+                        wire.detected_wire_kind,
+                        wire.v2_flags,
+                        wire.mode_changed,
+                        wire.codec,
+                        wire.source_peak,
+                        wire.source_rms,
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        client = %wire.client.name,
+                        data_plane = plane.path_name(),
+                        error = %err,
+                        "broadcast send failed"
+                    );
+                    match &wire.client.transport {
+                        ClientTransportSnapshot::Wifi(_) => {
+                            failed_wifi_clients.push(wire.client.id)
                         }
-                        Err(err) => {
-                            warn!(
-                                client = %client.name,
-                                data_plane = plane.path_name(),
-                                error = %err,
-                                "broadcast send failed"
-                            );
-                            match &client.transport {
-                                ClientTransportSnapshot::Wifi(_) => {
-                                    failed_wifi_clients.push(client.id)
-                                }
-                                ClientTransportSnapshot::Usb(_) => {
-                                    failed_usb_clients.push(client.id)
-                                }
-                            }
-                        }
+                        ClientTransportSnapshot::Usb(_) => failed_usb_clients.push(wire.client.id),
                     }
                 }
-                tx_stats.maybe_log(*sequence);
             }
+            tx_stats.maybe_log(wire.packet.sequence);
         }
 
         failed_wifi_clients.sort_unstable();
@@ -1957,5 +2116,92 @@ mod tests {
         );
         let decoded = UdpAudioPacketV2::decode(&bytes).expect("decode v2");
         assert_eq!(decoded.header.codec, UdpAudioCodecV2::Opus);
+    }
+
+    /// Phase 5 encode worker smoke test. Spins up a real worker thread,
+    /// sends one job that targets two simulated PCM16 wifi clients, and
+    /// asserts the worker emits one wire frame per recipient and advances
+    /// the shared sequence counter exactly once per encoded packet.
+    #[test]
+    fn encode_worker_emits_one_wire_frame_per_recipient() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let (job_tx, job_rx) = std_mpsc::channel::<EncodeJob>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<EncodeResult>();
+        let worker = spawn_encode_worker(job_rx, result_tx);
+
+        let frame = AudioFrame {
+            pts_ms: 0,
+            format: AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                frame_duration_ms: 10,
+            },
+            samples_f32: vec![0.0; 960 * 2],
+            is_silence: true,
+            packet_kind: PacketKind::SilentPacket,
+            peak: 0.0,
+            rms: 0.0,
+            source_buffer_frames: None,
+        };
+
+        let make_client = |id: Uuid, port: u16| BroadcastClient {
+            id,
+            name: format!("test-{}", port),
+            data_plane: DataPlaneFormat::LegacyLas1,
+            codec: CodecSelection::Pcm16,
+            audio_mode: AudioMode::Balanced,
+            preferred_sample_rate: 48_000,
+            transport: ClientTransportSnapshot::Wifi(
+                format!("127.0.0.1:{}", port).parse().expect("addr"),
+            ),
+            first_packet: true,
+            mode_changed: false,
+        };
+        let clients = vec![
+            make_client(Uuid::new_v4(), 60_001),
+            make_client(Uuid::new_v4(), 60_002),
+        ];
+
+        let sequence = Arc::new(AtomicU32::new(42));
+        let job = EncodeJob {
+            frame,
+            clients: clients.clone(),
+            active_tier: DegradationTier::Green,
+            sequence: Arc::clone(&sequence),
+            job_received_at: Instant::now(),
+        };
+
+        job_tx.send(job).expect("send job");
+
+        // Drain on the same thread without a runtime — `try_recv` polls.
+        let mut received: Option<EncodeResult> = None;
+        for _ in 0..100 {
+            if let Ok(result) = result_rx.try_recv() {
+                received = Some(result);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let result = received.expect("worker must produce a result");
+
+        // Two recipients on the same (codec, mode, rate) -> one encoded
+        // packet, two wire frames.
+        assert_eq!(result.wire_frames.len(), 2);
+        // Sequence counter advanced exactly once for the single packet.
+        assert_eq!(sequence.load(Ordering::Relaxed), 43);
+        // Both wire frames carry the same sequence number (one packet,
+        // fanned out to two recipients).
+        assert_eq!(result.wire_frames[0].packet.sequence, 42);
+        assert_eq!(result.wire_frames[1].packet.sequence, 42);
+        // Both targeted at legacy_las1 magic.
+        assert_eq!(
+            result.wire_frames[0].detected_wire_kind,
+            DataPlanePacketKind::LegacyLas1,
+        );
+
+        drop(job_tx);
+        worker.join().expect("worker join");
     }
 }

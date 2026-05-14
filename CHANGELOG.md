@@ -4,6 +4,25 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.9.1] - 2026-05-14
+
+### Changed
+
+- Phase 5 MMCSS: encode pipeline migrated from inline async block to a dedicated `std::thread` (`lan-audio-encode`). The thread registers MMCSS "Audio" on Windows and holds the registration for the worker's lifetime, so the boost is now actually applied.
+- `BroadcastTransport::run` is now a 3-stage pipeline (capture → encode worker → dispatch) communicating via `std::sync::mpsc` (async → worker) and `tokio::sync::mpsc::unbounded` (worker → async).
+- The shared sequence counter is now an `Arc<AtomicU32>` advanced by the worker per encoded packet — the async dispatch no longer needs to predict packet count.
+
+### Added
+
+- `EncodeJob` / `WireFrameOut` / `EncodeResult` types and `spawn_encode_worker` helper in `transport.rs`.
+- Smoke test `encode_worker_emits_one_wire_frame_per_recipient` exercising a real worker thread end-to-end (no test runtime needed).
+
+### Notes
+
+- No protocol change, no CLI change. Pure server-internal refactor.
+- Behaviour is identical on non-Windows hosts (MMCSS registration is a no-op there).
+- Existing `--no-adaptive-runtime` rollback path still works; the encode worker is unconditional because it's now the only encode path.
+
 ## [1.9.0] - 2026-05-14
 
 ### Added
