@@ -1,202 +1,149 @@
-# LAN Audio
+<p align="center">
+  <h1 align="center">🔊 LAN Audio</h1>
+  <p align="center">
+    Stream your Windows PC audio to Android phones over Wi-Fi or USB.<br/>
+    Turn any Android device into a wireless speaker.
+  </p>
+</p>
 
-[![codecov](https://codecov.io/gh/MengBad/lan-audio/branch/main/graph/badge.svg)](https://codecov.io/gh/MengBad/lan-audio)
+<p align="center">
+  <a href="https://github.com/MengBad/lan-audio/releases"><img alt="Release" src="https://img.shields.io/github/v/release/MengBad/lan-audio?color=6366f1" /></a>
+  <a href="https://github.com/MengBad/lan-audio/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/MengBad/lan-audio?color=22c55e" /></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-8b5cf6" />
+</p>
 
-LAN Audio turns a Windows PC into an audio sender and an Android phone into a network speaker.
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &nbsp;|&nbsp;
+  <a href="https://github.com/MengBad/lan-audio/releases">Download</a> &nbsp;|&nbsp;
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-It supports Wi-Fi and USB transport, keeps a permanent rollback path, and is built around a Rust server, a Flutter Android client, and a Tauri desktop app.
+---
 
-## Overview
+## What is this?
 
-- Current version: `1.8`
-- Latest release: `v1.8`
-- Primary path: `windows_loopback + v2_header + opus`
-- Rollback path: `legacy_las1 + pcm16`
-- Transport modes: `wifi`, `usb`
-- Audio modes: `low_latency`, `balanced`, `high_quality`
+LAN Audio captures system audio from a Windows PC and streams it in real-time to Android devices over your local network. Your phone becomes a low-latency wireless speaker.
+
+**Use cases:**
+- Your PC doesn't have good speakers, but your phone/tablet does
+- You want to listen to PC audio from another room
+- You need a quick wireless speaker without buying hardware
+
+## Screenshots
+
+<!-- 
+  TODO: Add real screenshots here
+  Place them in screenshots/ directory:
+  - screenshots/desktop.png (Windows desktop app)
+  - screenshots/android-playback.png (Android playing)
+  - screenshots/android-discovery.png (Android discovering servers)
+-->
+
+> Screenshots coming soon. Download the app from [Releases](https://github.com/MengBad/lan-audio/releases) to try it out.
 
 ## Features
 
-- Stream Windows system audio to Android in real time.
-- Use a built-in `synthetic` source for testing and diagnostics.
-- Run over normal LAN or USB via `adb reverse`.
-- Switch between `low_latency`, `balanced`, and `high_quality` playback strategies.
-- Keep Protocol v2 on the main path while preserving `legacy_las1 + pcm16` as a stable rollback route.
-- Inspect runtime state from desktop and Android through a shared snapshot contract.
-- Export desktop diagnostics snapshots as JSON for troubleshooting.
-- Android foreground playback notification uses MediaStyle with MediaSession state/metadata.
-- Android background playback guide surfaces battery-saver steps for Xiaomi, Huawei, and generic Android devices.
-- Android 3-band EQ with low/mid/high controls, presets, and persistent settings.
-- Optional loudness normalization with live gain display.
-- Multi-device streaming from one Windows sender to up to 4 Android clients.
-- mDNS LAN discovery shows nearby senders without manual IP entry.
-- Smart reconnect uses exponential backoff after short network interruptions.
-- Connection history and favorites persist common devices for one-tap reconnect.
-- Android mic → PC reverse audio channel with Opus encoding and named-pipe output on Windows.
-- Real-time jitter visualization sparkline in Audio Console Dark with three-zone coloring.
-- PC-side volume control of Android via desktop tray presets and on-phone volume pill indicator.
-- Contributor docs, issue templates, PR template, changelog, and Codecov coverage reporting are in place.
-
-## Current Status
-
-`v1.8` is the current standard release.
-
-Validated release facts:
-
-- Release gate: `allow_release`
-- FORCE_RELEASE: `false`
-- Main path: `windows_loopback + v2_header + opus`
-- Rollback path: `legacy_las1 + pcm16`
-- Rollback verification: `desktop_headless --force-rollback`
-- Verified device: `5391d451` (`Xiaomi 24129PN74C`)
-- Verified scenarios: `USB direct`, `WiFi + windows_loopback`, `2 Android clients`
-- Latency probe: `low_latency p95=64ms`, `balanced p95=185ms`, `high_quality p95=505ms`
-- Reverse channel: Android mic streams to PC via Opus TCP (port 7878); PC-side volume control via TCP (port 7879).
-- v1.7.1 hotfix: update checker endpoints use `MengBad/lan-audio`, Android update checks run off the main thread, and release signing CI is aligned with the fixed keystore flow.
-- v1.7.2 hotfix: Android production entry restores Audio Console Dark after the v1.7 merge regression.
-
-## Architecture
-
-```text
-Windows
-  - Tauri desktop app
-  - desktop_headless debug entry
-  - Rust server
-  - Protocol v1/v2 control + audio transport
-
-Android
-  - Flutter UI
-  - Foreground playback service
-  - Oboe / AudioTrack playback runtime
-  - libopus JNI decode path
-```
-
-## Repository Layout
-
-```text
-apps/
-  android_flutter/        Android client (Flutter + native playback bridge)
-  desktop/                Windows desktop app (Tauri)
-
-crates/
-  lan_audio_domain/       Shared domain contracts and release gate schema
-  lan_audio_protocol/     Protocol types and packet formats
-  lan_audio_server/       Capture, transport, session, and runtime logic
-
-docs/                     Protocol, UI, release, and roadmap docs
-scripts/                  Local run, validate, package, and release scripts
-artifacts/release/        Tracked release gate and device acceptance evidence
-```
+- **Low latency** — ~64ms (p95) in low_latency mode over Wi-Fi, even lower on USB
+- **Opus codec** — 48kHz VBR encoding, low bandwidth usage
+- **Auto-discovery** — mDNS finds nearby senders automatically, no manual IP needed
+- **Three modes** — low_latency / balanced / high_quality
+- **Auto-reconnect** — exponential backoff on network interruptions
+- **Equalizer** — 3-band EQ with presets (Flat, Bass Boost, Vocal, Treble)
+- **Reverse mic** — stream Android mic back to PC (port 7878)
+- **Remote volume** — control phone volume from PC
+- **Multi-device** — up to 4 phones receiving simultaneously
+- **USB mode** — use a USB cable for more stable connection via adb
 
 ## Quick Start
 
-Start the Windows sender with the real system audio path:
+### Download
+
+**Android:** Grab the APK from [Releases](https://github.com/MengBad/lan-audio/releases). Most phones need the `arm64-v8a` build.
+
+**Windows:** Download the `.exe` from Releases, or build from source:
 
 ```powershell
+git clone https://github.com/MengBad/lan-audio.git
+cd lan-audio
 cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
 ```
 
-Synthetic test source:
+### Usage
 
+1. Connect PC and phone to the same Wi-Fi network
+2. Start LAN Audio on Windows
+3. Open the app on Android — it auto-discovers the PC
+4. Tap to connect and start streaming
+
+**USB mode** (more stable, no Wi-Fi needed):
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic
+cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-serial <device-serial> --audio-source windows_loopback
 ```
 
-USB mode:
+## Tech Stack
 
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-serial <serial> --audio-source windows_loopback
+| Component | Technology |
+| :--- | :--- |
+| Audio capture | WASAPI Loopback (Windows) |
+| Desktop GUI | Tauri 2 + Rust |
+| Transport | TCP, custom Protocol v2 |
+| Codec | Opus 48kHz VBR |
+| Android client | Flutter + Kotlin |
+| Audio output | Oboe (NDK), AudioTrack fallback |
+| Discovery | mDNS |
+
+## Project Structure
+
+```
+apps/
+  android_flutter/     Android client (Flutter + Kotlin native)
+  desktop/             Windows desktop (Tauri)
+
+crates/
+  lan_audio_protocol/  Protocol definitions & parsing
+  lan_audio_server/    Audio capture, encoding, transport
+  lan_audio_domain/    Shared types
+
+docs/                  Protocol specs, architecture
+scripts/               Build & release scripts
 ```
 
-Force rollback path:
+## Development
+
+### Requirements
+
+- Rust 1.75+
+- Flutter 3.x
+- Android SDK + NDK (for Oboe)
+- Windows 10+
+
+### Build & Test
 
 ```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback --force-rollback
-```
-
-Install the Android APK that matches your device ABI from the GitHub release:
-
-- `arm64-v8a`
-- `armeabi-v7a`
-- `x86_64`
-
-Open the Android app, choose a nearby mDNS-discovered sender or enter an IP manually, and start playback.
-
-## Data Plane And Codec
-
-Recommended runtime path:
-
-- Source: `windows_loopback`
-- Data plane: `v2_header`
-- Codec: `opus`
-
-Maintained fallback path:
-
-- Data plane: `legacy_las1`
-- Codec: `pcm16`
-
-Service snapshots expose configured and active runtime path state, including EQ, loudness, reconnect, and multi-device summary fields.
-
-## Local Development
-
-Full local validation:
-
-```powershell
+# One-step validation
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+
+# Or manually
+cargo fmt --all -- --check
+cargo check
+cargo test -p lan_audio_protocol -p lan_audio_server
 ```
 
-Build local release artifacts:
+### Build Release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 ```
 
-Confirm the v1.8 latency probe:
+## Docs
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\export_latency_probe.ps1
-```
-
-## Release
-
-Version source:
-
-- `VERSION`
-
-Release entry:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.8
-```
-
-GitHub Release artifacts include:
-
-- `lan-audio-android-arm64-v8a-v1.8.apk`
-- `lan-audio-android-armeabi-v7a-v1.8.apk`
-- `lan-audio-android-x86_64-v1.8.apk`
-- `lan-audio-desktop-v1.8.exe`
-- `SHA256SUMS.txt`
-
-## Documentation
-
-- [Protocol](docs/protocol.md)
+- [Protocol Spec](docs/protocol.md) — wire format & negotiation
 - [Protocol v2 Migration](docs/protocol_v2_migration.md)
-- [Desktop UI](docs/desktop_ui.md)
-- [Release Policy](docs/RELEASE_POLICY.md)
-- [TODO / Status](docs/todo.md)
-- [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
+- [Architecture](docs/architecture.md)
+- [Desktop UI Design](docs/desktop_ui.md)
+- [Dev Setup](docs/dev_setup.md)
+- [Known Issues](docs/known_issues.md)
 
-## Rollback
+## License
 
-If the recommended path is unstable, fall back to one of these:
-
-- `legacy_las1 + pcm16`
-- `windows_loopback + legacy_las1 + pcm16`
-- `synthetic + v2_header + pcm16`
-
-For explicit rollback verification, use:
-
-```powershell
-cargo run -p lan_audio_server --bin desktop_headless -- --audio-source synthetic --force-rollback
-```
+[MIT](LICENSE)

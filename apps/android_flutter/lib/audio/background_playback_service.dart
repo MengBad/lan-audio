@@ -62,17 +62,29 @@ class PlaybackServiceSnapshot {
     return [];
   }
 
-  int get jitterP50Us =>
-      (metrics['jitterP50Us'] ?? metrics['jitter_p50_us'] ?? 0) as int;
+  int get jitterP50Us {
+    final raw = metrics['jitterP50Us'] ?? metrics['jitter_p50_us'];
+    if (raw is num) {
+      return raw.toInt();
+    }
+    return 0;
+  }
 
-  int get jitterP95Us =>
-      (metrics['jitterP95Ms'] ?? metrics['jitter_p95_ms'] ?? 0) is int
-          ? ((metrics['jitterP95Ms'] ?? metrics['jitter_p95_ms']) as int) *
-              1000
-          : 0;
+  int get jitterP95Us {
+    final raw = metrics['jitterP95Ms'] ?? metrics['jitter_p95_ms'];
+    if (raw is num) {
+      return raw.toInt() * 1000;
+    }
+    return 0;
+  }
 
-  int get underrunCount =>
-      (metrics['jitterUnderrun'] ?? metrics['jitter_underrun'] ?? 0) as int;
+  int get underrunCount {
+    final raw = metrics['jitterUnderrun'] ?? metrics['jitter_underrun'] ?? 0;
+    if (raw is num) {
+      return raw.toInt();
+    }
+    return 0;
+  }
 
   factory PlaybackServiceSnapshot.fromMap(Map<dynamic, dynamic> map) {
     final normalized = map.map(

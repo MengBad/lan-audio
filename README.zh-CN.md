@@ -1,75 +1,67 @@
-# LAN Audio
+# 🔊 LAN Audio
 
-[![codecov](https://codecov.io/gh/MengBad/lan-audio/branch/main/graph/badge.svg)](https://codecov.io/gh/MengBad/lan-audio)
+把 Windows 电脑的声音实时传到 Android 手机上播放，手机变无线音响。
 
-LAN Audio 可以把 Windows 电脑变成音频发送端，把 Android 手机变成局域网音响。
+[English](README.md) | [下载](https://github.com/MengBad/lan-audio/releases)
 
-项目由 Rust 服务端、Flutter Android 客户端和 Tauri 桌面端组成，默认主路径为 `windows_loopback + v2_header + opus`，并永久保留 `legacy_las1 + pcm16` 回滚路径。
+---
 
-## 当前版本
+## 使用场景
 
-- Current version: `1.8`
-- 最新发布：`v1.8`
-- 主路径：`windows_loopback + v2_header + opus`
-- 回滚路径：`legacy_las1 + pcm16`
-- 传输：Wi-Fi / USB direct
-- 模式：`low_latency` / `balanced` / `high_quality`
+- 电脑音响不行，手机/平板扬声器还不错
+- 躺床上想听电脑的声音
+- 临时需要个无线音响，不想买硬件
 
-## 功能
+## 截图
 
-- Windows 系统声音实时推送到 Android 手机播放。
-- 支持 `synthetic` 测试音源，用于诊断和验收。
-- 支持局域网连接和 USB `adb reverse` 连接。
-- 支持低延迟、均衡、高音质三种播放策略。
-- Protocol v2 + Opus 作为主路径，同时保留 legacy PCM16 回滚路径。
-- Android 前台播放通知集成 MediaSession。
-- 省电模式后台保活引导，覆盖小米、华为和通用 Android 路径。
-- EQ 均衡器（3 段，Android），含预设和持久化。
-- 响度归一化，播放时显示当前增益。
-- 多设备同时推流，最多 4 台 Android 设备。
-- mDNS 局域网设备自动发现，无需手动输入 IP。
-- 智能断网重连，使用指数退避。
-- 连接历史与收藏，常用设备可一键连接。
-- Android 麦克风 → PC 反向音频通道，Opus 编码，Windows 命名管道输出。
-- 实时抖动可视化（Audio Console Dark 内嵌折线图，三段着色）。
-- PC 端控制 Android 音量，桌面托盘快捷预设，手机端音量浮层提示。
-- 贡献者文档、Issue 模板、PR 模板、CHANGELOG 和 Codecov 覆盖率报告已补齐。
+<!-- TODO: 添加真实截图到 screenshots/ 目录 -->
 
-## v1.8 验收状态
+> 截图即将更新。可以从 [Releases](https://github.com/MengBad/lan-audio/releases) 下载体验。
 
-- Release gate：`allow_release`
-- FORCE_RELEASE：`false`
-- 验证设备：`5391d451`（`Xiaomi 24129PN74C`）
-- 验证场景：`USB direct`、`WiFi + windows_loopback`、`2 Android clients`
-- latency probe：`low_latency p95=64ms`、`balanced p95=185ms`、`high_quality p95=505ms`
-- Reverse channel：Android 麦克风通过 Opus TCP 推送到 PC（端口 7878）；PC 端通过 TCP 控制 Android 音量（端口 7879）。
-- v1.7.1 hotfix：修正 GitHub update checker URL，Android 更新检测改为后台网络请求，并修复 Android release CI 签名路径。
-- v1.7.2 hotfix：Android 生产入口恢复 Audio Console Dark，修复 v1.7 合并后的 UI 退化。
+## 特性
 
-## 本地验证
+- **低延迟** — low_latency 模式 Wi-Fi p95 约 64ms，USB 更低
+- **Opus 编码** — 48kHz VBR，省带宽
+- **自动发现** — mDNS 局域网扫描，不用手动输 IP
+- **三种模式** — low_latency / balanced / high_quality
+- **断线重连** — 指数退避自动恢复
+- **均衡器** — 3 段 EQ + 预设
+- **反向麦克风** — 手机麦克风传回电脑
+- **PC 控音量** — 电脑端直接调手机音量
+- **多设备** — 最多 4 台手机同时收听
+- **USB 模式** — 数据线直连，更稳定
+
+## 快速开始
+
+### 下载
+
+**Android：** 从 [Releases](https://github.com/MengBad/lan-audio/releases) 下载 APK。大多数手机选 `arm64-v8a`。
+
+**Windows：** 从 Releases 下载 exe，或自己编译：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+git clone https://github.com/MengBad/lan-audio.git
+cd lan-audio
+cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_loopback
 ```
 
-## 打包
+### 使用
+
+1. 电脑和手机连同一个 Wi-Fi
+2. 电脑启动 LAN Audio
+3. 手机打开 App，自动发现电脑
+4. 点击连接，开始播放
+
+## 开发
 
 ```powershell
+# 一键验证
+powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
+
+# 构建 Release
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 ```
 
-发布产物：
+## 协议
 
-- `lan-audio-android-arm64-v8a-v1.8.apk`
-- `lan-audio-android-armeabi-v7a-v1.8.apk`
-- `lan-audio-android-x86_64-v1.8.apk`
-- `lan-audio-desktop-v1.8.exe`
-- `SHA256SUMS.txt`
-
-## 发布
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.8
-```
-
-APK 使用固定 keystore 签名，支持覆盖安装。
+[MIT](LICENSE)

@@ -5,12 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.AlarmManager
+import android.content.pm.ServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.os.Build
+import android.os.Binder
+import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.net.wifi.WifiManager
@@ -38,6 +41,9 @@ class PlaybackForegroundService : MediaSessionService() {
     private var bufferingSinceMs = 0L
     private var lastPowerGuideNotificationAtMs = 0L
     @Volatile private var micActive: Boolean = false
+    class InternalBinder(private val service: PlaybackForegroundService? = null) : Binder() {
+        fun getService(): PlaybackForegroundService? = service
+    }
 
     private val storeListener: (PlaybackSnapshot) -> Unit = { snapshot ->
         updateMediaSession(snapshot)
@@ -76,6 +82,13 @@ class PlaybackForegroundService : MediaSessionService() {
                 recentLog = "service_created",
             ),
         )
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        if (intent?.action == ACTION_BIND_INTERNAL) {
+            return InternalBinder(this)
+        }
+        return super.onBind(intent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -272,12 +285,35 @@ class PlaybackForegroundService : MediaSessionService() {
                 logTag,
                 "service entered foreground target=${snapshot.targetName ?: snapshot.targetHost ?: "LAN Audio"} state=${snapshot.connectionState}/${snapshot.playbackState}"
             )
-            startForeground(NOTIFICATION_ID, notification)
+            startForegroundWithTypes(notification, foregroundTypes = FOREGROUND_TYPE_MEDIA_PLAYBACK_ONLY)
             foregroundStarted = true
             return
         }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, notification)
+    }
+
+    fun upgradeForegroundTypeToMicrophone() {
+        val notification = buildNotification(stateStore.current())
+        startForegroundWithTypes(
+            notification,
+            foregroundTypes = FOREGROUND_TYPE_MEDIA_PLAYBACK_OR_MICROPHONE,
+        )
+        Log.i(logTag, "foreground service type upgraded to include microphone")
+    }
+
+    fun downgradeForegroundTypeToMediaPlayback() {
+        val notification = buildNotification(stateStore.current())
+        startForegroundWithTypes(notification, foregroundTypes = FOREGROUND_TYPE_MEDIA_PLAYBACK_ONLY)
+        Log.i(logTag, "foreground service type downgraded to media playback only")
+    }
+
+    private fun startForegroundWithTypes(notification: Notification, foregroundTypes: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, foregroundTypes)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -669,6 +705,7 @@ class PlaybackForegroundService : MediaSessionService() {
     }
 
     companion object {
+        private const val ACTION_BIND_INTERNAL = "com.example.lan_audio_android_mvp.action.BIND_INTERNAL"
         private const val NOTIFICATION_CHANNEL_ID = "lan_audio_playback"
         private const val NOTIFICATION_ID = 2591
         private const val POWER_GUIDE_NOTIFICATION_ID = 2593
@@ -693,6 +730,9 @@ class PlaybackForegroundService : MediaSessionService() {
         private const val KEY_EQ_MID_DB = "eq_mid_db"
         private const val KEY_EQ_HIGH_DB = "eq_high_db"
         private const val KEY_LOUDNESS_ENABLED = "loudness_enabled"
+        private const val FOREGROUND_TYPE_MEDIA_PLAYBACK_ONLY = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        private const val FOREGROUND_TYPE_MEDIA_PLAYBACK_OR_MICROPHONE =
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
 
         fun startPlayback(context: Context, target: PlaybackTarget) {
             val intent = Intent(context, PlaybackForegroundService::class.java)
@@ -785,6 +825,11 @@ class PlaybackForegroundService : MediaSessionService() {
             val intent = Intent(context, PlaybackForegroundService::class.java)
                 .setAction(PlaybackActions.ACTION_STOP_MIC)
             context.startService(intent)
+        }
+
+        fun bindInternal(context: Context, connection: android.content.ServiceConnection): Boolean {
+            val intent = Intent(context, PlaybackForegroundService::class.java).setAction(ACTION_BIND_INTERNAL)
+            return context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         }
     }
 }

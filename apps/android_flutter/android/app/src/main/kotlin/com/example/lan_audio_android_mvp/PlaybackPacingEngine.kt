@@ -32,7 +32,9 @@ internal object PlaybackPacingEngine {
         val rxBelowSteadyState = (smoothedRxFramesPerSec ?: BALANCED_EXPECTED_RX_FRAMES_PER_SEC) <
             BALANCED_RX_FRAMES_FLOOR
         val audioQueueLowWatermarkMs = balancedAudioQueueLowWatermarkMs(frameDurationMs)
+        val batchMs = options.batchFrames.coerceIn(1, 4) * frameDurationMs
         return when {
+            audioQueuedMs <= batchMs / 2 -> -3
             audioQueuedMs <= audioQueueLowWatermarkMs / 2 -> -2
             audioQueuedMs < audioQueueLowWatermarkMs -> -1
             totalBufferedMs <= lowerBoundMs - frameDurationMs -> 2

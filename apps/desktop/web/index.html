@@ -21,398 +21,83 @@
         --warn: #f59e0b;
         --error: #ef4444;
       }
-
       * { box-sizing: border-box; }
-
       body {
         margin: 0;
         font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(0,212,170,0.10), transparent 32%),
-          var(--bg);
+        background: radial-gradient(circle at top left, rgba(0,212,170,0.10), transparent 32%), var(--bg);
         color: var(--text);
       }
-
-      .app {
-        max-width: 1040px;
-        margin: 22px auto;
-        padding: 0 18px 22px;
-      }
-
-      .header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 14px;
-      }
-
-      .title {
-        margin: 0;
-        font-size: 23px;
-        font-weight: 700;
-      }
-
-      .sub {
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .lang-toggle {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
-        padding: 7px 10px;
-        color: var(--text);
-      }
-
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--line-strong);
-        border-radius: 8px;
-        padding: 16px;
-        box-shadow: 0 16px 42px rgba(0,0,0,0.22);
-      }
-
-      .status-line {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 18px;
-        font-weight: 700;
-        margin-bottom: 8px;
-      }
-
-      .status-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #8a98a8;
-        box-shadow: 0 0 18px currentColor;
-      }
-
+      .app { max-width: 720px; margin: 24px auto; padding: 0 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+      .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .title { margin: 0; font-size: 22px; font-weight: 700; }
+      .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+      .lang-toggle { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 6px 10px; color: var(--text); font-size: 13px; }
+      .card { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; padding: 20px; box-shadow: 0 12px 36px rgba(0,0,0,0.20); }
+      .card--hero { padding: 24px; }
+      .status-line { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+      .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #6b7a99; box-shadow: 0 0 12px currentColor; flex-shrink: 0; }
       .status-dot.running { background: var(--ok); }
       .status-dot.error { background: var(--error); }
       .status-dot.busy { background: var(--warn); }
-
-      .status-sub {
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .main-control {
-        margin-top: 14px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .primary {
-        border: 0;
-        border-radius: 8px;
-        font-size: 16px;
-        font-weight: 700;
-        padding: 11px 26px;
-        background: var(--accent);
-        color: #07110f;
-        cursor: pointer;
-      }
-
-      .primary.stop {
-        background: var(--error);
-        color: #fff;
-      }
-
-      .primary:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      .hint {
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .health-strip {
-        margin-top: 12px;
-        border-top: 1px solid var(--line);
-        padding-top: 10px;
-      }
-
-      .health-title {
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 8px;
-        font-weight: 600;
-      }
-
-      .health-items {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        font-size: 13px;
-      }
-
-      .health-item {
-        color: var(--text);
-      }
-
-      .health-label {
-        color: var(--muted);
-        margin-right: 6px;
-      }
-
-      .layout {
-        margin-top: 14px;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-      }
-
-      .section-title {
-        margin: 0 0 10px;
-        font-size: 14px;
-        font-weight: 700;
-      }
-
-      .source-picker {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-
-      .source-btn {
-        border: 1px solid var(--line);
-        background: var(--bg2);
-        color: var(--text);
-        border-radius: 8px;
-        padding: 8px 12px;
-        cursor: pointer;
-      }
-
-      .source-btn.active {
-        border-color: rgba(0,212,170,0.40);
-        background: var(--accent-dim);
-        color: var(--accent);
-      }
-
-      .toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 8px;
-        color: var(--text);
-        font-size: 14px;
-      }
-
-      .plain-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .row {
-        display: grid;
-        grid-template-columns: 116px 1fr;
-        gap: 8px;
-        align-items: baseline;
-        font-size: 13px;
-      }
-
+      .status-sub { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+      .main-control { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .primary { border: 0; border-radius: 8px; font-size: 15px; font-weight: 700; padding: 12px 28px; background: var(--accent); color: #07110f; cursor: pointer; transition: opacity 0.15s; }
+      .primary.stop { background: var(--error); color: #fff; }
+      .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+      .hint { color: var(--muted); font-size: 13px; }
+      .connection-panel { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+      .qr-code { width: 110px; height: 110px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #0b111a; overflow: hidden; }
+      .qr-code svg { width: 96px; height: 96px; }
+      .conn-info { display: flex; flex-direction: column; gap: 4px; }
+      .conn-addr { font-size: 14px; font-weight: 600; word-break: break-all; }
+      .conn-uri { font-size: 12px; color: var(--muted); font-family: Consolas, monospace; word-break: break-all; }
+      .health-strip { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+      .health-item { color: var(--text); }
+      .health-label { color: var(--muted); margin-right: 4px; font-size: 12px; }
+      .error-text { margin-top: 8px; color: var(--error); font-size: 13px; }
+      .guidance-panel { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(14,165,233,0.24); border-radius: 8px; background: rgba(14,165,233,0.08); font-size: 13px; }
+      .guidance-panel summary { cursor: pointer; font-weight: 700; }
+      .guidance-panel pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--muted); font-family: Consolas, monospace; font-size: 12px; line-height: 1.4; }
+      .card-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+      .card-header h2 { margin: 0; font-size: 14px; font-weight: 700; }
+      .card-header .chevron { color: var(--muted); font-size: 12px; transition: transform 0.2s; }
+      .card-header .chevron.open { transform: rotate(90deg); }
+      .card-body { margin-top: 12px; }
+      .card-body.collapsed { display: none; }
+      .source-picker { display: flex; gap: 8px; margin-bottom: 10px; }
+      .source-btn { border: 1px solid var(--line); background: var(--bg2); color: var(--text); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+      .source-btn.active { border-color: rgba(0,212,170,0.40); background: var(--accent-dim); color: var(--accent); }
+      .source-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .toggle { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text); font-size: 13px; }
+      .device-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 4px; margin-top: 10px; }
+      .copy-btn { border: 1px solid var(--line); border-radius: 6px; background: var(--bg2); color: var(--text); padding: 4px 10px; font-size: 12px; cursor: pointer; }
+      .copy-btn:hover { border-color: var(--line-strong); }
+      .copy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .row { display: grid; grid-template-columns: 100px 1fr; gap: 6px; align-items: baseline; font-size: 13px; margin-bottom: 4px; }
       .row .label { color: var(--muted); }
       .row .value { word-break: break-word; }
-
-      .address-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .address-value {
-        word-break: break-word;
-      }
-
-      .copy-btn {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--bg2);
-        color: var(--text);
-        padding: 4px 9px;
-        font-size: 12px;
-        cursor: pointer;
-      }
-
-      .copy-btn:hover {
-        border-color: var(--line-strong);
-      }
-
-      .device-block {
-        margin-top: 10px;
-      }
-
-      .device-subtitle {
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 5px;
-      }
-
-      .device-current {
-        font-size: 13px;
-        font-weight: 600;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--line);
-        margin-bottom: 8px;
-      }
-
-      .device-recent {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 6px;
-      }
-
-      .device-recent li {
-        font-size: 13px;
-        color: var(--text);
-      }
-
-      .usb-panel {
-        margin-top: 10px;
-        border-top: 1px solid var(--line);
-        padding-top: 10px;
-      }
-
-      .usb-actions {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 8px;
-      }
-
-      .usb-device-list {
-        display: grid;
-        gap: 6px;
-      }
-
-      .qr-panel {
-        margin-top: 14px;
-        display: grid;
-        grid-template-columns: 120px 1fr;
-        gap: 12px;
-        align-items: center;
-      }
-
-      .qr-code {
-        width: 120px;
-        height: 120px;
-        display: grid;
-        place-items: center;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #0b111a;
-        overflow: hidden;
-      }
-
-      .qr-code svg {
-        width: 104px;
-        height: 104px;
-      }
-
-      .usb-device {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-        align-items: center;
-        font-size: 12px;
-      }
-
-      .usb-meta {
-        color: var(--muted);
-      }
-
-      details {
-        margin-top: 12px;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 0 14px;
-      }
-
-      summary {
-        padding: 12px 0;
-        cursor: pointer;
-        font-weight: 700;
-        font-size: 14px;
-      }
-
-      .debug-groups {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        margin: 0 0 12px;
-      }
-
-      .group-title {
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 6px;
-        font-weight: 700;
-      }
-
-      .kv {
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .kv div { margin-bottom: 3px; }
-
-      .log-pane {
-        max-height: 220px;
-        overflow: auto;
-        border-top: 1px solid var(--line);
-        padding: 9px 0 12px;
-        font-family: Consolas, monospace;
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .log-line {
-        white-space: pre-wrap;
-        margin-bottom: 4px;
-      }
-
-      .error-text {
-        margin-top: 8px;
-        color: var(--error);
-        font-size: 13px;
-      }
-
-      .guidance-panel {
-        margin-top: 10px;
-        padding: 10px 12px;
-        border: 1px solid rgba(14, 165, 233, 0.24);
-        border-radius: 8px;
-        background: rgba(14, 165, 233, 0.08);
-        color: var(--text);
-        font-size: 13px;
-      }
-
-      .guidance-panel summary {
-        cursor: pointer;
-        font-weight: 700;
-      }
-
-      .guidance-panel pre {
-        margin: 10px 0 0;
-        white-space: pre-wrap;
-        color: var(--muted);
-        font-family: "IBM Plex Mono", ui-monospace, monospace;
-        line-height: 1.45;
-      }
-
-      @media (max-width: 900px) {
-        .layout { grid-template-columns: 1fr; }
+      .address-actions { display: flex; align-items: center; gap: 8px; }
+      .address-value { word-break: break-word; }
+      .device-current { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+      .device-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+      .device-recent li { font-size: 13px; }
+      .usb-panel { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+      .usb-actions { display: flex; gap: 8px; margin-bottom: 6px; }
+      .usb-device-list { display: grid; gap: 6px; }
+      .usb-device { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+      .usb-meta { color: var(--muted); }
+      details.footer-section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
+      details.footer-section summary { padding: 12px 0; cursor: pointer; font-weight: 700; font-size: 13px; color: var(--muted); }
+      .debug-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+      .group-title { font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 700; }
+      .kv { font-size: 11px; line-height: 1.5; }
+      .kv div { margin-bottom: 2px; }
+      .log-pane { max-height: 200px; overflow: auto; border-top: 1px solid var(--line); padding: 8px 0 10px; font-family: Consolas, monospace; font-size: 11px; line-height: 1.5; }
+      .log-line { white-space: pre-wrap; margin-bottom: 3px; }
+      @media (max-width: 600px) {
+        .connection-panel { grid-template-columns: 1fr; }
+        .qr-code { margin: 0 auto; }
         .debug-groups { grid-template-columns: 1fr; }
         .row { grid-template-columns: 1fr; }
       }
@@ -420,6 +105,7 @@
   </head>
   <body>
     <div class="app">
+      <!-- Header -->
       <header class="header">
         <div>
           <h1 class="title" id="title"></h1>
@@ -431,10 +117,11 @@
         </select>
       </header>
 
-      <section class="panel">
+      <!-- Hero Status Card -->
+      <section class="card card--hero">
         <div id="updateBanner" class="status-sub" style="display:none; margin-bottom: 8px;">
           <span id="updateBannerText"></span>
-          <button class="copy-btn" id="updateBannerBtn" type="button" style="margin-left: 10px;"></button>
+          <button class="copy-btn" id="updateBannerBtn" type="button" style="margin-left: 8px;"></button>
         </div>
         <div class="status-line">
           <span id="statusDot" class="status-dot"></span>
@@ -445,145 +132,113 @@
           <button id="primaryActionBtn" class="primary"></button>
           <div class="hint" id="nextStep"></div>
         </div>
-        <div class="health-strip">
-          <div class="health-title" id="healthTitle"></div>
-          <div class="health-items">
-            <div class="health-item"><span class="health-label" id="healthStreamLabel"></span><span id="healthStreamValue"></span></div>
-            <div class="health-item"><span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span></div>
-            <div class="health-item"><span class="health-label" id="healthSourceLabel"></span><span id="healthSourceValue"></span></div>
+        <div class="connection-panel" id="qrPanel" style="display:none;">
+          <div class="qr-code" id="qrCode"></div>
+          <div class="conn-info">
+            <div class="device-subtitle" id="qrTitle"></div>
+            <div class="conn-addr" id="addrValue"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <button class="copy-btn" id="copyAddrBtn" type="button"></button>
+            </div>
+            <div class="conn-uri" id="qrUriValue"></div>
+            <div class="status-sub" id="qrSubtitle"></div>
           </div>
+        </div>
+        <div class="health-strip" id="healthStrip">
+          <div class="health-item"><span class="health-label" id="healthStreamLabel"></span><span id="healthStreamValue"></span></div>
+          <div class="health-item"><span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span></div>
+          <div class="health-item"><span class="health-label" id="healthSourceLabel"></span><span id="healthSourceValue"></span></div>
         </div>
         <div class="error-text" id="errorText"></div>
         <details class="guidance-panel" id="firewallGuide" style="display:none;">
           <summary id="firewallGuideTitle"></summary>
           <pre id="firewallGuideBody"></pre>
         </details>
-        <div class="qr-panel" id="qrPanel" style="display:none;">
-          <div class="qr-code" id="qrCode"></div>
-          <div>
-            <div class="health-title" id="qrTitle"></div>
-            <div class="status-sub" id="qrSubtitle"></div>
-            <div class="address-value" id="qrUriValue"></div>
-          </div>
-        </div>
       </section>
 
-      <div class="layout">
-        <section class="panel">
-          <h2 class="section-title" id="sourceTitle"></h2>
+      <!-- Settings Card (collapsible, default collapsed) -->
+      <section class="card" id="settingsCard">
+        <div class="card-header" id="settingsToggle">
+          <h2 id="sourceTitle"></h2>
+          <span class="chevron" id="settingsChevron">▸</span>
+        </div>
+        <div class="card-body collapsed" id="settingsBody">
           <div class="source-picker">
             <button id="sourceLoopback" class="source-btn"></button>
             <button id="sourceSynthetic" class="source-btn"></button>
-          </div>
-          <div class="device-subtitle" id="dataPlaneTitle"></div>
-          <div class="source-picker">
-            <button id="dataPlaneLegacy" class="source-btn"></button>
-            <button id="dataPlaneV2Header" class="source-btn"></button>
           </div>
           <div class="device-subtitle" id="codecTitle"></div>
           <div class="source-picker">
             <button id="codecPcm16" class="source-btn"></button>
             <button id="codecOpus" class="source-btn"></button>
           </div>
-          <label class="toggle">
-            <input type="checkbox" id="fallbackToggle" />
-            <span id="fallbackLabel"></span>
-          </label>
-          <label class="toggle">
-            <button class="copy-btn" id="safeModeBtn" type="button"></button>
-            <span id="safeModeHint"></span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="dumpToggle" />
-            <span id="dumpLabel"></span>
-          </label>
-        </section>
-
-        <section class="panel">
-          <h2 class="section-title" id="deviceTitle"></h2>
-          <div class="plain-list">
-            <div class="row">
-              <span class="label" id="addrLabel"></span>
-              <div class="address-actions">
-                <span class="address-value" id="addrValue"></span>
-                <button class="copy-btn" id="copyAddrBtn" type="button"></button>
-              </div>
-            </div>
-            <div class="row"><span class="label" id="sessionLabel"></span><span class="value" id="sessionValue"></span></div>
-            <div class="row"><span class="label" id="sourceLabel"></span><span class="value" id="sourceValue"></span></div>
-            <div class="row"><span class="label" id="dataPlaneLabel"></span><span class="value" id="dataPlaneValue"></span></div>
-            <div class="row"><span class="label" id="modeLabel"></span><span class="value" id="modeValue"></span></div>
-            <div class="row"><span class="label" id="strategyLabel"></span><span class="value" id="strategyValue"></span></div>
-            <div class="row"><span class="label" id="codecLabel"></span><span class="value" id="codecValue"></span></div>
-            <div class="row"><span class="label" id="grayLabel"></span><span class="value" id="grayValue"></span></div>
-            <div class="row"><span class="label" id="connectionTipLabel"></span><span class="value" id="connectionTipValue"></span></div>
-            <div class="row"><span class="label" id="protocolLabel"></span><span class="value" id="protocolValue"></span></div>
-            <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
+          <div class="device-subtitle" id="dataPlaneTitle"></div>
+          <div class="source-picker">
+            <button id="dataPlaneLegacy" class="source-btn"></button>
+            <button id="dataPlaneV2Header" class="source-btn"></button>
           </div>
-
-          <div class="device-block">
-            <div class="device-subtitle" id="currentDeviceLabel"></div>
-            <div class="device-current" id="currentDeviceValue"></div>
-          </div>
-
-          <div class="device-block">
-            <div class="device-subtitle" id="recentDeviceLabel"></div>
-            <ul class="device-recent" id="deviceRecentList"></ul>
-          </div>
-
-          <div class="usb-panel">
-            <div class="device-subtitle" id="usbTitle"></div>
-            <div class="usb-actions">
-              <button class="copy-btn" id="usbRefreshBtn" type="button"></button>
-              <button class="copy-btn" id="usbDisableBtn" type="button"></button>
-            </div>
-            <div class="row">
-              <span class="label" id="usbStateLabel"></span>
-              <span class="value" id="usbStateValue"></span>
-            </div>
-            <div class="row">
-              <span class="label" id="usbForwardLabel"></span>
-              <span class="value" id="usbForwardValue"></span>
-            </div>
-            <div class="usb-device-list" id="usbDeviceList"></div>
-          </div>
-        </section>
-      </div>
-
-      <details>
-        <summary id="debugSummary"></summary>
-        <div class="debug-groups">
-          <div>
-            <div class="group-title" id="groupTx"></div>
-            <div class="kv" id="debugTx"></div>
-          </div>
-          <div>
-            <div class="group-title" id="groupCapture"></div>
-            <div class="kv" id="debugCapture"></div>
-          </div>
-          <div>
-            <div class="group-title" id="groupStatus"></div>
-            <div class="kv" id="debugState"></div>
-          </div>
-        </div>
-      </details>
-
-      <details>
-        <summary id="advancedSummary"></summary>
-        <div class="plain-list" style="margin-bottom: 12px;">
-          <div class="row"><span class="label" id="advancedPathLabel"></span><span class="value" id="advancedDataPathValue"></span></div>
-          <div class="row">
-            <span class="label" id="advancedRollbackLabel"></span>
-            <button class="copy-btn" id="advancedSafeModeBtn" type="button"></button>
-          </div>
-          <div class="row">
-            <span class="label" id="advancedExportLabel"></span>
+          <label class="toggle"><input type="checkbox" id="fallbackToggle" /><span id="fallbackLabel"></span></label>
+          <label class="toggle"><button class="copy-btn" id="safeModeBtn" type="button"></button><span id="safeModeHint"></span></label>
+          <label class="toggle"><input type="checkbox" id="dumpToggle" /><span id="dumpLabel"></span></label>
+          <div style="margin-top:10px;">
             <button class="copy-btn" id="exportDiagBtn" type="button"></button>
           </div>
         </div>
-      </details>
+      </section>
 
-      <details>
+      <!-- Device & Session Card (only when running) -->
+      <section class="card" id="deviceCard" style="display:none;">
+        <h2 class="card-header" style="cursor:default;"><span id="deviceTitle"></span></h2>
+        <div class="row"><span class="label" id="sessionLabel"></span><span class="value" id="sessionValue"></span></div>
+        <div class="row"><span class="label" id="modeLabel"></span><span class="value" id="modeValue"></span></div>
+        <div class="row"><span class="label" id="codecLabel"></span><span class="value" id="codecValue"></span></div>
+        <div class="row"><span class="label" id="protocolLabel"></span><span class="value" id="protocolValue"></span></div>
+        <div class="row"><span class="label" id="versionLabel"></span><span class="value" id="versionValue"></span></div>
+        <div class="row"><span class="label" id="connectionTipLabel"></span><span class="value" id="connectionTipValue"></span></div>
+        <div class="device-subtitle" id="currentDeviceLabel"></div>
+        <div class="device-current" id="currentDeviceValue"></div>
+        <div class="device-subtitle" id="recentDeviceLabel"></div>
+        <ul class="device-recent" id="deviceRecentList"></ul>
+        <div class="usb-panel" id="usbPanel">
+          <div class="device-subtitle" id="usbTitle"></div>
+          <div class="usb-actions">
+            <button class="copy-btn" id="usbRefreshBtn" type="button"></button>
+            <button class="copy-btn" id="usbDisableBtn" type="button"></button>
+          </div>
+          <div class="row"><span class="label" id="usbStateLabel"></span><span class="value" id="usbStateValue"></span></div>
+          <div class="row"><span class="label" id="usbForwardLabel"></span><span class="value" id="usbForwardValue"></span></div>
+          <div class="usb-device-list" id="usbDeviceList"></div>
+        </div>
+      </section>
+
+      <!-- Hidden fields for renderText compatibility -->
+      <span id="addrLabel" style="display:none;"></span>
+      <span id="sourceLabel" style="display:none;"></span>
+      <span id="dataPlaneLabel" style="display:none;"></span>
+      <span id="dataPlaneValue" style="display:none;"></span>
+      <span id="sourceValue" style="display:none;"></span>
+      <span id="strategyLabel" style="display:none;"></span>
+      <span id="strategyValue" style="display:none;"></span>
+      <span id="grayLabel" style="display:none;"></span>
+      <span id="grayValue" style="display:none;"></span>
+      <span id="healthTitle" style="display:none;"></span>
+      <span id="advancedSummary" style="display:none;"></span>
+      <span id="advancedPathLabel" style="display:none;"></span>
+      <span id="advancedDataPathValue" style="display:none;"></span>
+      <span id="advancedRollbackLabel" style="display:none;"></span>
+      <span id="advancedExportLabel" style="display:none;"></span>
+      <button id="advancedSafeModeBtn" style="display:none;" type="button"></button>
+
+      <!-- Footer: Debug + Logs -->
+      <details class="footer-section">
+        <summary id="debugSummary"></summary>
+        <div class="debug-groups">
+          <div><div class="group-title" id="groupTx"></div><div class="kv" id="debugTx"></div></div>
+          <div><div class="group-title" id="groupCapture"></div><div class="kv" id="debugCapture"></div></div>
+          <div><div class="group-title" id="groupStatus"></div><div class="kv" id="debugState"></div></div>
+        </div>
+      </details>
+      <details class="footer-section">
         <summary id="logSummary"></summary>
         <div class="log-pane" id="logPane"></div>
       </details>
@@ -678,7 +333,7 @@
           subRunning: '服务在线，可在手机端发现并连接。',
           subStopped: '服务未启动，手机暂时无法连接。',
           subError: '服务异常，请检查日志后重新启动。',
-          nextStart: '下一步：点击“启动服务”，然后在手机端连接本机地址。',
+          nextStart: '下一步：点击"启动服务"，然后在手机端连接本机地址。',
           nextStop: '当前正在提供推流服务，可随时停止。',
           debugSummary: '调试信息（默认折叠）',
           logSummary: '运行日志（默认折叠）',
@@ -706,8 +361,7 @@
           audioSource: '音频源',
           captureDevice: '采集设备',
           sampleRate: '采样率',
-          channels: '声道'
-          ,
+          channels: '声道',
           usbTitle: 'USB 模式（adb）',
           usbRefresh: '刷新设备',
           usbDisable: '停用 USB',
@@ -1214,6 +868,11 @@
         document.getElementById('advancedDataPathValue').textContent =
           `${snapshot.audio_source} + ${runtime.data_plane || snapshot.data_plane_format} + ${runtime.effective_codec || snapshot.effective_codec}`;
 
+        // Show/hide device card based on service status
+        document.getElementById('deviceCard').style.display = snapshot.service_status === 'running' ? 'block' : 'none';
+        // Show/hide USB panel based on transport mode
+        document.getElementById('usbPanel').style.display = snapshot.transport_mode === 'usb' ? 'block' : 'none';
+
         const recent = snapshot.recent_clients || [];
         const activeClients = recent.slice(0, snapshot.connected_devices || 0);
         const currentDevice = snapshot.connected_devices > 0
@@ -1404,6 +1063,16 @@
           const action = document.getElementById('primaryActionBtn').dataset.action;
           if (action === 'start') await call('start_service');
           if (action === 'stop') await call('stop_service');
+        });
+
+        // Settings card toggle
+        document.getElementById('settingsToggle').addEventListener('click', () => {
+          const body = document.getElementById('settingsBody');
+          const chevron = document.getElementById('settingsChevron');
+          const isOpen = !body.classList.contains('collapsed');
+          body.classList.toggle('collapsed');
+          chevron.classList.toggle('open');
+          chevron.textContent = isOpen ? '▸' : '▾';
         });
 
         document.getElementById('sourceLoopback').addEventListener('click', () => applySettings('windows_loopback'));

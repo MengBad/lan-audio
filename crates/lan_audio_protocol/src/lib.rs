@@ -974,7 +974,7 @@ mod tests {
         assert!(balanced.prefer_stable_audio_track);
         assert!(balanced.reset_buffer_on_switch);
 
-        assert_eq!(high.start_buffer_ms, 120);
+        assert_eq!(high.start_buffer_ms, 140);
         assert_eq!(high.max_buffer_ms, 500);
         assert_eq!(high.batch_frames, 3);
         assert_eq!(high.drop_threshold_ms, 420);

@@ -145,7 +145,7 @@ pub fn mode_contract(mode: AudioMode) -> ModeContract {
             output_backend_priority: vec![OutputBackend::AudioTrack, OutputBackend::FastPath],
             promise: "quality/stability first".to_string(),
             tuning: PlaybackTuning {
-                start_buffer_ms: 120,
+                start_buffer_ms: 140,
                 max_buffer_ms: 500,
                 batch_frames: 3,
                 drop_threshold_ms: 420,
