@@ -65,7 +65,6 @@ chatgpt-team-subscribe-helper.user.js
 
 # Internal CI scripts (kept locally)
 scripts/emit_phase01_artifacts.ps1
-scripts/assert_release_gate.ps1
 scripts/capture_android_ui_baseline.ps1
 scripts/check_android_visual_regression.ps1
 scripts/android_visual_diff.py
