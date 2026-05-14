@@ -121,18 +121,26 @@ class StreamSessionManager(
         wsReady = false
     }
 
-    fun setAudioMode(mode: String, reason: String = "user_request"): Boolean {
+    fun setAudioMode(
+        mode: String,
+        reason: String = "user_request",
+        preferredCodec: String? = null,
+    ): Boolean {
         if (!running || !wsReady) {
             return false
         }
-        val setMode = JSONObject(
-            mapOf(
-                "type" to "set_audio_mode",
-                "mode" to mode,
-                "reason" to reason,
-                "preferred_sample_rate" to preferredSampleRate,
-            ),
+        val payload = mutableMapOf<String, Any>(
+            "type" to "set_audio_mode",
+            "mode" to mode,
+            "reason" to reason,
+            "preferred_sample_rate" to preferredSampleRate,
         )
+        // Phase 7: codec selector. The server accepts `pcm16` / `opus` and
+        // ignores the field if absent — so older servers stay compatible.
+        if (preferredCodec != null) {
+            payload["preferred_codec"] = preferredCodec
+        }
+        val setMode = JSONObject(payload as Map<String, Any?>)
         return webSocket?.send(setMode.toString()) ?: false
     }
 

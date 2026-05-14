@@ -227,10 +227,12 @@ class BackgroundPlaybackService {
   Future<void> setAudioMode({
     required String mode,
     String reason = 'ui_request',
+    String? preferredCodec,
   }) async {
     await _methodChannel.invokeMethod<void>('setAudioMode', <String, dynamic>{
       'mode': mode,
       'reason': reason,
+      if (preferredCodec != null) 'preferredCodec': preferredCodec,
     });
   }
 

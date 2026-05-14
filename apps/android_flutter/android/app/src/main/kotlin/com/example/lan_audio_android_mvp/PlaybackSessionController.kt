@@ -39,8 +39,12 @@ class PlaybackSessionController(
         runtime.setOptions(next)
     }
 
-    fun setAudioMode(mode: String, reason: String = "user_selected") {
-        runtime.setAudioMode(mode, reason)
+    fun setAudioMode(
+        mode: String,
+        reason: String = "user_selected",
+        preferredCodec: String? = null,
+    ) {
+        runtime.setAudioMode(mode, reason, preferredCodec)
     }
 
     fun setEqSettings(settings: PlaybackEqSettings) {

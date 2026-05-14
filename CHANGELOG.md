@@ -4,6 +4,23 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.9.4] - 2026-05-14
+
+### Added
+
+- **Codec picker.** A new "编码器 / Codec" card on the More page lets users pick between Auto / Opus / PCM 16 / PCM 24. PCM 24 is intentionally still selectable but the server falls back to Opus until the Hi-Res passthrough path lands; the card surfaces a hint explaining that.
+- Protocol: `SetAudioMode` and `AudioModeChanged` gained an optional `preferred_codec` / `effective_codec` field. Both default-skip on serialize and back-compat decode (older clients omitting them keep working; older servers ignore them).
+
+### Changed
+
+- `ClientRegistry::set_client_mode` now accepts a `Option<CodecSelection>` so the codec can be swapped at runtime without renegotiating the session. `Opus` requests on `legacy_las1` are downgraded to `Pcm16` server-side.
+- `MorePage` constructor adds `preferredCodec` + `onPreferredCodecChanged` to thread the user's choice through `MainShell`.
+
+### Notes
+
+- Per-client codec change resets `pending_first_packet` so the encode worker rebuilds its encoder bank lazily on the next frame. No glitch is expected, but expect a ~20 ms pause on transition.
+- `effective_codec` is echoed back to the client so the UI can show the resolved codec (independent of what the user requested).
+
 ## [1.9.3] - 2026-05-14
 
 ### Fixed

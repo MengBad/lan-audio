@@ -167,6 +167,11 @@ pub struct SetAudioMode {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_sample_rate: Option<u32>,
+    /// Phase 7 codec selection. Optional so older clients (which never
+    /// send this field) keep working — the server falls back to the
+    /// per-mode default when it is absent. Older servers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_codec: Option<AudioCodecPreference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,6 +181,11 @@ pub struct AudioModeChanged {
     pub reason: String,
     #[serde(default)]
     pub mode_profile: AudioModeProfile,
+    /// Phase 7 — the codec the server is actually using after this
+    /// transition. Defaults via serde(default) to keep wire compatibility
+    /// with older servers; clients should treat absence as "unchanged".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_codec: Option<AudioCodecPreference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -888,13 +898,32 @@ mod tests {
             mode: AudioMode::LowLatency,
             reason: "user_selected".to_string(),
             preferred_sample_rate: Some(48_000),
+            preferred_codec: Some(AudioCodecPreference::Opus),
         });
         let json = serde_json::to_string(&msg).expect("serialize set audio mode");
         assert!(json.contains("\"type\":\"set_audio_mode\""));
         assert!(json.contains("\"preferred_sample_rate\":48000"));
+        assert!(json.contains("\"preferred_codec\":\"opus\""));
         let decoded: ControlMessageV2 =
             serde_json::from_str(&json).expect("deserialize set audio mode");
         assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn v2_set_audio_mode_back_compat_without_codec() {
+        // Older clients did not send `preferred_codec`. The server must
+        // still accept the message and leave the codec untouched on
+        // deserialization. We assert by deserializing a canonical pre-
+        // field payload and checking the field defaults to None.
+        let json = "{\"type\":\"set_audio_mode\",\"mode\":\"balanced\",\"reason\":\"user\",\"preferred_sample_rate\":48000}";
+        let decoded: ControlMessageV2 =
+            serde_json::from_str(json).expect("deserialize set audio mode (no codec)");
+        match decoded {
+            ControlMessageV2::SetAudioMode(SetAudioMode {
+                preferred_codec, ..
+            }) => assert!(preferred_codec.is_none()),
+            other => panic!("expected SetAudioMode, got {:?}", other),
+        }
     }
 
     #[test]

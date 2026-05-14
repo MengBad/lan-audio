@@ -557,12 +557,23 @@ class MainActivity : FlutterActivity() {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                 val mode = (args["mode"] as? String)?.trim().orEmpty()
                 val reason = (args["reason"] as? String)?.trim().orEmpty().ifBlank { "ui_request" }
+                val preferredCodec = (args["preferredCodec"] as? String)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
                 if (mode.isBlank()) {
                     result.error("invalid_args", "mode is required", null)
                     return
                 }
-                Log.i(logTag, "MethodChannel setAudioMode received mode=$mode reason=$reason")
-                PlaybackForegroundService.setAudioMode(applicationContext, mode, reason)
+                Log.i(
+                    logTag,
+                    "MethodChannel setAudioMode received mode=$mode reason=$reason codec=${preferredCodec ?: "default"}",
+                )
+                PlaybackForegroundService.setAudioMode(
+                    applicationContext,
+                    mode,
+                    reason,
+                    preferredCodec,
+                )
                 result.success(null)
             }
 

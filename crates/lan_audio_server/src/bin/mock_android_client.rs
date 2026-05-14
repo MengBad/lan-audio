@@ -181,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::LowLatency,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;
@@ -192,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::HighQuality,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;
@@ -203,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::Balanced,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;

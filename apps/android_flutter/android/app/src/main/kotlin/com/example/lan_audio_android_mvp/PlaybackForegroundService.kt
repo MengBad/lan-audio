@@ -187,7 +187,10 @@ class PlaybackForegroundService : MediaSessionService() {
             PlaybackActions.ACTION_SET_AUDIO_MODE -> {
                 val mode = intent.getStringExtra(PlaybackActions.EXTRA_AUDIO_MODE) ?: "balanced"
                 val reason = intent.getStringExtra(PlaybackActions.EXTRA_REASON) ?: "ui_request"
-                sessionController.setAudioMode(mode, reason)
+                val preferredCodec = intent
+                    .getStringExtra(PlaybackActions.EXTRA_PREFERRED_CODEC)
+                    ?.takeIf { it.isNotBlank() }
+                sessionController.setAudioMode(mode, reason, preferredCodec)
             }
 
             PlaybackActions.ACTION_SET_EQ -> {
@@ -781,11 +784,19 @@ class PlaybackForegroundService : MediaSessionService() {
             context.startService(intent)
         }
 
-        fun setAudioMode(context: Context, mode: String, reason: String = "ui_request") {
+        fun setAudioMode(
+            context: Context,
+            mode: String,
+            reason: String = "ui_request",
+            preferredCodec: String? = null,
+        ) {
             val intent = Intent(context, PlaybackForegroundService::class.java)
                 .setAction(PlaybackActions.ACTION_SET_AUDIO_MODE)
                 .putExtra(PlaybackActions.EXTRA_AUDIO_MODE, mode)
                 .putExtra(PlaybackActions.EXTRA_REASON, reason)
+            if (preferredCodec != null) {
+                intent.putExtra(PlaybackActions.EXTRA_PREFERRED_CODEC, preferredCodec)
+            }
             context.startService(intent)
         }
 

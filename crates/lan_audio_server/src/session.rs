@@ -5,10 +5,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
-    audio_mode_profile, AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo,
-    ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState, ConnectionStateMachine,
-    ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck, ProtocolCapabilities,
-    ServerControlMessage, ServerInfo, SetAudioMode, TransportType, PROTOCOL_VERSION_V2,
+    audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeChanged, ClientControlMessage,
+    ClientInfo, ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState,
+    ConnectionStateMachine, ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck,
+    ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode, TransportType,
+    PROTOCOL_VERSION_V2,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -437,25 +438,47 @@ impl SessionServer {
 
                             if v2_session {
                                 match serde_json::from_str::<ControlMessageV2>(&text) {
-                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate })) => {
+                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate, preferred_codec })) => {
                                         let normalized_preferred_sample_rate =
                                             preferred_sample_rate.map(normalize_preferred_sample_rate);
+                                        // Phase 7: translate the wire enum to the
+                                        // server's internal CodecSelection. We
+                                        // accept Pcm16 / Opus today; PCM24 would
+                                        // require the Hi-Res passthrough path
+                                        // landing first (see docs/hires_pcm24.md).
+                                        let codec_request = preferred_codec.map(|p| match p {
+                                            AudioCodecPreference::Opus => CodecSelection::Opus,
+                                            AudioCodecPreference::Pcm16 => CodecSelection::Pcm16,
+                                        });
                                         self.set_current_audio_mode(mode);
                                         self.registry
-                                            .set_client_mode(session_id, mode, normalized_preferred_sample_rate)
+                                            .set_client_mode(
+                                                session_id,
+                                                mode,
+                                                normalized_preferred_sample_rate,
+                                                codec_request,
+                                            )
                                             .await;
+                                        let resolved_codec = self
+                                            .registry
+                                            .client_codec(session_id)
+                                            .await
+                                            .map(|c| c.as_protocol_preference());
                                         let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::AudioModeChanged(
                                             AudioModeChanged {
                                                 mode,
                                                 applied: true,
                                                 reason,
                                                 mode_profile: audio_mode_profile(mode),
+                                                effective_codec: resolved_codec,
                                             }
                                         ))?);
                                         info!(
                                             session = %session_id,
                                             mode = ?mode,
                                             preferred_sample_rate = normalized_preferred_sample_rate.unwrap_or(preferred_sample_rate_default()),
+                                            requested_codec = ?codec_request,
+                                            resolved_codec = ?resolved_codec,
                                             "audio mode updated by client"
                                         );
                                     }
@@ -544,6 +567,15 @@ impl ClientRegistry {
 
     pub async fn client_count(&self) -> usize {
         self.inner.lock().await.clients.len()
+    }
+
+    /// Phase 7: read back the currently-active codec for a given session.
+    /// Used by the WS handler so the `audio_mode_changed` reply can echo
+    /// the resolved codec to the client (independent of what the client
+    /// asked for, since we may have downgraded for capability reasons).
+    pub async fn client_codec(&self, client_id: Uuid) -> Option<CodecSelection> {
+        let guard = self.inner.lock().await;
+        guard.clients.get(&client_id).map(|c| c.codec)
     }
 
     async fn register_client(&self, request: RegisterClientRequest) -> anyhow::Result<()> {
@@ -688,6 +720,7 @@ impl ClientRegistry {
         client_id: Uuid,
         mode: AudioMode,
         preferred_sample_rate: Option<u32>,
+        preferred_codec: Option<CodecSelection>,
     ) {
         let mut broadcasts: Vec<(mpsc::UnboundedSender<String>, String)> = Vec::new();
         {
@@ -698,6 +731,27 @@ impl ClientRegistry {
             client.audio_mode = mode;
             if let Some(sample_rate) = preferred_sample_rate {
                 client.preferred_sample_rate = sample_rate;
+            }
+            // Phase 7: codec swap. We only honour requests for codecs the
+            // server's currently negotiated data plane can actually carry.
+            // Specifically `Opus` requires `v2_header`; on `legacy_las1`
+            // we silently keep whatever is currently active (typically
+            // `Pcm16`).
+            if let Some(requested) = preferred_codec {
+                let allowed = match (requested, client.data_plane) {
+                    (CodecSelection::Opus, DataPlaneFormat::V2Header) => Some(CodecSelection::Opus),
+                    (CodecSelection::Opus, DataPlaneFormat::LegacyLas1) => {
+                        Some(CodecSelection::Pcm16)
+                    }
+                    (CodecSelection::Pcm16, _) => Some(CodecSelection::Pcm16),
+                };
+                if let Some(resolved) = allowed {
+                    client.codec = resolved;
+                    // Encoders are keyed by (codec, mode, rate) so a codec
+                    // swap will naturally cause a new encoder to be lazily
+                    // created in the worker on the next frame.
+                    client.pending_first_packet = true;
+                }
             }
             client.pending_mode_sync = true;
             let Some(json) = build_client_list_json(&guard.clients) else {
@@ -1367,10 +1421,6 @@ mod tests {
         // device-a (lower UUID) must appear before device-b (higher UUID).
         let pos_a = json.find("device-a").expect("device-a in payload");
         let pos_b = json.find("device-b").expect("device-b in payload");
-        assert!(
-            pos_a < pos_b,
-            "list must be sorted by id, got: {}",
-            json
-        );
+        assert!(pos_a < pos_b, "list must be sorted by id, got: {}", json);
     }
 }

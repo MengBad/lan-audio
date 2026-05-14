@@ -254,6 +254,12 @@ class _MainShellState extends State<MainShell> {
   String _protocolPath = 'legacy_or_v2_auto';
   String _playbackBackend = 'audiotrack_stable';
   String _effectiveCodec = 'pcm16';
+
+  /// Phase 7 user-selected codec preference. `null` = "use server default
+  /// for the current mode" (Opus on v2_header, Pcm16 elsewhere). Set
+  /// explicitly via the codec picker. Persists in memory only — re-loads
+  /// to null on app restart.
+  String? _preferredCodec;
   bool _eqEnabled = false;
   int _eqLowDb = 0;
   int _eqMidDb = 0;
@@ -1245,12 +1251,16 @@ class _MainShellState extends State<MainShell> {
     try {
       if (kUseBackgroundPlaybackService) {
         await _backgroundService.setAudioMode(
-            mode: modeWire, reason: 'ui_select');
+          mode: modeWire,
+          reason: 'ui_select',
+          preferredCodec: _preferredCodec,
+        );
       } else {
         _ws?.add(jsonEncode({
           'type': 'set_audio_mode',
           'mode': modeWire,
           'reason': 'ui_select',
+          if (_preferredCodec != null) 'preferred_codec': _preferredCodec,
         }));
       }
       if (!mounted) {
@@ -1265,6 +1275,38 @@ class _MainShellState extends State<MainShell> {
       }
       setState(() {
         _status = '${tr('模式切换失败', 'Audio mode change failed')}: $e';
+      });
+    }
+  }
+
+  /// Phase 7 codec picker. Sends a `set_audio_mode` with the new codec
+  /// preference. The server resolves the actual codec (downgrading if
+  /// the data plane can't carry the request) and reflects it back via
+  /// `audio_mode_changed.effective_codec`.
+  Future<void> _setPreferredCodec(String? codec) async {
+    setState(() {
+      _preferredCodec = codec;
+    });
+    final modeWire = _audioModeWire(_currentAudioMode);
+    try {
+      if (kUseBackgroundPlaybackService) {
+        await _backgroundService.setAudioMode(
+          mode: modeWire,
+          reason: 'codec_change',
+          preferredCodec: codec,
+        );
+      } else {
+        _ws?.add(jsonEncode({
+          'type': 'set_audio_mode',
+          'mode': modeWire,
+          'reason': 'codec_change',
+          if (codec != null) 'preferred_codec': codec,
+        }));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = '${tr('编码器切换失败', 'Codec change failed')}: $e';
       });
     }
   }
@@ -1899,6 +1941,8 @@ class _MainShellState extends State<MainShell> {
       connectionStatusText: _wsConnected
           ? '${tr('已连接', 'Connected')} ${_serviceTargetHost ?? ''}'
           : tr('未连接', 'Disconnected'),
+      preferredCodec: _preferredCodec,
+      onPreferredCodecChanged: _setPreferredCodec,
       eqEnabled: _eqEnabled,
       eqLowDb: _eqLowDb,
       eqMidDb: _eqMidDb,

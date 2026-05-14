@@ -458,10 +458,14 @@ class PlaybackSessionRuntime(
         }
     }
 
-    fun setAudioMode(mode: String, reason: String = "user_selected") {
+    fun setAudioMode(
+        mode: String,
+        reason: String = "user_selected",
+        preferredCodec: String? = null,
+    ) {
         val normalized = PlaybackModeProfiles.normalize(mode)
         val hasActiveStream = streamManager != null
-        val sent = streamManager?.setAudioMode(normalized, reason) ?: false
+        val sent = streamManager?.setAudioMode(normalized, reason, preferredCodec) ?: false
         if (!hasActiveStream || !sent) {
             applyAudioModeProfile(
                 normalized,

@@ -23,6 +23,7 @@ object PlaybackActions {
     const val EXTRA_PING_INTERVAL_MS = "ping_interval_ms"
     const val EXTRA_AUDIO_MODE = "audio_mode"
     const val EXTRA_REASON = "reason"
+    const val EXTRA_PREFERRED_CODEC = "preferred_codec"
     const val EXTRA_TRANSPORT_MODE = "transport_mode"
     const val EXTRA_OPEN_POWER_GUIDE = "open_power_guide"
     const val EXTRA_EQ_ENABLED = "eq_enabled"
