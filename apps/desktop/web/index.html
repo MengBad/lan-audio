@@ -273,6 +273,47 @@
       .health-strip { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
       .health-label { color: var(--muted); margin-right: 4px; }
 
+      /* Latency comparison card (Phase 5) */
+      .latency-card {
+        background: #131720;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px 8px;
+      }
+      .latency-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 10px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 500;
+        margin-bottom: 6px;
+      }
+      .latency-meta { color: #4a5568; font-family: var(--mono); }
+      #latencyCanvas {
+        display: block;
+        width: 100%;
+        height: 120px;
+      }
+      .latency-legend {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .legend-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .legend-text { color: var(--muted); }
+
       /* USB block inside debug */
       .usb-block {
         margin-top: 10px;
@@ -422,6 +463,23 @@
         <input type="checkbox" id="fallbackToggle" />
         <span id="fallbackLabel"></span>
       </label>
+
+      <hr class="divider" />
+
+      <!-- Latency comparison chart (Phase 5 visualization) -->
+      <div class="latency-card" id="latencyCard">
+        <div class="latency-header">
+          <span class="latency-title" id="latencyTitle">延迟对比</span>
+          <span class="latency-meta" id="latencyMeta">60s · 0.5s</span>
+        </div>
+        <canvas id="latencyCanvas" width="440" height="120"></canvas>
+        <div class="latency-legend">
+          <span class="legend-dot" style="background:#3b82f6;box-shadow:0 0 6px rgba(59,130,246,0.55);"></span>
+          <span class="legend-text" id="latencyLegendBefore">优化前</span>
+          <span class="legend-dot" style="background:#00d4aa;box-shadow:0 0 6px rgba(0,212,170,0.55);margin-left:14px;"></span>
+          <span class="legend-text" id="latencyLegendCurrent">当前</span>
+        </div>
+      </div>
 
       <hr class="divider" />
 
@@ -583,6 +641,10 @@
           debugMetaVersion: '版本',
           debugMetaSession: '会话',
           debugMetaMode: '模式',
+          latencyTitle: '延迟对比',
+          latencyMeta: '60s · 0.5s',
+          latencyLegendBefore: '优化前',
+          latencyLegendCurrent: '当前',
           healthStreamLabel: '推流',
           healthDevicesLabel: '设备',
           logSummaryLabel: '运行日志',
@@ -689,6 +751,10 @@
           debugMetaVersion: 'Version',
           debugMetaSession: 'Session',
           debugMetaMode: 'Mode',
+          latencyTitle: 'Latency Comparison',
+          latencyMeta: '60s · 0.5s',
+          latencyLegendBefore: 'Before',
+          latencyLegendCurrent: 'Current',
           healthStreamLabel: 'Stream',
           healthDevicesLabel: 'Devices',
           logSummaryLabel: 'Runtime logs',
@@ -967,6 +1033,11 @@
         // Debug-meta labels (data plane / codec / protocol / version / session / mode)
         document.getElementById('dataPlaneLabel').textContent = t('debugMetaDataPlane');
         document.getElementById('codecLabel').textContent = t('debugMetaCodec');
+        // Latency comparison chart i18n
+        document.getElementById('latencyTitle').textContent = t('latencyTitle');
+        document.getElementById('latencyMeta').textContent = t('latencyMeta');
+        document.getElementById('latencyLegendBefore').textContent = t('latencyLegendBefore');
+        document.getElementById('latencyLegendCurrent').textContent = t('latencyLegendCurrent');
         document.getElementById('protocolLabel').textContent = t('debugMetaProtocol');
         document.getElementById('versionLabel').textContent = t('debugMetaVersion');
         document.getElementById('sessionLabel').textContent = t('debugMetaSession');
@@ -1308,10 +1379,175 @@
         document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 
+      // ---------- Latency comparison chart (Phase 5) ----------
+      // Rolling 60s window, sampled every 500ms. Two series: a static
+      // pre-optimization baseline (mode-dependent) and the live measured
+      // buffered_ms reported by the runtime snapshot. Renders into the
+      // <canvas id="latencyCanvas">.
+      const latencyChart = (() => {
+        const REFRESH_MS = 500;
+        const WINDOW_S = 60;
+        const MAX_SAMPLES = Math.floor((WINDOW_S * 1000) / REFRESH_MS);
+        const baseline = [];
+        const current = [];
+        let canvasEl = null;
+        let timer = null;
+
+        function modeBaseline(modeId) {
+          // Pre-optimization (v1.7-and-earlier) reference latency per mode.
+          switch (modeId) {
+            case 'low_latency': return 110;
+            case 'high_quality': return 320;
+            default: return 180;
+          }
+        }
+
+        function pushSample(list, value) {
+          const v = (typeof value === 'number' && isFinite(value)) ? value : (list.length ? list[list.length - 1] : 0);
+          list.push(v);
+          while (list.length > MAX_SAMPLES) list.shift();
+        }
+
+        function readCurrentMs(snapshot) {
+          if (!snapshot || snapshot.service_status !== 'running') return null;
+          const runtime = snapshot.service_snapshot || {};
+          const metrics = runtime.metrics || {};
+          if (typeof metrics.buffered_ms === 'number') return metrics.buffered_ms;
+          if (typeof metrics.total_buffered_ms === 'number') return metrics.total_buffered_ms;
+          return null;
+        }
+
+        function readBaselineMs(snapshot) {
+          if (!snapshot || snapshot.service_status !== 'running') return null;
+          const runtime = snapshot.service_snapshot || {};
+          return modeBaseline(runtime.mode || 'balanced');
+        }
+
+        function draw() {
+          if (!canvasEl) return;
+          const ctx = canvasEl.getContext('2d');
+          const dpr = window.devicePixelRatio || 1;
+          const cssW = canvasEl.clientWidth || 440;
+          const cssH = canvasEl.clientHeight || 120;
+          if (canvasEl.width !== Math.round(cssW * dpr) || canvasEl.height !== Math.round(cssH * dpr)) {
+            canvasEl.width = Math.round(cssW * dpr);
+            canvasEl.height = Math.round(cssH * dpr);
+          }
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, cssW, cssH);
+
+          const yLabelW = 32;
+          const plot = { x: yLabelW, y: 4, w: cssW - yLabelW - 4, h: cssH - 8 };
+
+          // Auto-scale Y.
+          let mx = 50;
+          for (const v of baseline) if (v > mx) mx = v;
+          for (const v of current) if (v > mx) mx = v;
+          const maxVal = Math.min(1000, Math.max(50, mx * 1.15));
+
+          // Grid + Y labels
+          ctx.font = '9px "SF Mono", Consolas, monospace';
+          ctx.fillStyle = 'rgba(74,85,104,0.9)';
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.lineWidth = 1;
+          const gridLines = 4;
+          for (let i = 0; i <= gridLines; i++) {
+            const t = i / gridLines;
+            const y = plot.y + plot.h * (1 - t);
+            ctx.beginPath();
+            ctx.moveTo(plot.x, y);
+            ctx.lineTo(plot.x + plot.w, y);
+            ctx.stroke();
+            const value = Math.round(maxVal * t);
+            const text = String(value);
+            const w = ctx.measureText(text).width;
+            ctx.fillText(text, plot.x - w - 4, y + 3);
+          }
+
+          drawSeries(ctx, plot, baseline, '#3b82f6', maxVal);
+          drawSeries(ctx, plot, current, '#00d4aa', maxVal);
+        }
+
+        function drawSeries(ctx, plot, values, color, maxVal) {
+          if (!values.length) return;
+          const stride = plot.w / Math.max(1, MAX_SAMPLES - 1);
+          const startX = plot.x + plot.w - stride * (values.length - 1);
+
+          // Filled area
+          const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
+          grad.addColorStop(0, hexWithAlpha(color, 0.35));
+          grad.addColorStop(1, hexWithAlpha(color, 0.02));
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          let firstX = startX;
+          let firstY = plot.y + plot.h;
+          for (let i = 0; i < values.length; i++) {
+            const x = startX + stride * i;
+            const v = Math.max(0, Math.min(maxVal, values[i]));
+            const y = plot.y + plot.h * (1 - v / maxVal);
+            if (i === 0) {
+              firstX = x;
+              firstY = y;
+              ctx.moveTo(x, plot.y + plot.h);
+              ctx.lineTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+            }
+          }
+          const lastX = startX + stride * (values.length - 1);
+          ctx.lineTo(lastX, plot.y + plot.h);
+          ctx.closePath();
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(plot.x, plot.y, plot.w, plot.h);
+          ctx.clip();
+          ctx.fill();
+          ctx.restore();
+
+          // Stroke
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.6;
+          ctx.lineJoin = 'round';
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          for (let i = 0; i < values.length; i++) {
+            const x = startX + stride * i;
+            const v = Math.max(0, Math.min(maxVal, values[i]));
+            const y = plot.y + plot.h * (1 - v / maxVal);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        function hexWithAlpha(hex, alpha) {
+          const r = parseInt(hex.slice(1, 3), 16);
+          const g = parseInt(hex.slice(3, 5), 16);
+          const b = parseInt(hex.slice(5, 7), 16);
+          return `rgba(${r},${g},${b},${alpha})`;
+        }
+
+        function tick() {
+          pushSample(current, readCurrentMs(state.snapshot));
+          pushSample(baseline, readBaselineMs(state.snapshot));
+          draw();
+        }
+
+        function start() {
+          canvasEl = document.getElementById('latencyCanvas');
+          if (!canvasEl) return;
+          if (timer) clearInterval(timer);
+          timer = setInterval(tick, REFRESH_MS);
+          tick();
+        }
+
+        return { start };
+      })();
+
       async function init() {
         document.getElementById('langSelect').value = state.lang;
         renderText();
         bindEvents();
+        latencyChart.start();
         await refresh();
         setInterval(refresh, 2000);
       }

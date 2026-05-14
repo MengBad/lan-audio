@@ -209,14 +209,14 @@ impl SessionServer {
             } => {
                 let client_key = format!("legacy-{}-{}", client_name, peer.ip());
                 (
-                client_name,
-                client_key,
-                udp_port,
-                desired_sample_rate,
-                channels,
-                false,
-                legacy_client_capabilities(),
-                self.cfg.current_audio_mode,
+                    client_name,
+                    client_key,
+                    udp_port,
+                    desired_sample_rate,
+                    channels,
+                    false,
+                    legacy_client_capabilities(),
+                    self.cfg.current_audio_mode,
                 )
             }
             SessionHello::V2(hello) => {
@@ -520,9 +520,7 @@ impl ClientRegistry {
                 let existing_usb_id = guard
                     .clients
                     .values()
-                    .find(|client| {
-                        matches!(client.transport, Some(ClientTransportTarget::Usb(_)))
-                    })
+                    .find(|client| matches!(client.transport, Some(ClientTransportTarget::Usb(_))))
                     .map(|client| client.id);
                 if let Some(existing_usb_id) = existing_usb_id {
                     replaced = remove_client_locked(&mut guard, existing_usb_id);
@@ -552,7 +550,10 @@ impl ClientRegistry {
             if guard.clients.len() >= MAX_CLIENTS {
                 return Err(anyhow!("too_many_clients"));
             }
-            if !guard.clients.is_empty() && replaced.is_none() && !check_multi_client_allowed_with_guard(&guard) {
+            if !guard.clients.is_empty()
+                && replaced.is_none()
+                && !check_multi_client_allowed_with_guard(&guard)
+            {
                 return Err(anyhow!("multi_client_upgrade_required"));
             }
 
@@ -581,7 +582,9 @@ impl ClientRegistry {
                         client.transport = Some(ClientTransportTarget::Usb(stream));
                     } else {
                         info!(serial, client = %client.name, "usb client waiting for forwarded tcp data stream");
-                        guard.pending_usb_clients.push_back((client.id, Instant::now()));
+                        guard
+                            .pending_usb_clients
+                            .push_back((client.id, Instant::now()));
                     }
                 }
             }
@@ -721,8 +724,14 @@ impl ClientRegistry {
         if !prefers_usb_transport {
             return None;
         }
-        if !guard.pending_usb_clients.iter().any(|(id, _)| *id == client_id) {
-            guard.pending_usb_clients.push_back((client_id, Instant::now()));
+        if !guard
+            .pending_usb_clients
+            .iter()
+            .any(|(id, _)| *id == client_id)
+        {
+            guard
+                .pending_usb_clients
+                .push_back((client_id, Instant::now()));
         }
         Some(name)
     }

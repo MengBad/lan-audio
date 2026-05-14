@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../audio_console_status.dart';
 import '../audio_console_theme.dart';
 import '../widgets/danger_action_button.dart';
+import '../widgets/latency_chart_widget.dart';
 import '../widgets/mode_selector_widget.dart';
 
 class PlayPage extends StatelessWidget {
@@ -25,6 +26,8 @@ class PlayPage extends StatelessWidget {
     required this.onStopPlayback,
     required this.onRetryConnection,
     required this.serverName,
+    required this.currentLatencyMs,
+    required this.baselineLatencyMs,
   });
 
   final bool isZh;
@@ -45,6 +48,14 @@ class PlayPage extends StatelessWidget {
   final VoidCallback onRetryConnection;
   final String? serverName;
 
+  /// Live read of the current end-to-end latency (ms). Sampled by the chart.
+  final ValueGetter<double?> currentLatencyMs;
+
+  /// Live read of the pre-optimization baseline latency (ms). Sampled by the
+  /// chart. Returning the same value across frames produces a flat reference
+  /// line.
+  final ValueGetter<double?> baselineLatencyMs;
+
   String tr(String zh, String en) => isZh ? zh : en;
 
   @override
@@ -56,7 +67,7 @@ class PlayPage extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Column(
         children: [
-          const Spacer(flex: 2),
+          const Spacer(flex: 1),
           // Large animated status orb
           AnimatedContainer(
             duration: AudioConsoleMotion.orbPulse,
@@ -154,7 +165,14 @@ class PlayPage extends StatelessWidget {
             style: AudioConsoleType.monoMeta(),
             textAlign: TextAlign.center,
           ),
-          const Spacer(flex: 3),
+          const SizedBox(height: 14),
+          // Latency comparison chart (Phase 2 visualization)
+          LatencyChartWidget(
+            currentLatencyMs: currentLatencyMs,
+            baselineLatencyMs: baselineLatencyMs,
+            isZh: isZh,
+          ),
+          const Spacer(flex: 2),
         ],
       ),
     );

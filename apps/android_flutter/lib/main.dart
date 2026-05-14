@@ -1755,7 +1755,28 @@ class _MainShellState extends State<MainShell> {
       onStopPlayback: _stopPlayback,
       onRetryConnection: _connectSelected,
       serverName: _serviceTargetName,
+      currentLatencyMs: () =>
+          _wsConnected ? _serviceBufferedMs.toDouble() : null,
+      baselineLatencyMs: () => _baselineLatencyForMode(_currentAudioMode),
     );
+  }
+
+  // Pre-optimization baseline latency for the active mode. These reflect the
+  // historical (v1.7-and-earlier) buffer targets before the Kalman/PID and
+  // soft-limiter pipeline landed; they form the static reference curve in the
+  // latency comparison chart.
+  double? _baselineLatencyForMode(AudioModePreference mode) {
+    if (!_wsConnected) {
+      return null;
+    }
+    switch (mode) {
+      case AudioModePreference.lowLatency:
+        return 110.0;
+      case AudioModePreference.balanced:
+        return 180.0;
+      case AudioModePreference.highQuality:
+        return 320.0;
+    }
   }
 
   Widget _buildMorePage(List<DiscoveryServer> servers) {
