@@ -28,6 +28,9 @@ class PlayPage extends StatelessWidget {
     required this.serverName,
     required this.currentLatencyMs,
     required this.baselineLatencyMs,
+    required this.effectiveCodec,
+    required this.sampleRate,
+    required this.channels,
   });
 
   final bool isZh;
@@ -55,6 +58,15 @@ class PlayPage extends StatelessWidget {
   /// chart. Returning the same value across frames produces a flat reference
   /// line.
   final ValueGetter<double?> baselineLatencyMs;
+
+  /// Negotiated codec on the wire (`opus` / `pcm16` / etc).
+  final String effectiveCodec;
+
+  /// Negotiated sample rate (Hz). Reads `_sampleRate` from `MainShell`.
+  final int sampleRate;
+
+  /// Negotiated channel count. Reads `_channels` from `MainShell`.
+  final int channels;
 
   String tr(String zh, String en) => isZh ? zh : en;
 
@@ -172,9 +184,92 @@ class PlayPage extends StatelessWidget {
             baselineLatencyMs: baselineLatencyMs,
             isZh: isZh,
           ),
+          const SizedBox(height: 8),
+          // Audio quality strip — codec / sample rate / channels.
+          // Hidden when no session has been negotiated yet.
+          if (wsConnected)
+            _AudioQualityStrip(
+              codec: effectiveCodec,
+              sampleRate: sampleRate,
+              channels: channels,
+              isZh: isZh,
+            ),
           const Spacer(flex: 2),
         ],
       ),
+    );
+  }
+}
+
+/// Compact "now playing" audio-quality strip rendered just below the latency
+/// chart. Shows the negotiated codec, sample rate, and channel count in the
+/// Audio Console Dark style. Designed to feel like an Apple-Music-esque
+/// passive readout — no controls, no taps.
+class _AudioQualityStrip extends StatelessWidget {
+  const _AudioQualityStrip({
+    required this.codec,
+    required this.sampleRate,
+    required this.channels,
+    required this.isZh,
+  });
+
+  final String codec;
+  final int sampleRate;
+  final int channels;
+  final bool isZh;
+
+  String tr(String zh, String en) => isZh ? zh : en;
+
+  String _codecLabel() {
+    switch (codec.toLowerCase()) {
+      case 'opus':
+        return 'Opus';
+      case 'pcm16':
+        return 'PCM 16';
+      case 'f32':
+        return 'PCM Float';
+      default:
+        return codec.toUpperCase();
+    }
+  }
+
+  String _sampleRateLabel() {
+    if (sampleRate >= 1000) {
+      final khz = sampleRate / 1000.0;
+      // Drop trailing .0 for whole-kHz rates (48000 -> "48 kHz").
+      if (khz == khz.truncateToDouble()) {
+        return '${khz.toInt()} kHz';
+      }
+      return '${khz.toStringAsFixed(1)} kHz';
+    }
+    return '$sampleRate Hz';
+  }
+
+  String _channelsLabel() {
+    switch (channels) {
+      case 1:
+        return tr('单声道', 'Mono');
+      case 2:
+        return tr('立体声', 'Stereo');
+      default:
+        return tr('$channels 声道', '$channels ch');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final monoStyle = AudioConsoleType.monoMeta();
+    final dotStyle = monoStyle.copyWith(color: AudioConsoleColors.text2);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(_codecLabel(), style: monoStyle),
+        Text(' · ', style: dotStyle),
+        Text(_sampleRateLabel(), style: monoStyle),
+        Text(' · ', style: dotStyle),
+        Text(_channelsLabel(), style: monoStyle),
+      ],
     );
   }
 }

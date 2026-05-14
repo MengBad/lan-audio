@@ -842,10 +842,17 @@ fn normalize_preferred_sample_rate(sample_rate: u32) -> u32 {
 }
 
 fn build_client_list_json(clients: &HashMap<Uuid, ClientHandle>) -> Option<String> {
+    // Sort by client UUID so the broadcast order is deterministic across
+    // calls. Without this the HashMap iteration order changes every tick
+    // and the desktop / Android UI keeps reshuffling the device list.
+    let mut entries: Vec<&ClientHandle> = clients
+        .values()
+        .filter(|client| client.supports_v2_events)
+        .collect();
+    entries.sort_by_key(|client| client.id);
     let list = ControlMessageV2::ClientList(ClientList {
-        clients: clients
-            .values()
-            .filter(|client| client.supports_v2_events)
+        clients: entries
+            .into_iter()
             .map(|client| ClientListEntry {
                 id: client.id,
                 name: client.name.clone(),
@@ -1318,5 +1325,52 @@ mod tests {
             .expect("watermark must be present");
         assert_eq!(drained.ts_unix_ms, 2_000, "last writer must win");
         assert_eq!(drained.jitter_buf_ms, 100);
+    }
+
+    /// Build a small `clients` map with two v2 sessions and verify that
+    /// `build_client_list_json` emits them sorted by client UUID. Without
+    /// the explicit sort, the broadcast order would track HashMap iteration
+    /// order and the desktop / Android UI kept reshuffling the device list.
+    #[test]
+    fn client_list_json_is_deterministically_ordered_by_id() {
+        use mpsc::unbounded_channel;
+        // Pick two UUIDs whose ordering is unambiguous so the test is not
+        // flaky.
+        let a_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let b_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+
+        let (tx_a, _rx_a) = unbounded_channel::<String>();
+        let (tx_b, _rx_b) = unbounded_channel::<String>();
+        let make_handle = |id: Uuid, name: &str, tx: mpsc::UnboundedSender<String>| ClientHandle {
+            id,
+            name: name.to_string(),
+            client_key: name.to_string(),
+            control_tx: tx,
+            transport: None,
+            prefers_usb_transport: false,
+            data_plane: DataPlaneFormat::V2Header,
+            codec: CodecSelection::Opus,
+            audio_mode: AudioMode::Balanced,
+            preferred_sample_rate: 48_000,
+            pending_first_packet: true,
+            pending_mode_sync: false,
+            supports_v2_events: true,
+        };
+
+        let mut clients: HashMap<Uuid, ClientHandle> = HashMap::new();
+        // Insert in reverse-id order to make sure HashMap order can't
+        // accidentally match the desired sort.
+        clients.insert(b_id, make_handle(b_id, "device-b", tx_b));
+        clients.insert(a_id, make_handle(a_id, "device-a", tx_a));
+
+        let json = build_client_list_json(&clients).expect("client list json");
+        // device-a (lower UUID) must appear before device-b (higher UUID).
+        let pos_a = json.find("device-a").expect("device-a in payload");
+        let pos_b = json.find("device-b").expect("device-b in payload");
+        assert!(
+            pos_a < pos_b,
+            "list must be sorted by id, got: {}",
+            json
+        );
     }
 }

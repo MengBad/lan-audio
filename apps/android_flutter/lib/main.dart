@@ -526,6 +526,68 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
+  /// Dedupe across discovery sources (mDNS / UDP beacon / probe scan).
+  /// We key by `host:wsPort` because every server is uniquely identified
+  /// by its IP and websocket port, and the same server will surface on
+  /// more than one source. Higher-priority sources (mDNS UUID > UDP UUID
+  /// > probe-fallback) overwrite lower-priority ones; same-priority
+  /// updates refresh the entry in place. Returns true if anything
+  /// actually changed so the caller can decide whether to setState.
+  bool _upsertDiscoveryServer(DiscoveryServer incoming) {
+    final dedupeKey = '${incoming.host}:${incoming.wsPort}';
+    DiscoveryServer? existing;
+    String? existingMapKey;
+    for (final entry in _servers.entries) {
+      if ('${entry.value.host}:${entry.value.wsPort}' == dedupeKey) {
+        existing = entry.value;
+        existingMapKey = entry.key;
+        break;
+      }
+    }
+    int rank(String source) {
+      switch (source) {
+        case 'mdns':
+          return 3;
+        case 'udp':
+          return 2;
+        case 'probe':
+          return 1;
+        default:
+          return 0;
+      }
+    }
+
+    if (existing == null) {
+      _servers[incoming.serverId] = incoming;
+      return true;
+    }
+    final incomingRank = rank(incoming.source);
+    final existingRank = rank(existing.source);
+    if (incomingRank >= existingRank) {
+      // Replace under the new (higher or equal) source's key.
+      if (existingMapKey != null && existingMapKey != incoming.serverId) {
+        _servers.remove(existingMapKey);
+      }
+      _servers[incoming.serverId] = incoming;
+      return true;
+    }
+    // Lower-priority update — only refresh `lastSeen` so the entry stays
+    // visible while the higher-priority source is alive.
+    if (existingMapKey != null) {
+      _servers[existingMapKey] = DiscoveryServer(
+        serverId: existing.serverId,
+        serverName: existing.serverName,
+        host: existing.host,
+        wsPort: existing.wsPort,
+        udpPort: existing.udpPort,
+        lastSeen: incoming.lastSeen,
+        latencyMs: existing.latencyMs ?? incoming.latencyMs,
+        source: existing.source,
+      );
+    }
+    return false;
+  }
+
   void _maybeSelectRecentOrFirst() {
     if (_servers.isEmpty) {
       return;
@@ -640,8 +702,9 @@ class _MainShellState extends State<MainShell> {
         if (parsed == null) {
           continue;
         }
-        _servers[parsed.serverId] = parsed;
-        changed = true;
+        if (_upsertDiscoveryServer(parsed)) {
+          changed = true;
+        }
       }
       if (changed && mounted) {
         setState(() {
@@ -799,8 +862,9 @@ class _MainShellState extends State<MainShell> {
           return;
         }
         setState(() {
-          _servers[parsed.serverId] = parsed;
-          _status = tr('正在监听设备发现', 'discovery listening');
+          if (_upsertDiscoveryServer(parsed)) {
+            _status = tr('正在监听设备发现', 'discovery listening');
+          }
           _maybeSelectRecentOrFirst();
         });
       });
@@ -891,7 +955,7 @@ class _MainShellState extends State<MainShell> {
           }
           final serverId = 'probe-$ip';
           setState(() {
-            _servers[serverId] = DiscoveryServer(
+            _upsertDiscoveryServer(DiscoveryServer(
               serverId: serverId,
               serverName: tr('扫描发现', 'Scanned Server'),
               host: ip,
@@ -900,7 +964,7 @@ class _MainShellState extends State<MainShell> {
               lastSeen: DateTime.now(),
               latencyMs: DateTime.now().difference(started).inMilliseconds,
               source: 'probe',
-            );
+            ));
             _status = tr('已通过扫描发现服务器', 'server discovered via probe');
             _maybeSelectRecentOrFirst();
           });
@@ -1629,7 +1693,9 @@ class _MainShellState extends State<MainShell> {
           if (bRecent == null) return -1;
           return bRecent.compareTo(aRecent);
         }
-        return b.lastSeen.compareTo(a.lastSeen);
+        // Stable secondary order: by host (IP) so the list does not
+        // visually reshuffle every time a beacon refreshes lastSeen.
+        return a.host.compareTo(b.host);
       });
 
     _maybeSelectRecentOrFirst();
@@ -1758,6 +1824,9 @@ class _MainShellState extends State<MainShell> {
       currentLatencyMs: () =>
           _wsConnected ? _serviceBufferedMs.toDouble() : null,
       baselineLatencyMs: () => _baselineLatencyForMode(_currentAudioMode),
+      effectiveCodec: _effectiveCodec,
+      sampleRate: _sampleRate,
+      channels: _channels,
     );
   }
 

@@ -4,6 +4,23 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.9.2] - 2026-05-14
+
+### Fixed
+
+- Connection list reshuffle: server-side `build_client_list_json` now sorts entries by client UUID before broadcasting, so `client_list` JSON is deterministic across ticks. The desktop / Android UI no longer reorders the device list every time a beacon arrives.
+- Android nearby-device duplicates: the discovery list now dedupes across mDNS / UDP / probe sources by `host:wsPort`, with a priority ranking (`mdns > udp > probe`) so a higher-confidence source displaces a lower-confidence one for the same physical server. Fixes the "two devices" symptom where probe-IP and mDNS UUID both appeared simultaneously.
+- Android list secondary-sort tiebreaker switched from `lastSeen` (volatile, updates every beacon) to `host` (stable). Servers without a recent-connected entry no longer reshuffle on every refresh.
+
+### Added
+
+- Audio quality strip on the Play page: under the latency chart, the app now shows the negotiated codec, sample rate, and channel count (e.g. `Opus · 48 kHz · 立体声`). Hidden until the WebSocket session is established. Pure passive readout — no controls.
+
+### Tests
+
+- Added `client_list_json_is_deterministically_ordered_by_id` to lock in the new server-side sort.
+- 98/98 Rust tests passing (67 server lib + 22 protocol + 8 domain + 1 multi_client + 1 opus_stress).
+
 ## [1.9.1] - 2026-05-14
 
 ### Changed
