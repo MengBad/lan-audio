@@ -11,15 +11,16 @@ import 'audio/background_playback_service.dart';
 import 'audio/jitter_buffer.dart';
 import 'audio/las_packet.dart';
 import 'connect_history.dart';
-import 'power_saving_guide.dart';
 import 'services/mic_capture_service.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
 import 'ui/pages/more_page.dart';
 import 'ui/pages/play_page.dart';
+import 'ui/pages/power_saving_guide_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
-const String kUiBuildTag = 'UI build: audio-console-dark-v1.7.2';
+const String kAppVersion = '1.8.3';
+const String kUiBuildTag = 'UI build: audio-console-dark-v$kAppVersion';
 const bool kUseBackgroundPlaybackService = true;
 
 void main() {
@@ -1572,40 +1573,46 @@ class _MainShellState extends State<MainShell> {
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
+        child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          children: [
-            Text(tr('高级与调试', 'Advanced & Debug'),
-                style: AudioConsoleType.title()),
-            const SizedBox(height: 10),
-            Text('protocol: v${_protocolVersion ?? 1}'),
-            Text('mode: ${_audioModeWire(_currentAudioMode)}'),
-            Text('codec: $_effectiveCodec'),
-            Text('data_plane: $_protocolPath'),
-            Text('transport: $_transportMode'),
-            Text('connected_clients: $_connectedClientCount'),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: _updateCheckRunning
-                  ? null
-                  : () {
-                      Navigator.of(context).pop();
-                      _checkForUpdate(
-                        silentDelayMs: 0,
-                        showNoUpdateHint: true,
-                      );
-                    },
-              child: Text(tr('检查更新', 'Check Update')),
-            ),
-            OutlinedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _openPowerSavingGuide();
-              },
-              child: Text(tr('后台播放', 'Background playback')),
-            ),
-          ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(tr('快捷操作', 'Quick Actions'),
+                  style: AudioConsoleType.title()),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: _updateCheckRunning
+                    ? null
+                    : () {
+                        Navigator.of(context).pop();
+                        _checkForUpdate(
+                          silentDelayMs: 0,
+                          showNoUpdateHint: true,
+                        );
+                      },
+                child: Text(tr('检查更新', 'Check Update')),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _openPowerSavingGuide();
+                },
+                child: Text(tr('后台播放', 'Background playback')),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                tr('调试信息请查看「更多」页底部', 'Debug info is in the "More" tab'),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AudioConsoleColors.text2,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1715,14 +1722,14 @@ class _MainShellState extends State<MainShell> {
         selectedItemColor: AudioConsoleColors.teal,
         unselectedItemColor: AudioConsoleColors.text2,
         type: BottomNavigationBarType.fixed,
-        items: const [
+        items: [
           BottomNavigationBarItem(
-            icon: Icon(Icons.play_circle_outline),
-            label: '播放',
+            icon: const Icon(Icons.play_circle_outline),
+            label: _isZh ? '播放' : 'Play',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.more_horiz),
-            label: '更多',
+            icon: const Icon(Icons.more_horiz),
+            label: _isZh ? '更多' : 'More',
           ),
         ],
       ),
@@ -1858,78 +1865,3 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
-class PowerSavingGuidePage extends StatefulWidget {
-  const PowerSavingGuidePage({super.key});
-
-  static const routeName = '/power-saving-guide';
-
-  @override
-  State<PowerSavingGuidePage> createState() => _PowerSavingGuidePageState();
-}
-
-class _PowerSavingGuidePageState extends State<PowerSavingGuidePage> {
-  static const MethodChannel _platformChannel =
-      MethodChannel('lan_audio/platform');
-
-  String _manufacturer = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadManufacturer();
-  }
-
-  Future<void> _loadManufacturer() async {
-    try {
-      final manufacturer =
-          await _platformChannel.invokeMethod<String>('getDeviceManufacturer');
-      if (mounted) {
-        setState(() => _manufacturer = manufacturer ?? '');
-      }
-    } catch (_) {
-      // Keep generic instructions when native platform data is unavailable.
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final locale =
-        PlatformDispatcher.instance.locale.languageCode.toLowerCase();
-    final isZh = locale.startsWith('zh');
-    final steps = orderedPowerSavingGuideSteps(_manufacturer);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(isZh ? '后台播放' : 'Background playback'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            isZh
-                ? 'LAN Audio 被省电模式限制时，请按下面步骤允许后台播放。'
-                : 'If battery saver limits LAN Audio, allow background playback with the steps below.',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-          if (_manufacturer.isNotEmpty)
-            Text(
-              isZh
-                  ? '已识别设备品牌：$_manufacturer'
-                  : 'Detected manufacturer: $_manufacturer',
-              style: const TextStyle(color: Colors.black54),
-            ),
-          if (_manufacturer.isNotEmpty) const SizedBox(height: 12),
-          for (final step in steps) ...[
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.battery_saver),
-              title: Text(step.zh),
-              subtitle: Text(step.en),
-            ),
-            const Divider(height: 1),
-          ],
-        ],
-      ),
-    );
-  }
-}

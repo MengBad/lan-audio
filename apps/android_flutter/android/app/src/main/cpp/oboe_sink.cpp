@@ -8,6 +8,10 @@
 
 namespace {
 constexpr const char *kTag = "lan_audio_oboe";
+// Number of frames to fade out before a silence fill to avoid pops/clicks.
+// At 48kHz this is ~1ms — short enough to be inaudible as a fade but enough
+// to eliminate the hard discontinuity.
+constexpr int kFadeRampFrames = 48;
 
 void copy_samples(const int16_t *source, int16_t *dest, int sample_count) {
     if (sample_count <= 0) {
@@ -179,6 +183,19 @@ oboe::DataCallbackResult OboeAudioSink::onAudioReady(
     if (got_frames < requested_frames) {
         const int missing_frames = requested_frames - got_frames;
         const int got_samples = got_frames * channels;
+        // Apply a short fade-out ramp on the last available samples to avoid a hard
+        // transition to silence (which causes audible pops/clicks).
+        const int ramp_frames = std::min(got_frames, kFadeRampFrames);
+        if (ramp_frames > 0) {
+            const int ramp_start_sample = (got_frames - ramp_frames) * channels;
+            for (int i = 0; i < ramp_frames; ++i) {
+                const float gain = 1.0f - static_cast<float>(i + 1) / static_cast<float>(ramp_frames + 1);
+                for (int ch = 0; ch < channels; ++ch) {
+                    const int idx = ramp_start_sample + i * channels + ch;
+                    out[idx] = static_cast<int16_t>(static_cast<float>(out[idx]) * gain);
+                }
+            }
+        }
         std::memset(out + got_samples, 0, static_cast<size_t>(missing_frames * channels) * sizeof(int16_t));
         silence_fill_count_.fetch_add(1, std::memory_order_relaxed);
     }

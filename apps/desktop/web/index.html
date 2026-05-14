@@ -199,7 +199,7 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0;
+        padding: 6px 0 6px 2px;
         font-size: 13px;
         cursor: pointer;
       }
@@ -323,8 +323,38 @@
       }
       .log-line { white-space: pre-wrap; margin-bottom: 2px; }
 
-      /* Hidden compatibility nodes (kept for legacy JS) */
-      .legacy-hidden { display: none !important; }
+      /* Loading spinner for primary button */
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .primary.loading {
+        position: relative;
+        color: transparent !important;
+        pointer-events: none;
+      }
+      .primary.loading::after {
+        content: '';
+        position: absolute;
+        width: 18px; height: 18px;
+        top: 50%; left: 50%;
+        margin: -9px 0 0 -9px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+      }
+
+      /* Responsive breakpoints */
+      @media (max-width: 520px) {
+        .app { padding: 0 10px; margin: 10px auto; }
+        .field select { min-width: 100px; }
+        .qr-row { flex-direction: column; align-items: flex-start; }
+      }
+      @media (max-width: 360px) {
+        .app { padding: 0 8px; }
+        .title { font-size: 14px; }
+        .field { flex-direction: column; align-items: flex-start; gap: 4px; }
+        .field select { width: 100%; min-width: unset; }
+      }
+
     </style>
   </head>
   <body>
@@ -441,6 +471,18 @@
             <span id="dumpLabel"></span>
           </label>
 
+          <!-- Mic / Virtual Device Status -->
+          <div class="usb-block" id="micBlock">
+            <div class="usb-block-title">🎤 麦克风反向通道</div>
+            <div class="usb-row">状态: <strong id="micStatusText">未激活</strong></div>
+            <div class="usb-row" id="micWarningRow" style="display:none;color:var(--warn);">
+              <span id="micWarningText"></span>
+            </div>
+            <div class="usb-row" style="font-size:10px;color:var(--muted);margin-top:4px;" id="micHelpText">
+              需要安装 VB-Cable 虚拟音频设备。<a href="#" id="micHelpLink" style="color:var(--accent);">下载 VB-Cable</a>
+            </div>
+          </div>
+
           <!-- USB Panel -->
           <div class="usb-block" id="usbPanel" style="display:none;">
             <div class="usb-block-title" id="usbTitle"></div>
@@ -461,52 +503,6 @@
         </div>
       </details>
 
-      <!-- Hidden compatibility shims for any JS still referencing old IDs -->
-      <div class="legacy-hidden" aria-hidden="true">
-        <span id="subtitle"></span>
-        <span id="statusSubline"></span>
-        <span id="qrSubtitle"></span>
-        <span id="qrUriValue"></span>
-        <span id="healthSourceLabel"></span>
-        <span id="healthSourceValue"></span>
-        <span id="healthTitle"></span>
-        <span id="sourceLabel"></span>
-        <span id="sourceValue"></span>
-        <span id="strategyLabel"></span>
-        <span id="strategyValue"></span>
-        <span id="grayLabel"></span>
-        <span id="grayValue"></span>
-        <span id="connectionTipLabel"></span>
-        <span id="connectionTipValue"></span>
-        <span id="currentDeviceLabel"></span>
-        <span id="currentDeviceValue"></span>
-        <span id="recentDeviceLabel"></span>
-        <ul id="deviceRecentList"></ul>
-        <span id="deviceTitle"></span>
-        <span id="sourceTitle"></span>
-        <span id="dataPlaneTitle"></span>
-        <span id="codecTitle"></span>
-        <span id="advancedSummary"></span>
-        <span id="advancedPathLabel"></span>
-        <span id="advancedDataPathValue"></span>
-        <span id="advancedRollbackLabel"></span>
-        <span id="advancedExportLabel"></span>
-        <span id="logSummary"></span>
-        <button id="advancedSafeModeBtn" type="button"></button>
-        <span id="addrLabel"></span>
-        <span id="codecSelectLabel"></span>
-        <span id="safeModeHint"></span>
-        <button id="sourceLoopback" type="button"></button>
-        <button id="sourceSynthetic" type="button"></button>
-        <button id="dataPlaneLegacy" type="button"></button>
-        <button id="dataPlaneV2Header" type="button"></button>
-        <button id="codecPcm16" type="button"></button>
-        <button id="codecOpus" type="button"></button>
-        <span id="deviceCard"></span>
-        <span id="settingsToggle"></span>
-        <span id="settingsBody"></span>
-        <span id="settingsChevron"></span>
-      </div>
     </div>
 
     <script>
@@ -555,6 +551,8 @@
           start: '启动推流',
           stop: '停止推流',
           busy: '处理中…',
+          nextStart: '下一步：点击"启动推流"，然后在手机端连接本机地址。',
+          nextStop: '当前正在提供推流服务，可随时停止。',
           state_not_started: '未启动',
           state_starting: '启动中',
           state_running: '运行中',
@@ -659,6 +657,8 @@
           start: 'Start Streaming',
           stop: 'Stop Streaming',
           busy: 'Processing…',
+          nextStart: 'Next: click Start Streaming, then connect from your phone.',
+          nextStop: 'Streaming service is active. You can stop it anytime.',
           state_not_started: 'Not Started',
           state_starting: 'Starting',
           state_running: 'Running',
@@ -922,7 +922,13 @@
           const meta = document.createElement('div');
           const model = device.model ? ` · ${device.model}` : '';
           const tid = device.transport_id ? ` · tid:${device.transport_id}` : '';
-          meta.innerHTML = `<strong>${device.serial}</strong><span class="usb-meta">${model}${tid}</span>`;
+          const strong = document.createElement('strong');
+          strong.textContent = device.serial;
+          meta.appendChild(strong);
+          const metaSpan = document.createElement('span');
+          metaSpan.className = 'usb-meta';
+          metaSpan.textContent = `${model}${tid}`;
+          meta.appendChild(metaSpan);
 
           const btn = document.createElement('button');
           btn.type = 'button';
@@ -1004,8 +1010,13 @@
         const primary = document.getElementById('primaryActionBtn');
         primary.textContent = main.label;
         primary.disabled = !main.action;
-        primary.className = `primary${main.stop ? ' stop' : ''}`;
+        const isBusy = snapshot.service_status === 'starting' || snapshot.service_status === 'stopping';
+        primary.className = `primary${main.stop ? ' stop' : ''}${isBusy ? ' loading' : ''}`;
         primary.dataset.action = main.action || '';
+
+        // Next-step hint
+        const nextStep = document.getElementById('nextStep');
+        if (nextStep) nextStep.textContent = main.action === 'start' ? t('nextStart') : t('nextStop');
 
         // Settings <select> reflect current snapshot
         const sourceSelect = document.getElementById('audioSourceSelect');
@@ -1051,7 +1062,6 @@
         // Debug-meta values (data plane / codec / protocol / version / session / mode)
         document.getElementById('sessionValue').textContent =
           t(`session_${runtime.state}`) || runtime.state || snapshot.session_status || '';
-        document.getElementById('sourceValue').textContent = sourceName(snapshot.audio_source);
         document.getElementById('dataPlaneValue').textContent =
           dataPlaneName(runtime.data_plane || snapshot.data_plane_format);
         document.getElementById('modeValue').textContent =
@@ -1100,6 +1110,27 @@
           logPane.appendChild(div);
         });
 
+        // Mic / virtual device status
+        const micStatus = document.getElementById('micStatusText');
+        const micWarningRow = document.getElementById('micWarningRow');
+        const micWarningText = document.getElementById('micWarningText');
+        const micHelpText = document.getElementById('micHelpText');
+        if (snapshot.mic_active) {
+          micStatus.textContent = `活跃 · ${snapshot.mic_peak_db?.toFixed(0) ?? '-'} dB`;
+          micStatus.style.color = 'var(--accent)';
+        } else {
+          micStatus.textContent = state.lang === 'zh' ? '未激活' : 'Inactive';
+          micStatus.style.color = '';
+        }
+        if (snapshot.virtual_device_warning) {
+          micWarningRow.style.display = 'block';
+          micWarningText.textContent = snapshot.virtual_device_warning;
+          micHelpText.style.display = 'block';
+        } else if (snapshot.virtual_device_detected) {
+          micWarningRow.style.display = 'none';
+          micHelpText.style.display = 'none';
+        }
+
         // USB panel visibility
         document.getElementById('usbPanel').style.display =
           (snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0)) ? 'block' : 'none';
@@ -1125,7 +1156,6 @@
       async function renderConnectionQr(snapshot) {
         const panel = document.getElementById('qrPanel');
         const uri = `lan-audio://${snapshot.local_ip}:${snapshot.ws_port}`;
-        document.getElementById('qrUriValue').textContent = uri;
         if (snapshot.service_status !== 'running') {
           panel.classList.remove('visible');
           state.qrKey = '';
@@ -1239,6 +1269,13 @@
           state.lang = e.target.value;
           renderText();
           if (state.snapshot) renderSnapshot(state.snapshot);
+        });
+
+        // VB-Cable download link
+        document.getElementById('micHelpLink').addEventListener('click', (e) => {
+          e.preventDefault();
+          try { tauriInvoke('open_external_url', { url: 'https://vb-audio.com/Cable/' }); }
+          catch (_) { window.open('https://vb-audio.com/Cable/', '_blank'); }
         });
 
         document.getElementById('primaryActionBtn').addEventListener('click', async () => {

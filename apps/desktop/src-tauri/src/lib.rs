@@ -134,6 +134,8 @@ struct DesktopSnapshot {
     mic_device_name: String,
     android_volume_pct: u8,
     reverse_channel_enabled: bool,
+    virtual_device_detected: bool,
+    virtual_device_warning: Option<String>,
     logs: Vec<String>,
     update_banner: Option<UpdateBanner>,
 }
@@ -378,6 +380,8 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         mic_device_name: reverse_channel_state.mic_device_name,
         android_volume_pct: reverse_channel_state.android_volume_pct,
         reverse_channel_enabled: cfg.reverse_channel_enabled,
+        virtual_device_detected: reverse_channel_state.virtual_device_detected,
+        virtual_device_warning: reverse_channel_state.virtual_device_warning,
         logs,
         update_banner,
     }

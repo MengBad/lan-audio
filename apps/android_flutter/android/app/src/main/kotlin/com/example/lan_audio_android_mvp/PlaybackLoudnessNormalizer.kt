@@ -83,12 +83,38 @@ class PlaybackLoudnessNormalizer {
             val lo = out[index].toInt() and 0xFF
             val hi = out[index + 1].toInt()
             val sample = (hi shl 8) or lo
-            val scaled = (sample * sampleGain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            // Soft-clip using tanh-style saturation to avoid hard clipping distortion.
+            // Only engage soft-clip when the scaled sample would exceed the headroom ceiling.
+            val raw = sample * sampleGain
+            val scaled = if (raw > SOFT_CLIP_THRESHOLD || raw < -SOFT_CLIP_THRESHOLD) {
+                softClip(raw)
+            } else {
+                raw.toInt()
+            }
             out[index] = (scaled and 0xFF).toByte()
             out[index + 1] = ((scaled shr 8) and 0xFF).toByte()
             index += 2
         }
         return out
+    }
+
+    /**
+     * Attempt soft saturation instead of hard clipping.
+     * Uses a simple cubic soft-clip curve that smoothly limits the signal
+     * to avoid the harsh distortion of hard clipping at ±32767.
+     */
+    private fun softClip(sample: Double): Int {
+        val limit = PCM16_FULL_SCALE * SOFT_CLIP_CEILING
+        val normalized = (sample / limit).coerceIn(-1.5, 1.5)
+        // Cubic soft-clip: y = x - x^3/3 for |x| <= 1.5, clamped to ±1.0
+        val clipped = if (normalized > 1.0) {
+            1.0
+        } else if (normalized < -1.0) {
+            -1.0
+        } else {
+            normalized - (normalized * normalized * normalized) / 4.5
+        }
+        return (clipped * limit).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
     }
 
     private fun nextGain(): Double {
@@ -119,6 +145,10 @@ class PlaybackLoudnessNormalizer {
         private const val PCM16_FULL_SCALE = 32768.0
         private val TARGET_RMS = 10.0.pow(-18.0 / 20.0)
         private const val MIN_GAIN = 0.5
-        private const val MAX_GAIN = 2.0
+        private const val MAX_GAIN = 1.6
+        // Soft-clip engages when sample magnitude exceeds this fraction of full scale
+        private const val SOFT_CLIP_THRESHOLD = 28_000.0
+        // Maximum output level as fraction of full scale (leaves ~1.2 dB headroom)
+        private const val SOFT_CLIP_CEILING = 0.92
     }
 }

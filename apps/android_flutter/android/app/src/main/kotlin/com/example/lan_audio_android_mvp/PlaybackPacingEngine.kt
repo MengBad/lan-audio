@@ -20,9 +20,9 @@ internal object PlaybackPacingEngine {
     ): Int {
         if (options.preferLowLatencyPath) {
             return when {
-                catchupMs >= 120 -> -4
-                catchupMs >= 70 -> -3
-                catchupMs >= 35 -> -2
+                catchupMs >= 120 -> -3
+                catchupMs >= 70 -> -2
+                catchupMs >= 35 -> -1
                 else -> 0
             }
         }

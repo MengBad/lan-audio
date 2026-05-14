@@ -11,7 +11,7 @@
 class PcmRingBuffer {
 public:
     static constexpr int kChannels = 2;
-    static constexpr int kCapacityFrames = 4096;  // stereo frames
+    static constexpr int kCapacityFrames = 8192;  // stereo frames
 
     bool push(const int16_t *data, int frames);
     int pull(int16_t *out, int frames);

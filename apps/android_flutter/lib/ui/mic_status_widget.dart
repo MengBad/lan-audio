@@ -8,6 +8,7 @@ class MicStatusWidget extends StatefulWidget {
   final int reversePort;
   final bool enabled;
   final Future<void> Function() onToggle;
+  final bool isZh;
 
   const MicStatusWidget({
     super.key,
@@ -16,6 +17,7 @@ class MicStatusWidget extends StatefulWidget {
     this.reversePort = 7878,
     required this.enabled,
     required this.onToggle,
+    this.isZh = true,
   });
 
   @override
@@ -123,7 +125,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
             ),
             const SizedBox(width: 6),
             Text(
-              '麦克风',
+              widget.isZh ? '麦克风' : 'Microphone',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
@@ -181,7 +183,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
           ),
           const SizedBox(height: 2),
           Text(
-            '正在推送到 PC',
+            widget.isZh ? '正在推送到 PC' : 'Streaming to PC',
             style: TextStyle(
               color: const Color(0xFF00D4AA).withValues(alpha: 0.8),
               fontSize: 10,
@@ -189,11 +191,11 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
           ),
         ],
         if (widget.service.status == MicStatus.connecting)
-          const Padding(
-            padding: EdgeInsets.only(top: 2),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
             child: Text(
-              '连接中...',
-              style: TextStyle(color: Color(0xFFFFB300), fontSize: 10),
+              widget.isZh ? '连接中...' : 'Connecting...',
+              style: const TextStyle(color: Color(0xFFFFB300), fontSize: 10),
             ),
           ),
         if (widget.service.status == MicStatus.error)
