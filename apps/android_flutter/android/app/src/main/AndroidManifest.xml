@@ -16,7 +16,7 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <application
-        android:label="LAN Audio Android MVP"
+        android:label="LAN Audio 控制台"
         android:icon="@android:drawable/ic_media_play"
         android:usesCleartextTraffic="true">
         <activity

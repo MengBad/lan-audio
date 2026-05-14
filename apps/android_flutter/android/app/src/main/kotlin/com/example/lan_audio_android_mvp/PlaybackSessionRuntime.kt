@@ -1829,7 +1829,8 @@ class PlaybackSessionRuntime(
             balancedQueueBelowFillTarget = false
             return baseBatchSize
         }
-        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "balanced") {
+        val mode = PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode)
+        if (mode != "balanced" && mode != "high_quality") {
             balancedQueueBelowFillTarget = false
             return baseBatchSize
         }
@@ -1841,7 +1842,11 @@ class PlaybackSessionRuntime(
         val availableFrames = ((jitterBufferedMs / frameDurationMs).coerceAtLeast(0) + 1).coerceAtLeast(1)
         if (!balancedQueueBelowFillTarget) {
             balancedQueueBelowFillTarget = true
-            val refillTargetMs = BALANCED_ONE_SHOT_REFILL_TARGET_MS
+            val refillTargetMs = if (mode == "high_quality") {
+                BALANCED_ONE_SHOT_REFILL_TARGET_MS * 2
+            } else {
+                BALANCED_ONE_SHOT_REFILL_TARGET_MS
+            }
             val refillFramesNeeded = kotlin.math.ceil(
                 (refillTargetMs - audioQueuedMs).coerceAtLeast(0) / frameDurationMs.toDouble(),
             ).toInt().coerceAtLeast(1)

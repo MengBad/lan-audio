@@ -13,12 +13,11 @@ import 'audio/las_packet.dart';
 import 'connect_history.dart';
 import 'power_saving_guide.dart';
 import 'services/mic_capture_service.dart';
-import 'ui/jitter_graph_widget.dart';
-import 'ui/mic_status_widget.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
-import 'ui/widgets/danger_action_button.dart';
-import 'ui/widgets/metric_chip_widget.dart';
+import 'ui/pages/audio_page.dart';
+import 'ui/pages/home_page.dart';
+import 'ui/pages/settings_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
 const String kUiBuildTag = 'UI build: audio-console-dark-v1.7.2';
@@ -36,7 +35,7 @@ class LanAudioApp extends StatelessWidget {
     return MaterialApp(
       title: 'LAN Audio Console',
       theme: buildAudioConsoleTheme(),
-      home: const DebugPage(),
+      home: const MainShell(),
       routes: {
         PowerSavingGuidePage.routeName: (_) => const PowerSavingGuidePage(),
       },
@@ -165,16 +164,21 @@ enum AppLang {
   en,
 }
 
-class DebugPage extends StatefulWidget {
-  const DebugPage({super.key});
+class MainShell extends StatefulWidget {
+  const MainShell({super.key});
 
   @override
-  State<DebugPage> createState() => _DebugPageState();
+  State<MainShell> createState() => _MainShellState();
 }
 
-class _DebugPageState extends State<DebugPage> {
+/// Keep legacy name as alias for smoke tests that reference DebugPage.
+typedef DebugPage = MainShell;
+
+class _MainShellState extends State<MainShell> {
   static const MethodChannel _platformChannel =
       MethodChannel('lan_audio/platform');
+
+  int _currentTabIndex = 0;
 
   final Map<String, DiscoveryServer> _servers = {};
   final JitterBuffer _jitter =
@@ -1760,19 +1764,6 @@ class _DebugPageState extends State<DebugPage> {
     return tr('未连接', 'DISCONNECTED');
   }
 
-  Color _statusChipColor(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final label = _statusChipLabel();
-    if (label == 'RECONNECTING' || label == '重连中') {
-      return Colors.deepOrange.shade700;
-    }
-    if (label == 'STREAMING' || label == '推流中') return Colors.green.shade600;
-    if (label == 'BUFFERING' || label == '缓冲中') return Colors.orange.shade700;
-    if (label == 'CONNECTED' || label == '已连接') return scheme.primary;
-    if (label == 'CONNECTING' || label == '连接中') return scheme.secondary;
-    return scheme.outline;
-  }
-
   String _connectActionLabel() {
     if (_isConnecting) return tr('连接中...', 'Connecting...');
     if (_connectMode == ConnectMode.usb) return tr('USB 连接', 'USB Connect');
@@ -1826,164 +1817,6 @@ class _DebugPageState extends State<DebugPage> {
 
   int? get _uiAudioTrackLatencyMs =>
       kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
-
-  Widget _eqSlider({
-    required String label,
-    required int value,
-    required ValueChanged<int> onChanged,
-  }) {
-    return SizedBox(
-      width: 86,
-      height: 190,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label, textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text(
-            '${value >= 0 ? '+' : ''}$value dB',
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-          Expanded(
-            child: RotatedBox(
-              quarterTurns: -1,
-              child: Slider(
-                min: -10,
-                max: 10,
-                divisions: 20,
-                value: value.toDouble(),
-                onChanged: (next) => onChanged(next.round()),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _eqPresetButton(String label, String preset) {
-    return OutlinedButton(
-      onPressed: () => _applyEqPreset(preset),
-      child: Text(label),
-    );
-  }
-
-  Widget _metricTile(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.black12),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(fontSize: 11, color: Colors.black54)),
-          const SizedBox(height: 2),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuickConnectCard(List<DiscoveryServer> servers) {
-    final recentHost = _mostRecentHost();
-    if (recentHost == null) {
-      return const SizedBox.shrink();
-    }
-    final matched = servers.where((s) => s.host == recentHost).toList();
-    final wsPort = matched.isNotEmpty ? matched.first.wsPort : 39991;
-    final udpPort = matched.isNotEmpty ? matched.first.udpPort : 39992;
-    final name =
-        matched.isNotEmpty ? matched.first.serverName : 'recent:$recentHost';
-
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.flash_on, size: 18),
-                const SizedBox(width: 6),
-                Text(tr('快速连接', 'Quick Connect'),
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(width: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(tr('最近连接', 'Recent'),
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 11)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('$name ($recentHost) ws:$wsPort udp:$udpPort'),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: _isConnecting ? null : _connectQuickRecent,
-              child: Text(tr('一键连接最近设备', 'Connect Recent Server')),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildConnectHistoryCard() {
-    if (_connectHistory.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(tr('连接历史', 'Connection History'),
-                style:
-                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            const SizedBox(height: 8),
-            ..._connectHistory.map((entry) {
-              return Dismissible(
-                key: ValueKey('${entry.ip}:${entry.port}'),
-                direction: DismissDirection.endToStart,
-                background: Container(
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 16),
-                  color: Colors.red.shade600,
-                  child: const Icon(Icons.delete, color: Colors.white),
-                ),
-                onDismissed: (_) => _removeConnectHistory(entry),
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(
-                    entry.isFavorite ? Icons.star : Icons.history,
-                    color: entry.isFavorite ? Colors.amber.shade700 : null,
-                  ),
-                  title: Text(entry.hostname),
-                  subtitle: Text(
-                    '${entry.ip}:${entry.port}  ${tr('延迟', 'latency')}:${entry.lastLatencyMs}ms  ${tr('次数', 'count')}:${entry.connectCount}',
-                  ),
-                  onTap:
-                      _isConnecting ? null : () => _connectHistoryEntry(entry),
-                  onLongPress: () => _showHistoryActions(entry),
-                ),
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-  }
 
   void _showAdvancedSheet() {
     showModalBottomSheet<void>(
@@ -2083,770 +1916,230 @@ class _DebugPageState extends State<DebugPage> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+      body: Stack(
         children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _statusChipColor(context),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _statusChipLabel(),
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                        ),
-                        Text(
-                          _status,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Theme.of(context).colorScheme.onSurface
-                                .withValues(alpha: 0.6),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          AnimatedOpacity(
-            opacity: _showVolumePill ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 300),
-            child: Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A2035),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '${_isZh ? '音量' : 'Vol'}: $_androidVolumePct%',
-                  style: const TextStyle(
-                    color: Color(0xFF00D4AA),
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (_showVolumePill) const SizedBox(height: 6),
-          Row(
+          IndexedStack(
+            index: _currentTabIndex,
             children: [
-              Expanded(
-                child: MetricChipWidget(
-                  label: 'buffer ms',
-                  value: _metricBufferText,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: MetricChipWidget(
-                  label: 'rx fps',
-                  value: _metricFpsText,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: MetricChipWidget(
-                  label: 'underrun',
-                  value: _metricUnderrunText,
-                  valueColor: _uiUnderrun > 0
-                      ? AudioConsoleColors.amber
-                      : AudioConsoleColors.text,
-                ),
-              ),
+              _buildHomePage(servers, modeItems),
+              _buildAudioPage(),
+              _buildSettingsPage(servers),
             ],
           ),
-          const SizedBox(height: 12),
-          ModeSelectorWidget(
-            items: modeItems,
-            selectedId: _modeId(_currentAudioMode),
-            enabled: _modeSelectorEnabled,
-            onSelected: (id) => _setAudioMode(_modeFromId(id)),
-          ),
-          const SizedBox(height: 12),
-          if (_consoleState == ConsoleUiState.error)
-            FilledButton.tonal(
-              key: const Key('retry_action'),
-              onPressed: _isConnecting ? null : _connectSelected,
-              child: Text(tr('重试连接', 'Retry Connection')),
-            ),
-          if (_consoleState == ConsoleUiState.error) const SizedBox(height: 8),
-          DangerActionButton(
-            label: tr('停止播放', 'Stop Playback'),
-            enabled: _wsConnected || _playbackState != PlaybackState.stopped,
-            onPressed: (_wsConnected || _playbackState != PlaybackState.stopped)
-                ? _stopPlayback
-                : null,
-          ),
-          const SizedBox(height: 12),
-          _buildQuickConnectCard(servers),
-          const SizedBox(height: 10),
-          _buildConnectHistoryCard(),
-          if (_connectHistory.isNotEmpty) const SizedBox(height: 10),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr('连接', 'Connection'),
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  SegmentedButton<ConnectMode>(
-                    segments: [
-                      ButtonSegment(
-                        value: ConnectMode.discovered,
-                        label: Text(tr('发现设备', 'Discovered')),
-                      ),
-                      ButtonSegment(
-                        value: ConnectMode.manual,
-                        label: Text(tr('手动地址', 'Manual')),
-                      ),
-                      ButtonSegment(
-                        value: ConnectMode.usb,
-                        label: Text(tr('USB（adb）', 'USB (adb)')),
-                      ),
-                    ],
-                    selected: <ConnectMode>{_connectMode},
-                    onSelectionChanged: (selection) {
-                      setState(() {
-                        _connectMode = selection.first;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  if (_probeRunning)
-                    Row(
-                      children: [
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            tr('正在扫描局域网...', 'Scanning LAN...'),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+          // Volume pill overlay
+          Positioned(
+            top: 8,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              ignoring: !_showVolumePill,
+              child: AnimatedOpacity(
+                opacity: _showVolumePill ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A2035),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                  if (_probeRunning) const SizedBox(height: 10),
-                  if (_nsdDiscoveryRunning)
-                    Row(
-                      children: [
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            tr('正在发现附近设备...', 'Discovering nearby devices...'),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  if (_nsdDiscoveryRunning) const SizedBox(height: 10),
-                  if (_connectMode == ConnectMode.manual)
-                    TextField(
-                      controller: _manualHostController,
-                      decoration: InputDecoration(
-                        border: const OutlineInputBorder(),
-                        labelText:
-                            tr('手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
-                        hintText: tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
-                      ),
-                    )
-                  else if (servers.isEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.black12),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            tr(
-                              '自动发现失败，可点击“扫描局域网”或手动输入服务器地址',
-                              'Auto discovery failed. Try "Scan LAN" or enter server address manually.',
-                            ),
-                          ),
-                          if (_discoveryTimedOut)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(
-                                tr('未发现设备，请手动输入',
-                                    'No devices found. Enter host manually.'),
-                                style: const TextStyle(
-                                  color: Colors.black54,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 8),
-                          FilledButton.tonal(
-                            onPressed: (_probeRunning || _nsdDiscoveryRunning)
-                                ? null
-                                : () {
-                                    _startNsdDiscovery();
-                                    _probeSubnetForServers();
-                                  },
-                            child: Text(
-                              (_probeRunning || _nsdDiscoveryRunning)
-                                  ? tr('扫描中...', 'Scanning...')
-                                  : tr('扫描局域网', 'Scan LAN'),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            tr('提示：可切换到“手动地址”输入 IP。',
-                                'Tip: switch to Manual and enter server IP.'),
-                            style: const TextStyle(color: Colors.black54),
-                          ),
-                          ExpansionTile(
-                            tilePadding: EdgeInsets.zero,
-                            title: Text(tr('高级选项', 'Advanced')),
-                            children: [
-                              TextField(
-                                controller: _manualHostController,
-                                decoration: InputDecoration(
-                                  border: const OutlineInputBorder(),
-                                  labelText: tr('手动服务器地址 (IPv4)',
-                                      'Manual server host (IPv4)'),
-                                  hintText: tr(
-                                      '例如 192.168.1.23', 'e.g. 192.168.1.23'),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: FilledButton.tonal(
-                                  onPressed:
-                                      _isConnecting ? null : _connectManual,
-                                  child: Text(tr('手动连接', 'Connect Manual')),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      height: 170,
-                      child: ListView.builder(
-                        itemCount: servers.length,
-                        itemBuilder: (context, index) {
-                          final s = servers[index];
-                          final selected = s.serverId == _selectedServerId;
-                          final isRecent = _isRecentHost(s.host);
-                          return ListTile(
-                            dense: true,
-                            selected: selected,
-                            onTap: () {
-                              setState(() {
-                                _selectedServerId = s.serverId;
-                              });
-                            },
-                            title: Row(
-                              children: [
-                                Expanded(
-                                    child: Text('${s.serverName} (${s.host})')),
-                                if (isRecent)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          Colors.teal.withValues(alpha: 0.16),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      tr('最近连接', 'Recent'),
-                                      style: const TextStyle(
-                                        color: Colors.teal,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            subtitle: Text(
-                              '${s.host}  ws:${s.wsPort}  ping:${s.latencyMs == null ? '-' : '${s.latencyMs}ms'}',
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  if (_connectMode == ConnectMode.discovered &&
-                      servers.isNotEmpty)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: Text(tr('高级选项', 'Advanced')),
-                      children: [
-                        TextField(
-                          controller: _manualHostController,
-                          decoration: InputDecoration(
-                            border: const OutlineInputBorder(),
-                            labelText: tr(
-                                '手动服务器地址 (IPv4)', 'Manual server host (IPv4)'),
-                            hintText:
-                                tr('例如 192.168.1.23', 'e.g. 192.168.1.23'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: _isConnecting
-                              ? null
-                              : () {
-                                  if (_connectMode == ConnectMode.discovered) {
-                                    _connectSelected();
-                                  } else if (_connectMode == ConnectMode.usb) {
-                                    _connectUsb();
-                                  } else {
-                                    _connectManual();
-                                  }
-                                },
-                          child: Text(_connectActionLabel()),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton(
-                        onPressed: (_probeRunning || _nsdDiscoveryRunning)
-                            ? null
-                            : () {
-                                _startNsdDiscovery();
-                                _probeSubnetForServers();
-                              },
-                        child: Text(
-                          (_probeRunning || _nsdDiscoveryRunning)
-                              ? tr('扫描中...', 'Scanning...')
-                              : tr('扫描局域网', 'Scan LAN'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr('播放', 'Playback'),
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  FilledButton(
-                    onPressed: !_wsConnected
-                        ? null
-                        : (_playbackState == PlaybackState.stopped
-                            ? _startPlayback
-                            : _stopPlayback),
                     child: Text(
-                      _playbackState == PlaybackState.stopped
-                          ? tr('开始播放', 'Start Playback')
-                          : tr('停止播放', 'Stop Playback'),
+                      '${_isZh ? '音量' : 'Vol'}: $_androidVolumePct%',
+                      style: const TextStyle(
+                        color: Color(0xFF00D4AA),
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '${tr('当前模式', 'Current mode')}: ${_audioModeLabel(_currentAudioMode)}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  SegmentedButton<AudioModePreference>(
-                    segments: [
-                      ButtonSegment(
-                        value: AudioModePreference.lowLatency,
-                        label: Text(tr('低延迟', 'Low Latency')),
-                      ),
-                      ButtonSegment(
-                        value: AudioModePreference.balanced,
-                        label: Text(tr('平衡', 'Balanced')),
-                      ),
-                      ButtonSegment(
-                        value: AudioModePreference.highQuality,
-                        label: Text(tr('高音质', 'High Quality')),
-                      ),
-                    ],
-                    selected: <AudioModePreference>{_currentAudioMode},
-                    onSelectionChanged: !_wsConnected
-                        ? null
-                        : (selection) {
-                            final mode = selection.first;
-                            _setAudioMode(mode);
-                          },
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _metricTile(tr('状态', 'Status'), _playbackLabel()),
-                      if (_uiUnderrun > 0)
-                        _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  AnimatedOpacity(
-                    opacity: _showJitterGraph ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: JitterGraphWidget(
-                      jitterUs: _jitterHistoryUs,
-                      p50Us: _jitterP50Us,
-                      p95Us: _jitterP95Us,
-                      underrunCount: _jitterUnderrun,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  MicStatusWidget(
-                    service: _micService,
-                    host: _serviceTargetHost,
-                    reversePort: _reverseChannelPort,
-                    enabled: _micEnabled,
-                    onToggle: _toggleMicCapture,
-                  ),
-                  if (_audioLog.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text('${tr('音频日志', 'Audio log')}: $_audioLog'),
-                  ],
-                ],
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          tr('均衡器', 'Equalizer'),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      Switch(
-                        value: _eqEnabled,
-                        onChanged: (value) => _setEq(enabled: value),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      _eqPresetButton(tr('平直', 'Flat'), 'flat'),
-                      _eqPresetButton(tr('低音增强', 'Bass'), 'bass'),
-                      _eqPresetButton(tr('人声清晰', 'Vocal'), 'vocal'),
-                      _eqPresetButton(tr('高频亮丽', 'Bright'), 'bright'),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: Text(
-                      tr('响度归一化', 'Loudness normalization'),
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    subtitle: Text(
-                      tr(
-                        'balanced/high_quality 生效，low_latency 自动旁路',
-                        'Active in balanced/high_quality; bypassed in low_latency',
-                      ),
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                    value: _loudnessNormalizationEnabled,
-                    onChanged: _setLoudnessNormalization,
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _eqSlider(
-                        label: tr('低频\n60Hz', 'Low\n60Hz'),
-                        value: _eqLowDb,
-                        onChanged: (value) => _setEq(lowDb: value),
-                      ),
-                      _eqSlider(
-                        label: tr('中频\n1kHz', 'Mid\n1kHz'),
-                        value: _eqMidDb,
-                        onChanged: (value) => _setEq(midDb: value),
-                      ),
-                      _eqSlider(
-                        label: tr('高频\n10kHz', 'High\n10kHz'),
-                        value: _eqHighDb,
-                        onChanged: (value) => _setEq(highDb: value),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: ExpansionTile(
-              title: Text(tr('连接帮助', 'Connection Help')),
-              subtitle: Text(tr(
-                '发现失败或延迟偏高时先检查这里',
-                'Check this when discovery fails or latency is high',
-              )),
-              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              children: [
-                Text(
-                  tr(
-                    '确保手机和电脑在同一网络；访客网络、AP 隔离或客户端隔离会阻止发现。',
-                    'Keep phone and PC on the same network; guest Wi-Fi, AP isolation, or client isolation can block discovery.',
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  tr(
-                    '如果自动发现失败，请使用“扫描局域网”或手动输入 Windows 端地址。',
-                    'If discovery fails, use Scan LAN or enter the Windows address manually.',
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  tr(
-                    '追求低延迟时优先尝试 USB tethering 或 5GHz Wi-Fi；高音质模式会更稳但延迟更高。',
-                    'For lower latency, prefer USB tethering or 5GHz Wi-Fi; High Quality is smoother but may add latency.',
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  tr(
-                    '若后台后无声或断流，请关闭 Android 电池优化或保持 App 前台播放。',
-                    'If audio stops in background, disable Android battery optimization or keep the app foregrounded.',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          tr('设置', 'Settings'),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          tr('应用更新', 'App update'),
-                          style: const TextStyle(color: Colors.black54),
-                        ),
-                      ],
-                    ),
-                  ),
-                  OutlinedButton(
-                    onPressed: _openPowerSavingGuide,
-                    child: Text(tr('后台播放', 'Background')),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: _updateCheckRunning
-                        ? null
-                        : () => _checkForUpdate(
-                              silentDelayMs: 0,
-                              showNoUpdateHint: true,
-                            ),
-                    child: Text(tr('检查更新', 'Check Update')),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: ExpansionTile(
-              title: Text(tr('调试指标', 'Debug Metrics')),
-              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              children: [
-                Text(
-                  '${tr('协议版本', 'Protocol')}: v${_protocolVersion ?? 1}  ·  '
-                  '${tr('当前模式', 'Mode')}: ${_audioModeLabel(_currentAudioMode)}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${tr('协议路径', 'Protocol path')}: $_protocolPath'
-                  '${_experimentalPath ? ' (${tr('灰度', 'gray')})' : ''}',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Codec: $_effectiveCodec',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-                const SizedBox(height: 4),
-                if (_serverPlatform != null || _serverAppVersion != null)
-                  Text(
-                    '${tr('服务端', 'Server')}: '
-                    '${_serverPlatform ?? 'unknown'}'
-                    '${_serverAppVersion == null ? '' : ' (${_serverAppVersion})'}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                if (_serverPlatform != null || _serverAppVersion != null)
-                  const SizedBox(height: 4),
-                Text(
-                  '${tr('能力协商', 'Capabilities')}: '
-                  '${_negotiatedCapabilities.entries.where((e) => e.value).map((e) => e.key).join(', ')}',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-                const SizedBox(height: 6),
-                _metricTile(tr('采样率', 'Sample rate'), '$_sampleRate'),
-                const SizedBox(height: 4),
-                _metricTile(tr('声道', 'Channels'), '$_channels'),
-                const SizedBox(height: 4),
-                _metricTile(tr('总缓冲', 'Total buffered'), '$_uiBufferedMs ms'),
-                const SizedBox(height: 4),
-                _metricTile(tr('抖动', 'Jitter'), '$_uiJitterBufferedMs ms'),
-                const SizedBox(height: 4),
-                _metricTile(tr('轨道缓冲', 'Track buffered'), '$_uiTrackQueuedMs ms'),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('AudioTrack 延迟', 'AudioTrack latency'),
-                  _uiAudioTrackLatencyMs == null
-                      ? '-'
-                      : '${_uiAudioTrackLatencyMs} ms',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(tr('欠载', 'Underrun'), '$_uiUnderrun'),
-                const SizedBox(height: 4),
-                _metricTile(tr('丢弃', 'Dropped'), '$_uiDropped'),
-                const SizedBox(height: 4),
-                _metricTile(tr('延迟帧', 'Late'), '$_uiLate'),
-                const SizedBox(height: 4),
-                _metricTile(tr('低水位保持', 'Floor holds'), '$_uiFloorHoldCount'),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('P95 抖动', 'P95 jitter'),
-                  _uiJitterP95Ms == null ? '-' : '${_uiJitterP95Ms} ms',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('播放后端', 'Playback backend'),
-                  _playbackBackend,
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('连接来源', 'Connection path'),
-                  _connectionPathLabel(_connectionPath),
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('传输模式', 'Transport mode'),
-                  _transportMode == 'usb' ? 'USB' : 'WiFi',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('当前设备数', 'Connected devices'),
-                  '$_connectedClientCount',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  'TCP RTT',
-                  _tcpRoundTripMs == null
-                      ? '-'
-                      : '${_tcpRoundTripMs} ms / ${_tcpRoundTripMedianMs} ms (med)',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('策略', 'Strategy'),
-                  '${_modeProfile['startBufferMs'] ?? '-'} / ${_modeProfile['maxBufferMs'] ?? '-'} ms',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(
-                  tr('响度增益', 'Loudness gain'),
-                  _playbackState == PlaybackState.playing
-                      ? '${_loudnessGainDb >= 0 ? '+' : ''}${_loudnessGainDb.toStringAsFixed(1)} dB'
-                      : '-',
-                ),
-                const SizedBox(height: 4),
-                _metricTile(tr('UDP 包数', 'UDP packets'), '$_uiUdpPackets'),
-                const SizedBox(height: 4),
-                _metricTile(tr('UDP 字节', 'UDP bytes'), '$_uiUdpBytes'),
-                const SizedBox(height: 4),
-                _metricTile(tr('丢包估计', 'Loss estimate'), '$_uiUdpLoss'),
-                const SizedBox(height: 4),
-                _metricTile(tr('最后序号', 'Last seq'), '${_uiLastSeq ?? '-'}'),
-                const SizedBox(height: 6),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(6),
-                  color: Colors.black,
-                  child: Text(
-                    _wsLog.isEmpty ? '(empty)' : _wsLog,
-                    style: const TextStyle(color: Colors.greenAccent, fontSize: 11),
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
             ),
           ),
         ],
       ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentTabIndex,
+        onTap: (index) => setState(() => _currentTabIndex = index),
+        backgroundColor: AudioConsoleColors.surface,
+        selectedItemColor: AudioConsoleColors.teal,
+        unselectedItemColor: AudioConsoleColors.text2,
+        type: BottomNavigationBarType.fixed,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: '主页',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.equalizer),
+            label: '音频',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: '设置',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomePage(List<DiscoveryServer> servers, List<ModeSelectorItem> modeItems) {
+    return HomePage(
+      isZh: _isZh,
+      consoleState: _consoleState,
+      statusChipLabel: _statusChipLabel(),
+      statusText: _status,
+      isConnecting: _isConnecting,
+      wsConnected: _wsConnected,
+      playbackStopped: _playbackState == PlaybackState.stopped,
+      metricBufferText: _metricBufferText,
+      metricFpsText: _metricFpsText,
+      metricUnderrunText: _metricUnderrunText,
+      underrunCount: _uiUnderrun,
+      modeItems: modeItems,
+      currentModeId: _modeId(_currentAudioMode),
+      modeSelectorEnabled: _modeSelectorEnabled,
+      onModeSelected: (id) => _setAudioMode(_modeFromId(id)),
+      onStopPlayback: _stopPlayback,
+      onRetryConnection: _connectSelected,
+      servers: servers
+          .map((s) => QuickConnectServerData(
+                host: s.host,
+                wsPort: s.wsPort,
+                udpPort: s.udpPort,
+                serverName: s.serverName,
+              ))
+          .toList(),
+      mostRecentHost: _mostRecentHost(),
+      onConnectQuickRecent: _connectQuickRecent,
+      connectHistory: _connectHistory,
+      onConnectHistoryEntry: _connectHistoryEntry,
+      onRemoveHistoryEntry: _removeConnectHistory,
+      onShowHistoryActions: _showHistoryActions,
+    );
+  }
+
+  Widget _buildAudioPage() {
+    return AudioPage(
+      isZh: _isZh,
+      eqEnabled: _eqEnabled,
+      eqLowDb: _eqLowDb,
+      eqMidDb: _eqMidDb,
+      eqHighDb: _eqHighDb,
+      onSetEq: _setEq,
+      onApplyEqPreset: _applyEqPreset,
+      loudnessNormalizationEnabled: _loudnessNormalizationEnabled,
+      onSetLoudnessNormalization: _setLoudnessNormalization,
+      micService: _micService,
+      micEnabled: _micEnabled,
+      serviceTargetHost: _serviceTargetHost,
+      reverseChannelPort: _reverseChannelPort,
+      onToggleMic: _toggleMicCapture,
+      showJitterGraph: _showJitterGraph,
+      jitterHistoryUs: _jitterHistoryUs,
+      jitterP50Us: _jitterP50Us,
+      jitterP95Us: _jitterP95Us,
+      jitterUnderrun: _jitterUnderrun,
+      wsConnected: _wsConnected,
+      playbackLabel: _playbackLabel(),
+      audioLog: _audioLog,
+      onStartPlayback: _startPlayback,
+      onStopPlayback: _stopPlayback,
+      playbackStopped: _playbackState == PlaybackState.stopped,
+      currentModeLabel: _audioModeLabel(_currentAudioMode),
+      underrunCount: _uiUnderrun,
+    );
+  }
+
+  Widget _buildSettingsPage(List<DiscoveryServer> servers) {
+    return SettingsPage(
+      isZh: _isZh,
+      connectMode: _connectMode == ConnectMode.discovered
+          ? 0
+          : _connectMode == ConnectMode.manual
+              ? 1
+              : 2,
+      onConnectModeChanged: (mode) {
+        setState(() {
+          _connectMode = mode == 0
+              ? ConnectMode.discovered
+              : mode == 1
+                  ? ConnectMode.manual
+                  : ConnectMode.usb;
+        });
+      },
+      isConnecting: _isConnecting,
+      probeRunning: _probeRunning,
+      nsdDiscoveryRunning: _nsdDiscoveryRunning,
+      discoveryTimedOut: _discoveryTimedOut,
+      manualHostController: _manualHostController,
+      servers: servers
+          .map((s) => SettingsServerData(
+                serverId: s.serverId,
+                serverName: s.serverName,
+                host: s.host,
+                wsPort: s.wsPort,
+                udpPort: s.udpPort,
+                latencyMs: s.latencyMs,
+              ))
+          .toList(),
+      selectedServerId: _selectedServerId,
+      onServerSelected: (id) {
+        setState(() {
+          _selectedServerId = id;
+        });
+      },
+      isRecentHost: _isRecentHost,
+      onConnectSelected: _connectSelected,
+      onConnectManual: _connectManual,
+      onConnectUsb: _connectUsb,
+      onScanLan: () {
+        _startNsdDiscovery();
+        _probeSubnetForServers();
+      },
+      connectActionLabel: _connectActionLabel(),
+      wsConnected: _wsConnected,
+      onOpenPowerSavingGuide: _openPowerSavingGuide,
+      onCheckUpdate: () => _checkForUpdate(
+        silentDelayMs: 0,
+        showNoUpdateHint: true,
+      ),
+      updateCheckRunning: _updateCheckRunning,
+      protocolVersion: _protocolVersion,
+      currentAudioModeLabel: _audioModeLabel(_currentAudioMode),
+      protocolPath: _protocolPath,
+      experimentalPath: _experimentalPath,
+      effectiveCodec: _effectiveCodec,
+      serverPlatform: _serverPlatform,
+      serverAppVersion: _serverAppVersion,
+      negotiatedCapabilities: _negotiatedCapabilities,
+      sampleRate: _sampleRate,
+      channels: _channels,
+      uiBufferedMs: _uiBufferedMs,
+      uiJitterBufferedMs: _uiJitterBufferedMs,
+      uiTrackQueuedMs: _uiTrackQueuedMs,
+      uiAudioTrackLatencyMs: _uiAudioTrackLatencyMs,
+      uiUnderrun: _uiUnderrun,
+      uiDropped: _uiDropped,
+      uiLate: _uiLate,
+      uiFloorHoldCount: _uiFloorHoldCount,
+      uiJitterP95Ms: _uiJitterP95Ms,
+      playbackBackend: _playbackBackend,
+      connectionPathLabel: _connectionPathLabel(_connectionPath),
+      transportMode: _transportMode,
+      connectedClientCount: _connectedClientCount,
+      tcpRoundTripMs: _tcpRoundTripMs,
+      tcpRoundTripMedianMs: _tcpRoundTripMedianMs,
+      modeProfile: _modeProfile,
+      loudnessGainDb: _loudnessGainDb,
+      isPlaying: _playbackState == PlaybackState.playing,
+      uiUdpPackets: _uiUdpPackets,
+      uiUdpBytes: _uiUdpBytes,
+      uiUdpLoss: _uiUdpLoss,
+      uiLastSeq: _uiLastSeq,
+      wsLog: _wsLog,
     );
   }
 }

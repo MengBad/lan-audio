@@ -468,6 +468,61 @@ fn export_diagnostics_report(state: State<'_, AppState>) -> Result<String, Strin
 }
 
 #[tauri::command]
+fn switch_to_rollback_mode(state: State<'_, AppState>) -> Result<DesktopSnapshot, String> {
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.config.data_plane_format = DataPlaneFormat::LegacyLas1;
+        guard.config.codec_selection = CodecSelection::Pcm16;
+    }
+    let restart_needed = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.running.is_some()
+    };
+    if restart_needed {
+        stop_service_impl(&state, true)?;
+        start_service_impl(&state)?;
+    }
+    Ok(get_desktop_snapshot(state))
+}
+
+#[tauri::command]
+fn restore_recommended_mode(state: State<'_, AppState>) -> Result<DesktopSnapshot, String> {
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.config.data_plane_format = DataPlaneFormat::V2Header;
+        guard.config.codec_selection = CodecSelection::Opus;
+    }
+    let restart_needed = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.running.is_some()
+    };
+    if restart_needed {
+        stop_service_impl(&state, true)?;
+        start_service_impl(&state)?;
+    }
+    Ok(get_desktop_snapshot(state))
+}
+
+#[tauri::command]
+fn export_support_bundle(state: State<'_, AppState>) -> Result<String, String> {
+    export_diagnostics_report(state)
+}
+
+#[tauri::command]
+fn get_connection_qr_svg(state: State<'_, AppState>) -> Result<String, String> {
+    let snapshot = get_desktop_snapshot(state);
+    let uri = format!("lan-audio://{}:{}", snapshot.local_ip, snapshot.ws_port);
+    let code = qrcode::QrCode::new(uri.as_bytes()).map_err(|e| e.to_string())?;
+    let svg = code
+        .render::<qrcode::render::svg::Color<'_>>()
+        .min_dimensions(180, 180)
+        .dark_color(qrcode::render::svg::Color("#e6edf7"))
+        .light_color(qrcode::render::svg::Color("transparent"))
+        .build();
+    Ok(svg)
+}
+
+#[tauri::command]
 fn check_for_updates(state: State<'_, AppState>) {
     spawn_update_check(
         Arc::clone(&state.runtime),
@@ -976,7 +1031,11 @@ pub fn run() {
             list_adb_devices,
             enable_usb_mode,
             disable_usb_mode,
+            switch_to_rollback_mode,
+            restore_recommended_mode,
             export_diagnostics_report,
+            export_support_bundle,
+            get_connection_qr_svg,
             check_for_updates,
             open_release_page
         ])

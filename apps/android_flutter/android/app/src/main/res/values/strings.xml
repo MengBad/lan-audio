@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="mic_permission_rationale">Microphone access is needed to stream your voice to the PC audio system. No audio is recorded or saved.</string>
+    <string name="mic_permission_rationale">需要麦克风权限才能将语音推流到 PC 音响系统。本应用不会录制或保存任何音频。</string>
 </resources>
