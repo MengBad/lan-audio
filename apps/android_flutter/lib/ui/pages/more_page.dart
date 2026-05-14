@@ -306,7 +306,7 @@ class MorePage extends StatelessWidget {
           )
         else
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 200),
+            constraints: const BoxConstraints(maxHeight: 100),
             child: ListView.builder(
               shrinkWrap: true,
               itemCount: servers.length,
@@ -426,26 +426,9 @@ class MorePage extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 6),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _eqSlider(
-              label: tr('低频\n60Hz', 'Low\n60Hz'),
-              value: eqLowDb,
-              onChanged: (value) => onSetEq(lowDb: value),
-            ),
-            _eqSlider(
-              label: tr('中频\n1kHz', 'Mid\n1kHz'),
-              value: eqMidDb,
-              onChanged: (value) => onSetEq(midDb: value),
-            ),
-            _eqSlider(
-              label: tr('高频\n10kHz', 'High\n10kHz'),
-              value: eqHighDb,
-              onChanged: (value) => onSetEq(highDb: value),
-            ),
-          ],
-        ),
+        _eqRow(tr('低频 60Hz', 'Low 60Hz'), eqLowDb, (v) => onSetEq(lowDb: v)),
+        _eqRow(tr('中频 1kHz', 'Mid 1kHz'), eqMidDb, (v) => onSetEq(midDb: v)),
+        _eqRow(tr('高频 10kHz', 'High 10kHz'), eqHighDb, (v) => onSetEq(highDb: v)),
         const SizedBox(height: 20),
         // ─── Section: 麦克风 (Mic) ───
         _sectionHeader(tr('麦克风', 'Microphone')),
@@ -617,33 +600,26 @@ class MorePage extends StatelessWidget {
     );
   }
 
-  Widget _eqSlider({
-    required String label,
-    required int value,
-    required ValueChanged<int> onChanged,
-  }) {
-    return SizedBox(
-      width: 86,
-      height: 190,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  Widget _eqRow(String label, int value, ValueChanged<int> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
         children: [
-          Text(label, textAlign: TextAlign.center),
-          const SizedBox(height: 4),
+          SizedBox(
+            width: 72,
+            child: Text(label, style: const TextStyle(fontSize: 12, color: AudioConsoleColors.text2)),
+          ),
           Text(
-            '${value >= 0 ? '+' : ''}$value dB',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+            '${value >= 0 ? '+' : ''}$value',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, fontFamily: 'monospace'),
           ),
           Expanded(
-            child: RotatedBox(
-              quarterTurns: -1,
-              child: Slider(
-                min: -10,
-                max: 10,
-                divisions: 20,
-                value: value.toDouble(),
-                onChanged: (next) => onChanged(next.round()),
-              ),
+            child: Slider(
+              min: -10,
+              max: 10,
+              divisions: 20,
+              value: value.toDouble(),
+              onChanged: (next) => onChanged(next.round()),
             ),
           ),
         ],
