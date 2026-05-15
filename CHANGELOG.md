@@ -4,6 +4,121 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.10.0] - 2026-05-14
+
+### Added — Hi-Res PCM24 Passthrough (Phase 6)
+
+- **Protocol v3** wire format (`PROTOCOL_VERSION_V3=3`, magic still `LAV2`). Adds `frag_index/total_frags/logical_seq` fields by repurposing the v2 `reserved` slot and appending a 4-byte sequence number. Total v3 header = 37 bytes.
+- **PCM24 codec** (`UdpAudioCodecV2::Pcm24=4`). 24-bit signed integer, big-endian, native-rate (no resampling). Server emits one EncodedFrame per native input frame; transport layer fragments above 1392-byte boundary.
+- **Application-layer fragmentation**. 96 kHz / 5 ms / stereo PCM24 = 2880 B per logical frame, automatically split into 2 v3 packets sharing a logical_seq. Android client reassembles via `LasPacketReassembler` (LRU 8 slots).
+- **`supports_hires_pcm24` capability**. Defaults to `false` — only when both peers advertise true does the server emit v3 + Pcm24 packets. Older peers never see v3 traffic.
+- **PCM24 in `AudioCodecPreference` enum**. Clients can request `preferred_codec: "pcm24"` in `SetAudioMode`. Server downgrades to Opus when adaptive watchdog enters Red tier or when the data plane can't carry the codec.
+
+### Changed
+
+- **Resampler upgrade**. Replaced the Opus path's nearest-neighbor stereo downmix with a polyphase Sinc resampler (`rubato 0.16`, Cubic interpolation, 64-lobe sinc, Blackman-Harris2 window). When Windows mix format is not 48 kHz the prior aliasing distortion disappears. Same-rate fast path is preserved (zero copy + one pass).
+- `CodecSelection::Pcm24` added to `lan_audio_server::config`. CLI accepts `--codec pcm24` / `--codec hires` / `--codec hires_pcm24`.
+- Android `LasPacketParser` extended to parse v3 packets (`protocol_version=3`, header_size=37) alongside v2.
+- Android `OboeAudioTrackController` keeps PCM16 output; PCM24 is downconverted BE→LE i16 in `PlaybackSessionRuntime` (drops the bottom byte). Float-aware Oboe sink remains a future task.
+
+### Notes
+
+- Bandwidth: PCM24 48 kHz/stereo ≈ 2.3 Mbps; PCM24 96 kHz/stereo ≈ 4.6 Mbps. LAN-only feature.
+- UI: the codec picker on the More page now treats PCM 24 as a real selection (not a placeholder). The amber hint reminds users to set Windows mix format to 96 kHz to actually hear the Hi-Res benefit.
+- Tests: 108/108 Rust tests pass (8 domain + 28 protocol + 70 server lib + 1 multi_client + 1 opus_stress); 31/31 Flutter tests pass; gradle assembleDebug succeeds.
+- Rollback: `--codec opus` (server CLI) or selecting Opus in the UI immediately falls back to v2_header + Opus. The legacy `--force-rollback` (`legacy_las1 + pcm16`) path is preserved.
+
+## [1.9.4] - 2026-05-14
+
+### Added
+
+- **Codec picker.** A new "编码器 / Codec" card on the More page lets users pick between Auto / Opus / PCM 16 / PCM 24. PCM 24 is intentionally still selectable but the server falls back to Opus until the Hi-Res passthrough path lands; the card surfaces a hint explaining that.
+- Protocol: `SetAudioMode` and `AudioModeChanged` gained an optional `preferred_codec` / `effective_codec` field. Both default-skip on serialize and back-compat decode (older clients omitting them keep working; older servers ignore them).
+
+### Changed
+
+- `ClientRegistry::set_client_mode` now accepts a `Option<CodecSelection>` so the codec can be swapped at runtime without renegotiating the session. `Opus` requests on `legacy_las1` are downgraded to `Pcm16` server-side.
+- `MorePage` constructor adds `preferredCodec` + `onPreferredCodecChanged` to thread the user's choice through `MainShell`.
+
+### Notes
+
+- Per-client codec change resets `pending_first_packet` so the encode worker rebuilds its encoder bank lazily on the next frame. No glitch is expected, but expect a ~20 ms pause on transition.
+- `effective_codec` is echoed back to the client so the UI can show the resolved codec (independent of what the user requested).
+
+## [1.9.3] - 2026-05-14
+
+### Fixed
+
+- **EQ now actually works on Oboe playback path.** Previously the 3-band equalizer in the Flutter UI (`Low 60Hz / Mid 1kHz / High 10kHz`) was silently ignored on Android 8.1+ devices because `OboeAudioTrackController` had no `setEqSettings` override and inherited the default no-op from `PlaybackAudioSink`. Since Oboe is the default backend on `Build.VERSION.SDK_INT >= O_MR1` (~99% of active devices), the EQ was effectively dead code in production.
+- The `AudioTrackController` (legacy fallback) was unaffected because it overrides `setEqSettings` to drive the platform `android.media.audiofx.Equalizer`.
+
+### Added
+
+- Native 3-band biquad peaking EQ in `oboe_sink.cpp`. RBJ Audio EQ Cookbook formulas, hard-coded to 60 Hz / 1 kHz / 10 kHz at Q=0.7 to match the existing UI labels. PCM samples are processed in-place in chunks of up to 1024 frames before being written into the ring buffer.
+- New JNI binding `nativeSetEqSettings(enabled, lowDb, midDb, highDb)` exposed to Kotlin.
+- `OboeAudioTrackController.setEqSettings` override that calls into the native sink when the stream is open. The Kotlin sink is recreated on every `init`, and the runtime calls `setEqSettings` after `init`, so settings are correctly re-applied across mode switches and reconnects.
+
+### Implementation Notes
+
+- Filter coefficients are read-only on the producer thread. The method-channel thread writes new gains under `eq_state_mutex_` and flips `eq_pending_dirty_`; the producer thread drains the pending update at the start of every `pushPcm` call and rebuilds coefficients in-place. Delay state (z1/z2/y1/y2) stays attached to the producer's filter bank across calls so a small gain change does not introduce a discontinuity.
+- When EQ is disabled, the cascade is bypassed entirely (no per-sample math, no working-buffer copy). Toggling on/off is therefore zero-cost.
+
+## [1.9.2] - 2026-05-14
+
+### Fixed
+
+- Connection list reshuffle: server-side `build_client_list_json` now sorts entries by client UUID before broadcasting, so `client_list` JSON is deterministic across ticks. The desktop / Android UI no longer reorders the device list every time a beacon arrives.
+- Android nearby-device duplicates: the discovery list now dedupes across mDNS / UDP / probe sources by `host:wsPort`, with a priority ranking (`mdns > udp > probe`) so a higher-confidence source displaces a lower-confidence one for the same physical server. Fixes the "two devices" symptom where probe-IP and mDNS UUID both appeared simultaneously.
+- Android list secondary-sort tiebreaker switched from `lastSeen` (volatile, updates every beacon) to `host` (stable). Servers without a recent-connected entry no longer reshuffle on every refresh.
+
+### Added
+
+- Audio quality strip on the Play page: under the latency chart, the app now shows the negotiated codec, sample rate, and channel count (e.g. `Opus · 48 kHz · 立体声`). Hidden until the WebSocket session is established. Pure passive readout — no controls.
+
+### Tests
+
+- Added `client_list_json_is_deterministically_ordered_by_id` to lock in the new server-side sort.
+- 98/98 Rust tests passing (67 server lib + 22 protocol + 8 domain + 1 multi_client + 1 opus_stress).
+
+## [1.9.1] - 2026-05-14
+
+### Changed
+
+- Phase 5 MMCSS: encode pipeline migrated from inline async block to a dedicated `std::thread` (`lan-audio-encode`). The thread registers MMCSS "Audio" on Windows and holds the registration for the worker's lifetime, so the boost is now actually applied.
+- `BroadcastTransport::run` is now a 3-stage pipeline (capture → encode worker → dispatch) communicating via `std::sync::mpsc` (async → worker) and `tokio::sync::mpsc::unbounded` (worker → async).
+- The shared sequence counter is now an `Arc<AtomicU32>` advanced by the worker per encoded packet — the async dispatch no longer needs to predict packet count.
+
+### Added
+
+- `EncodeJob` / `WireFrameOut` / `EncodeResult` types and `spawn_encode_worker` helper in `transport.rs`.
+- Smoke test `encode_worker_emits_one_wire_frame_per_recipient` exercising a real worker thread end-to-end (no test runtime needed).
+
+### Notes
+
+- No protocol change, no CLI change. Pure server-internal refactor.
+- Behaviour is identical on non-Windows hosts (MMCSS registration is a no-op there).
+- Existing `--no-adaptive-runtime` rollback path still works; the encode worker is unconditional because it's now the only encode path.
+
+## [1.9.0] - 2026-05-14
+
+### Added
+
+- Phase 3 client watermark feedback channel: Android client now reports buffer level, ring-buffer depth, silence-fill / underrun deltas, and jitter p95 once per second on the existing WebSocket control channel as `client_watermark`.
+- Phase 4 server-side adaptive runtime: CPU + queue-pressure watchdog ticking at 500 ms decides a Green / Yellow / Red tier and reconfigures live `AudioFrameEncoder`s; Red tier forces PCM16 fallback for predictable CPU cost.
+- Phase 4 metrics: `MetricsSnapshot` now exposes `adaptive_tier`, `adaptive_predicted_cpu_percent`, and `adaptive_queue_ratio`.
+- Server CLI flag `--no-adaptive-runtime` (and `--adaptive-runtime`) to disable / re-enable the watchdog as a rollback path.
+- Protocol crate: new `WatermarkReport` struct + `ClientControlMessage::ClientWatermark` variant; older servers safely ignore the unknown tag.
+
+### Changed
+
+- v1.8.7 already landed Phase 1 (Soft Limiter + Peak-Ahead Guard + 高增益迟滞) and Phase 2 (Android + desktop latency chart). v1.9.0 wires the previously-unwired Phase 3 / 4 modules into the live broadcast hot path.
+- Phase 5 MMCSS module (`thread_priority`) remains kept as a public API but is **not** registered from tokio tasks (registration is unreliable across worker migrations); a follow-up to migrate capture / encode / send to dedicated `std::thread` is tracked.
+
+### Rollback
+
+- Run the server with `--no-adaptive-runtime` to disable Phase 4 (encoder stays at default per-mode bitrate, Phase 3 watermark messages are still ignored gracefully).
+- The legacy `legacy_las1 + pcm16` path is preserved.
+
 ## [1.8.0] - 2026-05-12
 
 ### Added

@@ -17,6 +17,12 @@ pub enum AudioCodecPreference {
     Pcm16,
     #[serde(alias = "opus_experimental")]
     Opus,
+    /// Phase 6 Hi-Res passthrough. 24-bit signed integer PCM. Only
+    /// negotiable when both peers advertise `supports_hires_pcm24`.
+    /// Older peers don't see this variant — serde will reject the
+    /// `pcm24` tag and the negotiation logic falls back to Opus.
+    #[serde(alias = "hires_pcm24")]
+    Pcm24,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]

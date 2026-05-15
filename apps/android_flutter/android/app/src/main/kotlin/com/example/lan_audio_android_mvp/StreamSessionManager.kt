@@ -43,11 +43,33 @@ class StreamSessionManager(
             transportType: String,
         )
         fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String)
-        fun onAudioModeChanged(mode: String, applied: Boolean, reason: String)
+        fun onAudioModeChanged(
+            mode: String,
+            applied: Boolean,
+            reason: String,
+            effectiveCodec: String? = null,
+        )
         fun onClientCountUpdated(count: Int)
         fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int)
         fun onError(code: String, message: String)
+
+        /**
+         * Phase 3: provide the latest playback watermark so it can be sent
+         * up to the server's adaptive sync engine. Default returns null,
+         * which keeps the previous (no-feedback) behaviour for any caller
+         * that has not been migrated yet.
+         */
+        fun provideWatermark(): WatermarkSample? = null
     }
+
+    /** Snapshot of client buffer/jitter state used by Phase 3 reports. */
+    data class WatermarkSample(
+        val jitterBufMs: Int,
+        val ringBufMs: Int,
+        val silenceFillDelta: Int,
+        val underrunDelta: Int,
+        val jitterP95Us: Int,
+    )
 
     private val okHttpClient = OkHttpClient.Builder().build()
     private var webSocket: WebSocket? = null
@@ -104,18 +126,26 @@ class StreamSessionManager(
         wsReady = false
     }
 
-    fun setAudioMode(mode: String, reason: String = "user_request"): Boolean {
+    fun setAudioMode(
+        mode: String,
+        reason: String = "user_request",
+        preferredCodec: String? = null,
+    ): Boolean {
         if (!running || !wsReady) {
             return false
         }
-        val setMode = JSONObject(
-            mapOf(
-                "type" to "set_audio_mode",
-                "mode" to mode,
-                "reason" to reason,
-                "preferred_sample_rate" to preferredSampleRate,
-            ),
+        val payload = mutableMapOf<String, Any>(
+            "type" to "set_audio_mode",
+            "mode" to mode,
+            "reason" to reason,
+            "preferred_sample_rate" to preferredSampleRate,
         )
+        // Phase 7: codec selector. The server accepts `pcm16` / `opus` and
+        // ignores the field if absent — so older servers stay compatible.
+        if (preferredCodec != null) {
+            payload["preferred_codec"] = preferredCodec
+        }
+        val setMode = JSONObject(payload as Map<String, Any?>)
         return webSocket?.send(setMode.toString()) ?: false
     }
 
@@ -262,6 +292,12 @@ class StreamSessionManager(
                                 "supports_stable_audio_track" to true,
                                 "supports_usb_tethering" to true,
                                 "supports_usb_direct_future" to false,
+                                // Phase 6 Hi-Res. We can decode v3 PCM24
+                                // packets via the BE→LE downconversion in
+                                // PlaybackSessionRuntime; we don't need
+                                // the float-aware Oboe path to advertise
+                                // the capability.
+                                "supports_hires_pcm24" to true,
                             ),
                         ),
                     )
@@ -347,10 +383,13 @@ class StreamSessionManager(
                                 val mode = msg.optString("mode", currentAudioMode)
                                 val applied = msg.optBoolean("applied", false)
                                 val reason = msg.optString("reason", "")
+                                val effectiveCodec = msg
+                                    .optString("effective_codec", "")
+                                    .takeIf { it.isNotEmpty() }
                                 if (applied) {
                                     currentAudioMode = mode
                                 }
-                                callback.onAudioModeChanged(mode, applied, reason)
+                                callback.onAudioModeChanged(mode, applied, reason, effectiveCodec)
                                 callback.onLog("v2_audio_mode_changed:$mode")
                             }
                             "client_list" -> {
@@ -433,6 +472,30 @@ class StreamSessionManager(
                     pingSentAt[seq] = System.currentTimeMillis()
                 }
                 webSocket?.send(ping.toString())
+
+                // Phase 3 watermark report — piggybacks on the same ping
+                // cadence to feed the server's Kalman+PID sync engine.
+                try {
+                    val sample = callback.provideWatermark()
+                    if (sample != null) {
+                        val watermark = JSONObject(
+                            mapOf(
+                                "type" to "client_watermark",
+                                "ts_unix_ms" to System.currentTimeMillis(),
+                                "jitter_buf_ms" to sample.jitterBufMs.coerceAtLeast(0),
+                                "ring_buf_ms" to sample.ringBufMs.coerceAtLeast(0),
+                                "silence_fill_delta" to sample.silenceFillDelta.coerceAtLeast(0),
+                                "underrun_delta" to sample.underrunDelta.coerceAtLeast(0),
+                                "jitter_p95_us" to sample.jitterP95Us.coerceAtLeast(0),
+                            ),
+                        )
+                        webSocket?.send(watermark.toString())
+                    }
+                } catch (t: Throwable) {
+                    // Watermark reporting is best-effort — never tear down
+                    // the session because the report failed.
+                    Log.w(logTag, "watermark report failed: ${t.message}")
+                }
             } catch (t: Throwable) {
                 Log.e(logTag, "ws ping failed: ${t.message}")
                 wsReady = false

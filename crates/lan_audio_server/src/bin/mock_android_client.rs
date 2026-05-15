@@ -66,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
             supports_usb_tethering: true,
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
+            supports_hires_pcm24: false,
         },
         preferred_audio_mode: AudioMode::Balanced,
     });
@@ -138,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
                                 UdpAudioCodecV2::Opus => rx_opus += 1,
                                 UdpAudioCodecV2::Pcm16 => rx_pcm16 += 1,
                                 UdpAudioCodecV2::F32 => {}
+                                UdpAudioCodecV2::Pcm24 => {}
                             }
                             if packet.header.flags & UDP_FLAG_V2_CONFIG_CHANGED != 0 {
                                 rx_config_changed += 1;
@@ -181,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::LowLatency,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;
@@ -192,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::HighQuality,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;
@@ -203,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
                             mode: AudioMode::Balanced,
                             reason: "mock_validation".to_string(),
                             preferred_sample_rate: Some(48_000),
+                            preferred_codec: None,
                         }),
                     )?))
                     .await;

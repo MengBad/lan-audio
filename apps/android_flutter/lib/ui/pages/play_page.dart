@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../audio_console_status.dart';
 import '../audio_console_theme.dart';
 import '../widgets/danger_action_button.dart';
+import '../widgets/latency_chart_widget.dart';
 import '../widgets/mode_selector_widget.dart';
 
 class PlayPage extends StatelessWidget {
@@ -25,6 +26,11 @@ class PlayPage extends StatelessWidget {
     required this.onStopPlayback,
     required this.onRetryConnection,
     required this.serverName,
+    required this.currentLatencyMs,
+    required this.baselineLatencyMs,
+    required this.effectiveCodec,
+    required this.sampleRate,
+    required this.channels,
   });
 
   final bool isZh;
@@ -45,6 +51,23 @@ class PlayPage extends StatelessWidget {
   final VoidCallback onRetryConnection;
   final String? serverName;
 
+  /// Live read of the current end-to-end latency (ms). Sampled by the chart.
+  final ValueGetter<double?> currentLatencyMs;
+
+  /// Live read of the pre-optimization baseline latency (ms). Sampled by the
+  /// chart. Returning the same value across frames produces a flat reference
+  /// line.
+  final ValueGetter<double?> baselineLatencyMs;
+
+  /// Negotiated codec on the wire (`opus` / `pcm16` / etc).
+  final String effectiveCodec;
+
+  /// Negotiated sample rate (Hz). Reads `_sampleRate` from `MainShell`.
+  final int sampleRate;
+
+  /// Negotiated channel count. Reads `_channels` from `MainShell`.
+  final int channels;
+
   String tr(String zh, String en) => isZh ? zh : en;
 
   @override
@@ -56,7 +79,7 @@ class PlayPage extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       child: Column(
         children: [
-          const Spacer(flex: 2),
+          const Spacer(flex: 1),
           // Large animated status orb
           AnimatedContainer(
             duration: AudioConsoleMotion.orbPulse,
@@ -154,9 +177,99 @@ class PlayPage extends StatelessWidget {
             style: AudioConsoleType.monoMeta(),
             textAlign: TextAlign.center,
           ),
-          const Spacer(flex: 3),
+          const SizedBox(height: 14),
+          // Latency comparison chart (Phase 2 visualization)
+          LatencyChartWidget(
+            currentLatencyMs: currentLatencyMs,
+            baselineLatencyMs: baselineLatencyMs,
+            isZh: isZh,
+          ),
+          const SizedBox(height: 8),
+          // Audio quality strip — codec / sample rate / channels.
+          // Hidden when no session has been negotiated yet.
+          if (wsConnected)
+            _AudioQualityStrip(
+              codec: effectiveCodec,
+              sampleRate: sampleRate,
+              channels: channels,
+              isZh: isZh,
+            ),
+          const Spacer(flex: 2),
         ],
       ),
+    );
+  }
+}
+
+/// Compact "now playing" audio-quality strip rendered just below the latency
+/// chart. Shows the negotiated codec, sample rate, and channel count in the
+/// Audio Console Dark style. Designed to feel like an Apple-Music-esque
+/// passive readout — no controls, no taps.
+class _AudioQualityStrip extends StatelessWidget {
+  const _AudioQualityStrip({
+    required this.codec,
+    required this.sampleRate,
+    required this.channels,
+    required this.isZh,
+  });
+
+  final String codec;
+  final int sampleRate;
+  final int channels;
+  final bool isZh;
+
+  String tr(String zh, String en) => isZh ? zh : en;
+
+  String _codecLabel() {
+    switch (codec.toLowerCase()) {
+      case 'opus':
+        return 'Opus';
+      case 'pcm16':
+        return 'PCM 16';
+      case 'f32':
+        return 'PCM Float';
+      default:
+        return codec.toUpperCase();
+    }
+  }
+
+  String _sampleRateLabel() {
+    if (sampleRate >= 1000) {
+      final khz = sampleRate / 1000.0;
+      // Drop trailing .0 for whole-kHz rates (48000 -> "48 kHz").
+      if (khz == khz.truncateToDouble()) {
+        return '${khz.toInt()} kHz';
+      }
+      return '${khz.toStringAsFixed(1)} kHz';
+    }
+    return '$sampleRate Hz';
+  }
+
+  String _channelsLabel() {
+    switch (channels) {
+      case 1:
+        return tr('单声道', 'Mono');
+      case 2:
+        return tr('立体声', 'Stereo');
+      default:
+        return tr('$channels 声道', '$channels ch');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final monoStyle = AudioConsoleType.monoMeta();
+    final dotStyle = monoStyle.copyWith(color: AudioConsoleColors.text2);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(_codecLabel(), style: monoStyle),
+        Text(' · ', style: dotStyle),
+        Text(_sampleRateLabel(), style: monoStyle),
+        Text(' · ', style: dotStyle),
+        Text(_channelsLabel(), style: monoStyle),
+      ],
     );
   }
 }

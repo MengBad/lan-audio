@@ -4,6 +4,30 @@
 
 # Protocol v2 Draft
 
+## Release Update (`v1.10.0`)
+
+- **Protocol v3 引入（用于 Hi-Res 直通）**。`PROTOCOL_VERSION_V3=3`，magic 仍是 `LAV2`。Wire layout 与 v2 头部前 31 字节兼容，把原 `reserved` u16 改用为 `frag_index_u8 | total_frags_u8`，再追加 `logical_seq u32`。v3 头总长 37 字节。
+- **新 codec：`Pcm24=4`**。24-bit signed integer，big-endian，立体声 interleaved，**不重采样**——`UdpAudioHeaderV3.sample_rate` 字段携带原生采样率。仅在 v3 数据面下使用。
+- **应用层分片**：96 kHz / 5 ms / stereo PCM24 = 2880 B 单帧，超过常见 LAN MTU。每个分片 ≤ 1392 B（6-byte 对齐避免 sample 跨片）。同一 logical_seq 的所有分片在客户端 `LasPacketReassembler` 重组后再交给解码器。
+- **新能力位 `supports_hires_pcm24`**。默认 `false`；只有当客户端和服务端都声明 `true` 时，服务端才发送 v3 + Pcm24 包。旧客户端永远不会收到 v3 包，向后兼容。
+- **`SetAudioMode.preferred_codec` / `AudioModeChanged.effective_codec` 增加 `pcm24` 变体**。客户端可在运行时申请 PCM24；服务端按数据面能力降级（legacy_las1 → pcm16；force_rollback → opus；watchdog Red → opus）。
+- **重采样器升级**：Opus 路径从 nearest-neighbor 切换到 rubato 的 Sinc 插值（Cubic + 64 lobes + Blackman-Harris2 窗）。当 Windows mix format 不是 48 kHz 时，旧版本的混叠失真现象消失。
+- 主路径保持不变：`windows_loopback + v2_header + opus`。回滚路径 `legacy_las1 + pcm16` 完整保留。
+
+## Release Update (`v1.9.0`)
+
+- 新增可选客户端控制消息 `client_watermark`（`ClientControlMessage::ClientWatermark`），用于驱动服务端 Phase 3 Kalman+PID 同步引擎。
+- 该消息通过既有的 WebSocket 控制通道发送，频率与现有 `client_ping` 一致（默认 1 Hz），字段如下（全部 unsigned）：
+  - `ts_unix_ms`：客户端时间戳
+  - `jitter_buf_ms`：抖动缓冲区当前水位
+  - `ring_buf_ms`：AudioTrack/Oboe ring buffer 队列长度
+  - `silence_fill_delta`：自上次报告以来由 sink 补齐的 silence 帧增量
+  - `underrun_delta`：自上次报告以来 sink 出现的 underrun 增量
+  - `jitter_p95_us`：客户端最近窗口内的网络包到达抖动 p95（微秒）
+- 兼容性：旧服务端因 `serde(tag = "type")` 反序列化失败会安静忽略未知 tag，不影响主路径流量。
+- 新增 `--no-adaptive-runtime` 服务端 CLI 开关，关闭 Phase 4 watchdog 与 Phase 5 wiring，作为本次特性发布的回滚路径。
+- 主路径未变，仍为 `windows_loopback + v2_header + opus`；`legacy_las1 + pcm16` 回滚路径保留。
+
 ## Release Update (`2026-04-24`)
 
 - `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.

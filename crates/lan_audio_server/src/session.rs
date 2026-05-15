@@ -5,10 +5,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use futures_util::{SinkExt, StreamExt};
 use lan_audio_protocol::{
-    audio_mode_profile, AudioMode, AudioModeChanged, ClientControlMessage, ClientInfo,
-    ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState, ConnectionStateMachine,
-    ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck, ProtocolCapabilities,
-    ServerControlMessage, ServerInfo, SetAudioMode, TransportType, PROTOCOL_VERSION_V2,
+    audio_mode_profile, AudioCodecPreference, AudioMode, AudioModeChanged, ClientControlMessage,
+    ClientInfo, ClientJoined, ClientLeft, ClientList, ClientListEntry, ConnectionState,
+    ConnectionStateMachine, ControlMessageV2, ErrorMessage, FailureCode, Hello, HelloAck,
+    ProtocolCapabilities, ServerControlMessage, ServerInfo, SetAudioMode, TransportType,
+    PROTOCOL_VERSION_V2,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -35,10 +36,20 @@ pub struct SessionServer {
     current_audio_mode: Arc<std::sync::Mutex<AudioMode>>,
 }
 
+/// Phase 3 watermark slot. Cloneable across the WS handler (writer), the
+/// watchdog task (reader/drain), and the test mocks. Single-slot
+/// "last-writer-wins" semantics keep contention low.
+pub type WatermarkSlot = Arc<std::sync::Mutex<Option<lan_audio_protocol::WatermarkReport>>>;
+
 #[derive(Clone)]
 pub struct ClientRegistry {
     inner: Arc<Mutex<ClientRegistryInner>>,
     metrics: Arc<Metrics>,
+    /// Phase 3 watermark feed. The TCP control handler stores the latest
+    /// per-client observation here; the adaptive watchdog drains it on
+    /// every tick. Using a single-slot std Mutex (cheap, lock-free reads on
+    /// the watchdog thread are not a goal — drains happen at ~2 Hz).
+    latest_watermark: WatermarkSlot,
 }
 
 struct ClientRegistryInner {
@@ -209,14 +220,14 @@ impl SessionServer {
             } => {
                 let client_key = format!("legacy-{}-{}", client_name, peer.ip());
                 (
-                client_name,
-                client_key,
-                udp_port,
-                desired_sample_rate,
-                channels,
-                false,
-                legacy_client_capabilities(),
-                self.cfg.current_audio_mode,
+                    client_name,
+                    client_key,
+                    udp_port,
+                    desired_sample_rate,
+                    channels,
+                    false,
+                    legacy_client_capabilities(),
+                    self.cfg.current_audio_mode,
                 )
             }
             SessionHello::V2(hello) => {
@@ -414,27 +425,62 @@ impl SessionServer {
                                 continue;
                             }
 
+                            // Phase 3: client buffer-level reports feed the
+                            // adaptive sync engine. We accept the message
+                            // even on legacy v1 sessions — the variant is
+                            // additive over the existing JSON tag space.
+                            if let Ok(ClientControlMessage::ClientWatermark(report)) =
+                                serde_json::from_str::<ClientControlMessage>(&text)
+                            {
+                                self.registry.note_client_watermark(report);
+                                continue;
+                            }
+
                             if v2_session {
                                 match serde_json::from_str::<ControlMessageV2>(&text) {
-                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate })) => {
+                                    Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate, preferred_codec })) => {
                                         let normalized_preferred_sample_rate =
                                             preferred_sample_rate.map(normalize_preferred_sample_rate);
+                                        // Phase 7: translate the wire enum to the
+                                        // server's internal CodecSelection. Phase 6
+                                        // adds Pcm24 for the Hi-Res passthrough path.
+                                        // The server's data-plane gating
+                                        // (set_client_mode) downgrades to Pcm16 if
+                                        // legacy_las1 is in effect.
+                                        let codec_request = preferred_codec.map(|p| match p {
+                                            AudioCodecPreference::Opus => CodecSelection::Opus,
+                                            AudioCodecPreference::Pcm16 => CodecSelection::Pcm16,
+                                            AudioCodecPreference::Pcm24 => CodecSelection::Pcm24,
+                                        });
                                         self.set_current_audio_mode(mode);
                                         self.registry
-                                            .set_client_mode(session_id, mode, normalized_preferred_sample_rate)
+                                            .set_client_mode(
+                                                session_id,
+                                                mode,
+                                                normalized_preferred_sample_rate,
+                                                codec_request,
+                                            )
                                             .await;
+                                        let resolved_codec = self
+                                            .registry
+                                            .client_codec(session_id)
+                                            .await
+                                            .map(|c| c.as_protocol_preference());
                                         let _ = control_tx.send(serde_json::to_string(&ControlMessageV2::AudioModeChanged(
                                             AudioModeChanged {
                                                 mode,
                                                 applied: true,
                                                 reason,
                                                 mode_profile: audio_mode_profile(mode),
+                                                effective_codec: resolved_codec,
                                             }
                                         ))?);
                                         info!(
                                             session = %session_id,
                                             mode = ?mode,
                                             preferred_sample_rate = normalized_preferred_sample_rate.unwrap_or(preferred_sample_rate_default()),
+                                            requested_codec = ?codec_request,
+                                            resolved_codec = ?resolved_codec,
                                             "audio mode updated by client"
                                         );
                                     }
@@ -494,11 +540,44 @@ impl ClientRegistry {
                 pending_usb_streams: VecDeque::new(),
             })),
             metrics,
+            latest_watermark: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Phase 3: store the most recently received watermark observation. The
+    /// adaptive watchdog drains this on every tick. We keep a single-slot
+    /// "last writer wins" semantic — the engine cares about freshness, not
+    /// history.
+    pub fn note_client_watermark(&self, report: lan_audio_protocol::WatermarkReport) {
+        if let Ok(mut guard) = self.latest_watermark.lock() {
+            *guard = Some(report);
+        }
+    }
+
+    /// Phase 3: drain the latest watermark observation if any. Returns
+    /// `None` if no new report has arrived since the previous drain.
+    pub fn take_latest_watermark(&self) -> Option<lan_audio_protocol::WatermarkReport> {
+        self.latest_watermark.lock().ok().and_then(|mut g| g.take())
+    }
+
+    /// Phase 3: hand out a clone of the watermark slot so the transport
+    /// layer's watchdog task can drain reports without holding a registry
+    /// reference.
+    pub fn watermark_slot(&self) -> WatermarkSlot {
+        Arc::clone(&self.latest_watermark)
     }
 
     pub async fn client_count(&self) -> usize {
         self.inner.lock().await.clients.len()
+    }
+
+    /// Phase 7: read back the currently-active codec for a given session.
+    /// Used by the WS handler so the `audio_mode_changed` reply can echo
+    /// the resolved codec to the client (independent of what the client
+    /// asked for, since we may have downgraded for capability reasons).
+    pub async fn client_codec(&self, client_id: Uuid) -> Option<CodecSelection> {
+        let guard = self.inner.lock().await;
+        guard.clients.get(&client_id).map(|c| c.codec)
     }
 
     async fn register_client(&self, request: RegisterClientRequest) -> anyhow::Result<()> {
@@ -520,9 +599,7 @@ impl ClientRegistry {
                 let existing_usb_id = guard
                     .clients
                     .values()
-                    .find(|client| {
-                        matches!(client.transport, Some(ClientTransportTarget::Usb(_)))
-                    })
+                    .find(|client| matches!(client.transport, Some(ClientTransportTarget::Usb(_))))
                     .map(|client| client.id);
                 if let Some(existing_usb_id) = existing_usb_id {
                     replaced = remove_client_locked(&mut guard, existing_usb_id);
@@ -552,7 +629,10 @@ impl ClientRegistry {
             if guard.clients.len() >= MAX_CLIENTS {
                 return Err(anyhow!("too_many_clients"));
             }
-            if !guard.clients.is_empty() && replaced.is_none() && !check_multi_client_allowed_with_guard(&guard) {
+            if !guard.clients.is_empty()
+                && replaced.is_none()
+                && !check_multi_client_allowed_with_guard(&guard)
+            {
                 return Err(anyhow!("multi_client_upgrade_required"));
             }
 
@@ -581,7 +661,9 @@ impl ClientRegistry {
                         client.transport = Some(ClientTransportTarget::Usb(stream));
                     } else {
                         info!(serial, client = %client.name, "usb client waiting for forwarded tcp data stream");
-                        guard.pending_usb_clients.push_back((client.id, Instant::now()));
+                        guard
+                            .pending_usb_clients
+                            .push_back((client.id, Instant::now()));
                     }
                 }
             }
@@ -640,6 +722,7 @@ impl ClientRegistry {
         client_id: Uuid,
         mode: AudioMode,
         preferred_sample_rate: Option<u32>,
+        preferred_codec: Option<CodecSelection>,
     ) {
         let mut broadcasts: Vec<(mpsc::UnboundedSender<String>, String)> = Vec::new();
         {
@@ -650,6 +733,36 @@ impl ClientRegistry {
             client.audio_mode = mode;
             if let Some(sample_rate) = preferred_sample_rate {
                 client.preferred_sample_rate = sample_rate;
+            }
+            // Phase 7: codec swap. We only honour requests for codecs the
+            // server's currently negotiated data plane can actually carry.
+            // Specifically `Opus` requires `v2_header`; on `legacy_las1`
+            // we silently keep whatever is currently active (typically
+            // `Pcm16`).
+            if let Some(requested) = preferred_codec {
+                let allowed = match (requested, client.data_plane) {
+                    (CodecSelection::Opus, DataPlaneFormat::V2Header) => Some(CodecSelection::Opus),
+                    (CodecSelection::Opus, DataPlaneFormat::LegacyLas1) => {
+                        Some(CodecSelection::Pcm16)
+                    }
+                    (CodecSelection::Pcm16, _) => Some(CodecSelection::Pcm16),
+                    // Phase 6 Hi-Res. PCM24 only on v2_header (which
+                    // carries v3 packets when codec=Pcm24); legacy_las1
+                    // can't carry the new codec field, fall back to Pcm16.
+                    (CodecSelection::Pcm24, DataPlaneFormat::V2Header) => {
+                        Some(CodecSelection::Pcm24)
+                    }
+                    (CodecSelection::Pcm24, DataPlaneFormat::LegacyLas1) => {
+                        Some(CodecSelection::Pcm16)
+                    }
+                };
+                if let Some(resolved) = allowed {
+                    client.codec = resolved;
+                    // Encoders are keyed by (codec, mode, rate) so a codec
+                    // swap will naturally cause a new encoder to be lazily
+                    // created in the worker on the next frame.
+                    client.pending_first_packet = true;
+                }
             }
             client.pending_mode_sync = true;
             let Some(json) = build_client_list_json(&guard.clients) else {
@@ -721,8 +834,14 @@ impl ClientRegistry {
         if !prefers_usb_transport {
             return None;
         }
-        if !guard.pending_usb_clients.iter().any(|(id, _)| *id == client_id) {
-            guard.pending_usb_clients.push_back((client_id, Instant::now()));
+        if !guard
+            .pending_usb_clients
+            .iter()
+            .any(|(id, _)| *id == client_id)
+        {
+            guard
+                .pending_usb_clients
+                .push_back((client_id, Instant::now()));
         }
         Some(name)
     }
@@ -788,10 +907,17 @@ fn normalize_preferred_sample_rate(sample_rate: u32) -> u32 {
 }
 
 fn build_client_list_json(clients: &HashMap<Uuid, ClientHandle>) -> Option<String> {
+    // Sort by client UUID so the broadcast order is deterministic across
+    // calls. Without this the HashMap iteration order changes every tick
+    // and the desktop / Android UI keeps reshuffling the device list.
+    let mut entries: Vec<&ClientHandle> = clients
+        .values()
+        .filter(|client| client.supports_v2_events)
+        .collect();
+    entries.sort_by_key(|client| client.id);
     let list = ControlMessageV2::ClientList(ClientList {
-        clients: clients
-            .values()
-            .filter(|client| client.supports_v2_events)
+        clients: entries
+            .into_iter()
             .map(|client| ClientListEntry {
                 id: client.id,
                 name: client.name.clone(),
@@ -879,6 +1005,7 @@ fn legacy_client_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: false,
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }
 
@@ -939,6 +1066,7 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
+        supports_hires_pcm24: false,
     }
 }
 
@@ -1203,5 +1331,109 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn watermark_slot_round_trips_latest_observation() {
+        let metrics = Metrics::new_shared();
+        let registry = ClientRegistry::new(metrics);
+
+        // No reports yet — drain returns None.
+        assert!(registry.take_latest_watermark().is_none());
+
+        let report = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 1_700_000_000_500,
+            jitter_buf_ms: 95,
+            ring_buf_ms: 30,
+            silence_fill_delta: 2,
+            underrun_delta: 0,
+            jitter_p95_us: 1_800,
+        };
+        registry.note_client_watermark(report);
+
+        let drained = registry
+            .take_latest_watermark()
+            .expect("watermark must be present after note");
+        assert_eq!(drained.jitter_buf_ms, 95);
+        assert_eq!(drained.ring_buf_ms, 30);
+        assert_eq!(drained.silence_fill_delta, 2);
+        assert_eq!(drained.jitter_p95_us, 1_800);
+
+        // Drain consumes the slot — second drain returns None.
+        assert!(registry.take_latest_watermark().is_none());
+    }
+
+    #[test]
+    fn watermark_slot_uses_last_writer_wins_semantics() {
+        let metrics = Metrics::new_shared();
+        let registry = ClientRegistry::new(metrics);
+
+        let first = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 1_000,
+            jitter_buf_ms: 50,
+            ring_buf_ms: 20,
+            silence_fill_delta: 0,
+            underrun_delta: 0,
+            jitter_p95_us: 1_000,
+        };
+        let second = lan_audio_protocol::WatermarkReport {
+            ts_unix_ms: 2_000,
+            jitter_buf_ms: 100,
+            ring_buf_ms: 40,
+            silence_fill_delta: 1,
+            underrun_delta: 1,
+            jitter_p95_us: 2_000,
+        };
+        registry.note_client_watermark(first);
+        registry.note_client_watermark(second);
+
+        let drained = registry
+            .take_latest_watermark()
+            .expect("watermark must be present");
+        assert_eq!(drained.ts_unix_ms, 2_000, "last writer must win");
+        assert_eq!(drained.jitter_buf_ms, 100);
+    }
+
+    /// Build a small `clients` map with two v2 sessions and verify that
+    /// `build_client_list_json` emits them sorted by client UUID. Without
+    /// the explicit sort, the broadcast order would track HashMap iteration
+    /// order and the desktop / Android UI kept reshuffling the device list.
+    #[test]
+    fn client_list_json_is_deterministically_ordered_by_id() {
+        use mpsc::unbounded_channel;
+        // Pick two UUIDs whose ordering is unambiguous so the test is not
+        // flaky.
+        let a_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let b_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+
+        let (tx_a, _rx_a) = unbounded_channel::<String>();
+        let (tx_b, _rx_b) = unbounded_channel::<String>();
+        let make_handle = |id: Uuid, name: &str, tx: mpsc::UnboundedSender<String>| ClientHandle {
+            id,
+            name: name.to_string(),
+            client_key: name.to_string(),
+            control_tx: tx,
+            transport: None,
+            prefers_usb_transport: false,
+            data_plane: DataPlaneFormat::V2Header,
+            codec: CodecSelection::Opus,
+            audio_mode: AudioMode::Balanced,
+            preferred_sample_rate: 48_000,
+            pending_first_packet: true,
+            pending_mode_sync: false,
+            supports_v2_events: true,
+        };
+
+        let mut clients: HashMap<Uuid, ClientHandle> = HashMap::new();
+        // Insert in reverse-id order to make sure HashMap order can't
+        // accidentally match the desired sort.
+        clients.insert(b_id, make_handle(b_id, "device-b", tx_b));
+        clients.insert(a_id, make_handle(a_id, "device-a", tx_a));
+
+        let json = build_client_list_json(&clients).expect("client list json");
+        // device-a (lower UUID) must appear before device-b (higher UUID).
+        let pos_a = json.find("device-a").expect("device-a in payload");
+        let pos_b = json.find("device-b").expect("device-b in payload");
+        assert!(pos_a < pos_b, "list must be sorted by id, got: {}", json);
     }
 }

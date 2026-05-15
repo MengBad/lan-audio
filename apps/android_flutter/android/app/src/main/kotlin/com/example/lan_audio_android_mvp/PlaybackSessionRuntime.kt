@@ -30,6 +30,7 @@ class PlaybackSessionRuntime(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var playbackSink: PlaybackAudioSink = createPlaybackSink()
     private val opusDecoder = OpusFrameDecoder()
+    private val pcmReassembler = LasPacketReassembler()
     private val controlExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
@@ -99,6 +100,12 @@ class PlaybackSessionRuntime(
     private var lastDiagnosedSilenceFillCount: Int = 0
     private var lastDiagnosedSinkSilenceFillCount: Int = 0
     private var lastDiagnosedOboeUnderrunCount: Int = 0
+
+    // Phase 3: track last-reported watermark counters so we can emit
+    // monotonic deltas to the server's adaptive sync engine without
+    // double-counting events the server already saw.
+    private var lastReportedSinkSilenceFillCount: Int = 0
+    private var lastReportedOboeUnderrunCount: Int = 0
     private var balancedQueueBelowFillTarget: Boolean = false
     @Volatile
     private var highQualityPrefillActive = false
@@ -184,6 +191,8 @@ class PlaybackSessionRuntime(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
+        lastReportedSinkSilenceFillCount = 0
+        lastReportedOboeUnderrunCount = 0
         balancedQueueBelowFillTarget = false
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L
@@ -333,7 +342,12 @@ class PlaybackSessionRuntime(
                 }
             }
 
-            override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
+            override fun onAudioModeChanged(
+                mode: String,
+                applied: Boolean,
+                reason: String,
+                effectiveCodec: String?,
+            ) {
                 if (generation != streamGeneration) return
                 if (applied) {
                     applyAudioModeProfile(mode, reason)
@@ -342,6 +356,11 @@ class PlaybackSessionRuntime(
                     it.copy(
                         currentAudioMode = PlaybackModeProfiles.normalize(mode),
                         modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
+                        // Phase 6: surface the resolved codec the server
+                        // actually applied so the UI can show the
+                        // negotiated value (e.g. "Pcm24 requested → Opus
+                        // applied" when the server downgrades).
+                        effectiveCodec = effectiveCodec ?: it.effectiveCodec,
                         recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                     )
                 }
@@ -371,6 +390,16 @@ class PlaybackSessionRuntime(
                 Log.e(logTag, "stream error code=$code message=$message")
                 publishError(code, message)
                 scheduleReconnect(code)
+            }
+
+            override fun provideWatermark(): StreamSessionManager.WatermarkSample? {
+                if (generation != streamGeneration) return null
+                return try {
+                    buildWatermarkSample()
+                } catch (t: Throwable) {
+                    Log.w(logTag, "buildWatermarkSample failed: ${t.message}")
+                    null
+                }
             }
         })
         streamManager?.start()
@@ -440,10 +469,14 @@ class PlaybackSessionRuntime(
         }
     }
 
-    fun setAudioMode(mode: String, reason: String = "user_selected") {
+    fun setAudioMode(
+        mode: String,
+        reason: String = "user_selected",
+        preferredCodec: String? = null,
+    ) {
         val normalized = PlaybackModeProfiles.normalize(mode)
         val hasActiveStream = streamManager != null
-        val sent = streamManager?.setAudioMode(normalized, reason) ?: false
+        val sent = streamManager?.setAudioMode(normalized, reason, preferredCodec) ?: false
         if (!hasActiveStream || !sent) {
             applyAudioModeProfile(
                 normalized,
@@ -545,7 +578,13 @@ class PlaybackSessionRuntime(
         }, 10L, 10L, TimeUnit.MILLISECONDS)
     }
 
-    private fun handleUdpPacket(packet: LasPacket) {
+    private fun handleUdpPacket(wirePacket: LasPacket) {
+        // Phase 6: feed all packets through the v3 reassembler so PCM24
+        // multi-frag logical frames get rebuilt before the rest of the
+        // pipeline sees them. Non-fragmented packets pass through
+        // unchanged. Returns null while a partial logical_seq is still
+        // accumulating frags.
+        val packet = pcmReassembler.feed(wirePacket) ?: return
         rxWindowFrames += 1
         val currentSeq = packet.sequence
         rxLastSeqWindow = currentSeq
@@ -579,6 +618,7 @@ class PlaybackSessionRuntime(
             discontinuityCount += 1
             jitterBuffer.clear()
             opusDecoder.release()
+            pcmReassembler.reset()
             lastSeq = null
             stateStore.update { it.copy(recentLog = "udp_discontinuity_reset") }
         }
@@ -589,6 +629,7 @@ class PlaybackSessionRuntime(
             lastSeq = null
             resetPlayoutScheduleAfterModeSwitch()
             opusDecoder.release()
+            pcmReassembler.reset()
             if (options.resetBufferOnSwitch) {
                 withPlaybackSinkLock {
                     playbackSink.stop()
@@ -703,6 +744,32 @@ class PlaybackSessionRuntime(
     fun getJitterHistorySnapshot(): List<Int> = computeJitterHistory()
     fun getJitterP50Us(): Int = computeJitterP50()
 
+    /**
+     * Phase 3: build a watermark sample for the server's adaptive sync
+     * engine. Counters are emitted as deltas since the previous report so
+     * the server can compute rates. Caller is responsible for invoking this
+     * on the same thread as playback state mutates (the ping loop runs on a
+     * scheduled executor — a transient stale read is acceptable for control
+     * feedback).
+     */
+    fun buildWatermarkSample(): StreamSessionManager.WatermarkSample {
+        val jitterBufMs = jitterBuffer.bufferedMs()
+        val ringBufMs = stateStore.current().metrics.audioTrackQueuedMs
+        val sinkSilence = sinkSilenceFillTotal
+        val underrun = oboeUnderrunCount
+        val silenceDelta = (sinkSilence - lastReportedSinkSilenceFillCount).coerceAtLeast(0)
+        val underrunDelta = (underrun - lastReportedOboeUnderrunCount).coerceAtLeast(0)
+        lastReportedSinkSilenceFillCount = sinkSilence
+        lastReportedOboeUnderrunCount = underrun
+        return StreamSessionManager.WatermarkSample(
+            jitterBufMs = jitterBufMs.coerceAtLeast(0),
+            ringBufMs = ringBufMs.coerceAtLeast(0),
+            silenceFillDelta = silenceDelta,
+            underrunDelta = underrunDelta,
+            jitterP95Us = computeJitterP95Us().coerceAtLeast(0),
+        )
+    }
+
     private fun decodePacketForPlayback(packet: LasPacket): DecodeResult {
         return when (packet.codec) {
             LasPacket.CODEC_PCM16 -> DecodeResult(packet, 0f)
@@ -722,11 +789,55 @@ class PlaybackSessionRuntime(
                     DecodeResult(null, 0f)
                 }
             }
+            LasPacket.CODEC_PCM24 -> {
+                // Phase 6: convert big-endian 24-bit signed integer
+                // samples to little-endian PCM16 for the existing sink
+                // pipeline. We lose the bottom 8 bits per sample on the
+                // way through Oboe (which still runs in I16 mode); the
+                // top 16 bits are the audible component anyway, so the
+                // sound is correct even if it's not bit-perfect 24-bit.
+                // Once the Oboe sink is migrated to float (future task)
+                // we can preserve the full 24-bit range.
+                val t0 = System.nanoTime()
+                val pcm16 = pcm24BeToPcm16Le(packet.payload)
+                val decodeMs = (System.nanoTime() - t0) / 1_000_000f
+                DecodeResult(packet.copy(payload = pcm16, codec = LasPacket.CODEC_PCM16), decodeMs)
+            }
             else -> {
                 publishError("unsupported_codec", "unsupported codec=${packet.codec}")
                 DecodeResult(null, 0f)
             }
         }
+    }
+
+    /// Phase 6 PCM24 BE → PCM16 LE downconversion. Each input sample is
+    /// 3 bytes big-endian signed; we rebuild it as a 32-bit signed int
+    /// (sign-extending from bit 23), then truncate to the upper 16 bits
+    /// and emit little-endian.
+    private fun pcm24BeToPcm16Le(input: ByteArray): ByteArray {
+        if (input.size % 3 != 0) {
+            return ByteArray(0)
+        }
+        val sampleCount = input.size / 3
+        val out = ByteArray(sampleCount * 2)
+        var ip = 0
+        var op = 0
+        while (ip + 2 < input.size) {
+            // BE 3-byte signed: sign-extend the top byte.
+            val b0 = input[ip].toInt()       // signed top byte
+            val b1 = input[ip + 1].toInt() and 0xFF
+            val b2 = input[ip + 2].toInt() and 0xFF
+            // Compose 24-bit signed int into 32-bit container.
+            val s24 = (b0 shl 16) or (b1 shl 8) or b2
+            // Truncate to top 16 bits (drops the bottom byte). Values
+            // are kept in the i16 range by construction.
+            val s16 = s24 shr 8
+            out[op] = (s16 and 0xFF).toByte()
+            out[op + 1] = ((s16 shr 8) and 0xFF).toByte()
+            ip += 3
+            op += 2
+        }
+        return out
     }
 
     private fun maybeLogDecodeAndRxSummary(nowMs: Long) {
@@ -1167,7 +1278,12 @@ class PlaybackSessionRuntime(
                     }
                 }
 
-                override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
+                override fun onAudioModeChanged(
+                    mode: String,
+                    applied: Boolean,
+                    reason: String,
+                    effectiveCodec: String?,
+                ) {
                     if (generation != streamGeneration) return
                     if (applied) {
                         applyAudioModeProfile(mode, reason)
@@ -1176,6 +1292,7 @@ class PlaybackSessionRuntime(
                         it.copy(
                             currentAudioMode = PlaybackModeProfiles.normalize(mode),
                             modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
+                            effectiveCodec = effectiveCodec ?: it.effectiveCodec,
                             recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                         )
                     }
@@ -1204,6 +1321,16 @@ class PlaybackSessionRuntime(
                     if (generation != streamGeneration) return
                     publishError(code, message)
                     scheduleReconnect(code)
+                }
+
+                override fun provideWatermark(): StreamSessionManager.WatermarkSample? {
+                    if (generation != streamGeneration) return null
+                    return try {
+                        buildWatermarkSample()
+                    } catch (t: Throwable) {
+                        Log.w(logTag, "buildWatermarkSample failed: ${t.message}")
+                        null
+                    }
                 }
             })
             streamManager?.start()
@@ -1260,6 +1387,8 @@ class PlaybackSessionRuntime(
         lastDiagnosedSilenceFillCount = 0
         lastDiagnosedSinkSilenceFillCount = 0
         lastDiagnosedOboeUnderrunCount = 0
+        lastReportedSinkSilenceFillCount = 0
+        lastReportedOboeUnderrunCount = 0
         balancedQueueBelowFillTarget = false
         highQualityPrefillActive = false
         highQualityPrefillDeadlineMs = 0L

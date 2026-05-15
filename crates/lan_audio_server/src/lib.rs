@@ -1,10 +1,15 @@
-﻿pub mod audio_capture;
+﻿pub mod adaptive_runtime;
+pub mod audio_capture;
 pub mod config;
+pub mod cpu_sampler;
 pub mod data_plane;
 pub mod discovery;
 pub mod metrics;
 pub mod reverse_channel;
 pub mod service;
 pub mod session;
+pub mod sync_engine;
+pub mod thread_priority;
 pub mod transport;
 pub mod usb_transport;
+pub mod watchdog;

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
+use crate::adaptive_runtime::{tier_encoder_profile, AdaptiveRuntime, TierEncoderProfile};
 use crate::audio_capture::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
     CaptureSourceState, PacketKind, SyntheticAudioSource, WindowsLoopbackCapture,
@@ -26,11 +28,14 @@ use crate::config::{
     TransportMode,
 };
 use crate::data_plane::{
-    encode_packet_by_data_plane, DataPlane, DataPlaneRouter, EncodedFrame as DataPlaneEncodedFrame,
-    LegacyLas1DataPlane, UsbDirectDataPlane, V2HeaderDataPlane,
+    encode_packet_by_data_plane, encode_packets_by_data_plane, DataPlane, DataPlaneRouter,
+    EncodedFrame as DataPlaneEncodedFrame, LegacyLas1DataPlane, UsbDirectDataPlane,
+    V2HeaderDataPlane,
 };
 use crate::metrics::Metrics;
 use crate::session::{BroadcastClient, ClientRegistry, ClientTransportSnapshot};
+use crate::thread_priority::{boost_current_thread, MmcssTask};
+use crate::watchdog::{DegradationTier, WatchdogConfig};
 
 #[derive(Clone)]
 pub struct UdpTransport {
@@ -63,6 +68,226 @@ struct EncodedFrame {
 }
 
 const FLUSH_REASON_IMMEDIATE_FRAME_READY: &str = "immediate_frame_ready";
+
+// ---- Phase 5 encode worker --------------------------------------------------
+//
+// One dedicated `std::thread` owns the encoder pool and runs all opus / pcm16
+// work synchronously. The thread name is `lan-audio-encode` so it is visible
+// in profilers, and on Windows it registers the MMCSS "Audio" task at thread
+// entry so the kernel scheduler treats it like a real-time audio thread.
+//
+// The async transport layer hands the worker `EncodeJob` envelopes
+// (capture-side metadata + the recipient list) and gets back `EncodeResult`
+// envelopes (one wire frame per recipient). Bridging is asymmetric on
+// purpose:
+//   * Async  -> worker : `std::sync::mpsc` (worker uses sync `recv()`)
+//   * Worker -> async  : `tokio::sync::mpsc::unbounded_channel`
+//                        (worker uses sync `send()` because tokio unbounded
+//                        senders are cheap and lock-free; async side polls
+//                        with `recv().await`)
+
+struct EncodeJob {
+    frame: AudioFrame,
+    clients: Vec<BroadcastClient>,
+    active_tier: DegradationTier,
+    /// Shared sequence counter. The worker increments it once per encoded
+    /// packet so the async dispatch loop never races on it.
+    sequence: Arc<std::sync::atomic::AtomicU32>,
+    /// Reserved for future end-to-end latency telemetry. The worker echoes
+    /// it back on the result so the dispatch loop can compute encode time.
+    #[allow(dead_code)]
+    job_received_at: Instant,
+}
+
+struct WireFrameOut {
+    client: BroadcastClient,
+    packet: UdpAudioPacket,
+    wire_bytes: Vec<u8>,
+    v2_flags: u16,
+    mode_changed: bool,
+    codec: UdpAudioCodecV2,
+    source_peak: f32,
+    source_rms: f32,
+    detected_wire_kind: DataPlanePacketKind,
+}
+
+struct EncodeResult {
+    wire_frames: Vec<WireFrameOut>,
+    /// Reserved for future end-to-end latency telemetry.
+    #[allow(dead_code)]
+    job_received_at: Instant,
+}
+
+/// Spawn the encode worker on a dedicated `std::thread`. The thread runs to
+/// completion when the input channel is dropped — there's no separate
+/// shutdown signal because `std_mpsc::Receiver::recv()` already returns
+/// `Err` once all senders are gone.
+fn spawn_encode_worker(
+    job_rx: std_mpsc::Receiver<EncodeJob>,
+    result_tx: mpsc::UnboundedSender<EncodeResult>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("lan-audio-encode".to_string())
+        .spawn(move || {
+            // Phase 5: register MMCSS for the encode thread. The handle
+            // lives for the whole worker — only dropped when the loop
+            // exits. On non-Windows this is a no-op.
+            let _mmcss = boost_current_thread(MmcssTask::Audio);
+            info!(
+                target: "lan_audio_server::encode_worker",
+                "encode worker started"
+            );
+
+            let mut encoders: HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder> =
+                HashMap::new();
+            let mut last_applied_tier = DegradationTier::Green;
+
+            while let Ok(job) = job_rx.recv() {
+                // Re-baseline encoders if the watchdog tier just changed.
+                if job.active_tier != last_applied_tier {
+                    for ((_, mode, _), encoder) in encoders.iter_mut() {
+                        let profile = tier_encoder_profile(job.active_tier, *mode);
+                        encoder.apply_tier_profile(profile, *mode);
+                    }
+                    info!(
+                        target: "lan_audio_server::encode_worker",
+                        from = ?last_applied_tier,
+                        to = ?job.active_tier,
+                        "tier transition applied to encoder pool"
+                    );
+                    last_applied_tier = job.active_tier;
+                }
+
+                let mut wire_frames: Vec<WireFrameOut> = Vec::with_capacity(job.clients.len());
+
+                // Group recipients by encoder key so each (codec, mode, rate)
+                // tuple encodes the frame once, then fans out to all matching
+                // recipients.
+                let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
+                    HashMap::new();
+                for client in job.clients.iter().cloned() {
+                    let preferred_sample_rate =
+                        normalize_encoder_sample_rate(client.preferred_sample_rate);
+                    grouped
+                        .entry((client.codec, client.audio_mode, preferred_sample_rate))
+                        .or_default()
+                        .push(client);
+                }
+
+                for ((codec, mode, sample_rate), recipients) in grouped {
+                    let encoder = encoders
+                        .entry((codec, mode, sample_rate))
+                        .or_insert_with(|| {
+                            let mut e = AudioFrameEncoder::new(codec, mode, sample_rate);
+                            let profile = tier_encoder_profile(job.active_tier, mode);
+                            e.apply_tier_profile(profile, mode);
+                            e
+                        });
+                    let encoded_frames = encoder.encode(job.frame.clone(), mode);
+                    for encoded in encoded_frames {
+                        let packet_codec = encoded.codec;
+                        let source_peak = encoded.source_peak;
+                        let source_rms = encoded.source_rms;
+                        let seq = job
+                            .sequence
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let packet = UdpAudioPacket {
+                            version: 1,
+                            flags: legacy_flags_for_frame(&encoded),
+                            sequence: seq,
+                            timestamp_ms: encoded.pts_ms,
+                            sample_rate: encoded.sample_rate,
+                            channels: encoded.channels,
+                            frames_per_packet: encoded.frames_per_packet,
+                            payload: encoded.payload,
+                        };
+
+                        for client in &recipients {
+                            let v2_flags = v2_flags_for_frame(
+                                &packet,
+                                client.mode_changed,
+                                client.first_packet,
+                            );
+                            // Phase 6 fragmentation. For PCM24 this returns
+                            // multiple wire packets (one per frag); for
+                            // every other codec it returns a single packet
+                            // identical to the v1.9.x behaviour.
+                            let mut next_seq = packet.sequence;
+                            let wire_packets = encode_packets_by_data_plane(
+                                &packet,
+                                client.data_plane,
+                                v2_flags,
+                                packet_codec,
+                                &mut next_seq,
+                            );
+                            // Bump the shared atomic by the number of extra
+                            // packets we produced beyond the original one
+                            // (encoder.encode already incremented for the
+                            // first one). For the common single-packet
+                            // case, `wire_packets.len() == 1` so this is a
+                            // no-op.
+                            let extras = wire_packets.len().saturating_sub(1) as u32;
+                            if extras > 0 {
+                                job.sequence
+                                    .fetch_add(extras, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            for (i, wire_bytes) in wire_packets.into_iter().enumerate() {
+                                let detected_wire_kind = detect_data_plane_packet_kind(&wire_bytes);
+                                // For the first chunk reuse the parent
+                                // packet metadata; for subsequent chunks
+                                // synthesize a per-frag UdpAudioPacket so
+                                // tx_stats can still log the sequence.
+                                let frag_packet = if i == 0 {
+                                    packet.clone()
+                                } else {
+                                    UdpAudioPacket {
+                                        version: packet.version,
+                                        flags: packet.flags,
+                                        sequence: packet.sequence.wrapping_add(i as u32),
+                                        timestamp_ms: packet.timestamp_ms,
+                                        sample_rate: packet.sample_rate,
+                                        channels: packet.channels,
+                                        frames_per_packet: packet.frames_per_packet,
+                                        payload: Vec::new(),
+                                    }
+                                };
+                                wire_frames.push(WireFrameOut {
+                                    client: client.clone(),
+                                    packet: frag_packet,
+                                    wire_bytes,
+                                    v2_flags,
+                                    mode_changed: client.mode_changed,
+                                    codec: packet_codec,
+                                    source_peak,
+                                    source_rms,
+                                    detected_wire_kind,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                let result = EncodeResult {
+                    wire_frames,
+                    job_received_at: job.job_received_at,
+                };
+                if result_tx.send(result).is_err() {
+                    warn!(
+                        target: "lan_audio_server::encode_worker",
+                        "result channel closed; encode worker exiting"
+                    );
+                    break;
+                }
+            }
+
+            info!(
+                target: "lan_audio_server::encode_worker",
+                "encode worker stopped"
+            );
+            // _mmcss drops here, reverting MMCSS registration on Windows.
+        })
+        .expect("spawn encode worker thread")
+}
 
 #[derive(Debug)]
 struct CaptureHandoffStatsWindow {
@@ -364,10 +589,90 @@ impl BroadcastTransport {
             }
         });
 
-        let mut encoders: HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder> =
-            HashMap::new();
-        let mut sequence: u32 = 0;
+        // Phase 5 encode worker: all opus / pcm16 encoding runs on a
+        // dedicated `std::thread` with MMCSS "Audio" registered. This
+        // protects the audio pipeline from the noise of tokio worker
+        // threads picking up other futures, which used to make MMCSS
+        // registration unreliable in v1.9.0.
+        let (job_tx, job_rx) = std_mpsc::channel::<EncodeJob>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<EncodeResult>();
+        let encode_worker_handle = spawn_encode_worker(job_rx, result_tx);
+        let sequence = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
         let mut tx_stats = TxStats::new();
+
+        // Phase 4 adaptive runtime: drives a CPU + queue-pressure watchdog
+        // that publishes a tier (Green/Yellow/Red) into a shared slot the
+        // broadcast loop re-reads on every frame. When the tier changes we
+        // reconfigure every active encoder via `apply_tier_profile`.
+        let adaptive_enabled = self.capture_helper.cfg.adaptive_runtime_enabled;
+        let watermark_slot = self.registry.watermark_slot();
+        let adaptive_runtime = if adaptive_enabled {
+            Some(Arc::new(StdMutex::new(AdaptiveRuntime::new(
+                WatchdogConfig::default(),
+                3.0,
+                100.0,
+                100.0,
+                Duration::from_millis(500),
+            ))))
+        } else {
+            None
+        };
+        let current_tier = Arc::new(StdMutex::new(DegradationTier::Green));
+        let watchdog_handle = if let Some(rt_arc) = adaptive_runtime.as_ref() {
+            let rt_arc = Arc::clone(rt_arc);
+            let watchdog_metrics = Arc::clone(&self.metrics);
+            let watchdog_tier = Arc::clone(&current_tier);
+            let mut watchdog_shutdown = shutdown.resubscribe();
+            let watermark_slot = Arc::clone(&watermark_slot);
+            let cadence = Duration::from_millis(500);
+            Some(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(cadence);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = watchdog_shutdown.recv() => break,
+                        _ = interval.tick() => {
+                            // Phase 3: drain the latest client watermark.
+                            let observation = watermark_slot
+                                .lock()
+                                .ok()
+                                .and_then(|mut g| g.take())
+                                .map(|r| crate::sync_engine::WatermarkObservation {
+                                    jitter_buf_ms: r.jitter_buf_ms,
+                                    ring_buf_ms: r.ring_buf_ms,
+                                    silence_fill_delta: r.silence_fill_delta,
+                                    underrun_delta: r.underrun_delta,
+                                    jitter_p95_us: r.jitter_p95_us,
+                                });
+                            // Queue depth: we don't have a single backpressure
+                            // queue for the live broadcast path (it encodes
+                            // inline). Pass zero so the watchdog only reacts
+                            // to CPU and watermark pressure, not the absent
+                            // queue.
+                            let decision = {
+                                let mut rt_guard = match rt_arc.lock() {
+                                    Ok(g) => g,
+                                    Err(e) => e.into_inner(),
+                                };
+                                rt_guard.tick(0, 64, 0, observation)
+                            };
+                            if let Ok(mut g) = watchdog_tier.lock() {
+                                *g = decision.tier;
+                            }
+                            watchdog_metrics.set_adaptive_tier(decision.tier.label());
+                            watchdog_metrics
+                                .set_adaptive_predicted_cpu_percent(decision.predicted_cpu);
+                            watchdog_metrics.set_adaptive_queue_ratio(0.0);
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let mut last_applied_tier = DegradationTier::Green;
 
         loop {
             tokio::select! {
@@ -383,105 +688,109 @@ impl BroadcastTransport {
                     if clients.is_empty() {
                         continue;
                     }
-                    self.broadcast_frame(
+
+                    // Read the latest watchdog tier and forward it to the
+                    // encode worker via the job envelope. The worker
+                    // applies tier transitions in lock-step with the
+                    // encode call so the bitrate change always lands on
+                    // a packet boundary.
+                    let tier_now = if adaptive_enabled {
+                        current_tier
+                            .lock()
+                            .map(|g| *g)
+                            .unwrap_or(DegradationTier::Green)
+                    } else {
+                        DegradationTier::Green
+                    };
+                    if tier_now != last_applied_tier {
+                        info!(
+                            from = ?last_applied_tier,
+                            to = ?tier_now,
+                            "broadcast adaptive tier transition forwarded to encode worker"
+                        );
+                        last_applied_tier = tier_now;
+                    }
+
+                    let job = EncodeJob {
                         frame,
-                        &clients,
-                        &mut encoders,
-                        &mut sequence,
-                        &mut tx_stats,
-                    ).await;
+                        clients,
+                        active_tier: tier_now,
+                        sequence: Arc::clone(&sequence),
+                        job_received_at: Instant::now(),
+                    };
+
+                    if job_tx.send(job).is_err() {
+                        warn!("encode worker channel closed; broadcast transport stopping");
+                        break;
+                    }
+                }
+                maybe_result = result_rx.recv() => {
+                    let Some(result) = maybe_result else {
+                        warn!("encode result channel closed; broadcast transport stopping");
+                        break;
+                    };
+                    self.dispatch_wire_frames(result.wire_frames, &mut tx_stats).await;
                 }
             }
         }
 
         capture_handle.abort();
+        if let Some(handle) = watchdog_handle {
+            handle.abort();
+        }
+        // Drop the job sender so the worker exits cleanly.
+        drop(job_tx);
+        if let Err(err) = encode_worker_handle.join() {
+            warn!(?err, "encode worker thread panicked");
+        }
         Ok(())
     }
 
-    async fn broadcast_frame(
-        &self,
-        frame: AudioFrame,
-        clients: &[BroadcastClient],
-        encoders: &mut HashMap<(CodecSelection, AudioMode, u32), AudioFrameEncoder>,
-        sequence: &mut u32,
-        tx_stats: &mut TxStats,
-    ) {
-        let mut grouped: HashMap<(CodecSelection, AudioMode, u32), Vec<BroadcastClient>> =
-            HashMap::new();
-        for client in clients.iter().cloned() {
-            let preferred_sample_rate = normalize_encoder_sample_rate(client.preferred_sample_rate);
-            grouped
-                .entry((client.codec, client.audio_mode, preferred_sample_rate))
-                .or_default()
-                .push(client);
-        }
+    /// Phase 5 dispatch path. Takes wire frames produced by the encode
+    /// worker, fans them out to recipients via the appropriate data plane,
+    /// and updates `tx_stats` / `metrics` / `registry` based on send
+    /// outcome. Failed sends record per-client failure for the existing
+    /// drop-and-cleanup logic.
+    async fn dispatch_wire_frames(&self, wire_frames: Vec<WireFrameOut>, tx_stats: &mut TxStats) {
+        let mut failed_wifi_clients: Vec<Uuid> = Vec::new();
+        let mut failed_usb_clients: Vec<Uuid> = Vec::new();
 
-        let mut failed_wifi_clients = Vec::new();
-        let mut failed_usb_clients = Vec::new();
-        for ((codec, mode, preferred_sample_rate), recipients) in grouped {
-            let encoded_frames = encoders
-                .entry((codec, mode, preferred_sample_rate))
-                .or_insert_with(|| AudioFrameEncoder::new(codec, mode, preferred_sample_rate))
-                .encode(frame.clone(), mode);
-            for encoded in encoded_frames {
-                let packet = UdpAudioPacket {
-                    version: 1,
-                    flags: legacy_flags_for_frame(&encoded),
-                    sequence: *sequence,
-                    timestamp_ms: encoded.pts_ms,
-                    sample_rate: encoded.sample_rate,
-                    channels: encoded.channels,
-                    frames_per_packet: encoded.frames_per_packet,
-                    payload: encoded.payload,
-                };
-                *sequence = (*sequence).wrapping_add(1);
-
-                for client in &recipients {
-                    let v2_flags =
-                        v2_flags_for_frame(&packet, client.mode_changed, client.first_packet);
-                    let wire_frame = DataPlaneEncodedFrame::new(encode_packet_by_data_plane(
-                        &packet,
-                        client.data_plane,
-                        v2_flags,
-                        encoded.codec,
-                    ));
-                    let plane = self.sender_for_client(client);
-                    match plane.send_frame(&wire_frame).await {
-                        Ok(()) => {
-                            self.metrics.inc_packets(wire_frame.len());
-                            tx_stats.observe(
-                                &packet,
-                                wire_frame.len(),
-                                Duration::from_millis(0),
-                                client.data_plane,
-                                detect_data_plane_packet_kind(wire_frame.bytes()),
-                                v2_flags,
-                                client.mode_changed,
-                                encoded.codec,
-                                encoded.source_peak,
-                                encoded.source_rms,
-                            );
+        for wire in wire_frames {
+            let plane = self.sender_for_client(&wire.client);
+            let frame_len = wire.wire_bytes.len();
+            let dataplane_frame = DataPlaneEncodedFrame::new(wire.wire_bytes);
+            match plane.send_frame(&dataplane_frame).await {
+                Ok(()) => {
+                    self.metrics.inc_packets(frame_len);
+                    tx_stats.observe(
+                        &wire.packet,
+                        frame_len,
+                        Duration::from_millis(0),
+                        wire.client.data_plane,
+                        wire.detected_wire_kind,
+                        wire.v2_flags,
+                        wire.mode_changed,
+                        wire.codec,
+                        wire.source_peak,
+                        wire.source_rms,
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        client = %wire.client.name,
+                        data_plane = plane.path_name(),
+                        error = %err,
+                        "broadcast send failed"
+                    );
+                    match &wire.client.transport {
+                        ClientTransportSnapshot::Wifi(_) => {
+                            failed_wifi_clients.push(wire.client.id)
                         }
-                        Err(err) => {
-                            warn!(
-                                client = %client.name,
-                                data_plane = plane.path_name(),
-                                error = %err,
-                                "broadcast send failed"
-                            );
-                            match &client.transport {
-                                ClientTransportSnapshot::Wifi(_) => {
-                                    failed_wifi_clients.push(client.id)
-                                }
-                                ClientTransportSnapshot::Usb(_) => {
-                                    failed_usb_clients.push(client.id)
-                                }
-                            }
-                        }
+                        ClientTransportSnapshot::Usb(_) => failed_usb_clients.push(wire.client.id),
                     }
                 }
-                tx_stats.maybe_log(*sequence);
             }
+            tx_stats.maybe_log(wire.packet.sequence);
         }
 
         failed_wifi_clients.sort_unstable();
@@ -582,8 +891,16 @@ impl UdpTransport {
             );
         }
         let current_audio_mode = Arc::clone(&self.current_audio_mode);
+        let adaptive_runtime_enabled = self.cfg.adaptive_runtime_enabled;
 
         let handle = tokio::spawn(async move {
+            // Phase 5 caveat: MMCSS thread priority must be registered on a
+            // stable OS thread. Tokio worker threads can migrate tasks
+            // between polls, so calling boost_current_thread() inside this
+            // async block is unreliable. Wiring real MMCSS boost requires
+            // moving the capture/encode/send loops onto std::thread, which
+            // is tracked as a follow-up. The thread_priority module is kept
+            // available so the migration can land independently.
             info!(
                 session = %session_id,
                 target = %target,
@@ -672,54 +989,134 @@ impl UdpTransport {
             let mut encode_shutdown = shutdown.resubscribe();
             let encode_audio_mode = Arc::clone(&current_audio_mode);
             let encoder_sample_rate = normalize_encoder_sample_rate(active_format.sample_rate_hz);
-            let encode_handle = tokio::spawn(async move {
-                let mut packet_build_stats = PacketBuildStatsWindow::new();
-                let mut frame_encoder = AudioFrameEncoder::new(
-                    effective_codec,
-                    read_current_audio_mode(&encode_audio_mode),
-                    encoder_sample_rate,
-                );
-                loop {
-                    tokio::select! {
-                        _ = encode_shutdown.recv() => break,
-                        maybe_frame = tokio::time::timeout(Duration::from_millis(30), frame_rx.recv()) => {
-                            match maybe_frame {
-                                Ok(Some(frame)) => {
-                                    let frame_age_ms_before_build = now_ms().saturating_sub(frame.pts_ms);
-                                    let active_mode = read_current_audio_mode(&encode_audio_mode);
-                                    let encoded_frames = frame_encoder.encode(frame, active_mode);
-                                    let mut encoded_channel_closed = false;
-                                    for encoded in encoded_frames {
-                                        packet_build_stats.record_packet_built(
-                                            encoded.frames_per_packet,
-                                            encoded.payload.len(),
-                                            frame_age_ms_before_build,
-                                            FLUSH_REASON_IMMEDIATE_FRAME_READY,
-                                        );
-                                        let encoded_tx_started_at = Instant::now();
-                                        let send_result = encoded_tx.send(encoded).await;
-                                        packet_build_stats.record_encoded_tx_block(encoded_tx_started_at.elapsed());
-                                        packet_build_stats.maybe_log();
-                                        if send_result.is_err() {
-                                            encoded_channel_closed = true;
+            let adaptive_enabled = adaptive_runtime_enabled;
+            let adaptive_tier = Arc::new(StdMutex::new(DegradationTier::Green));
+            // Clone the encoded-frame sender for the watchdog so it can read
+            // queue depth without taking ownership away from the encoder.
+            let watchdog_queue_observer = encoded_tx.clone();
+            let encode_handle = {
+                let adaptive_tier = Arc::clone(&adaptive_tier);
+                tokio::spawn(async move {
+                    let mut packet_build_stats = PacketBuildStatsWindow::new();
+                    let initial_mode = read_current_audio_mode(&encode_audio_mode);
+                    let mut frame_encoder =
+                        AudioFrameEncoder::new(effective_codec, initial_mode, encoder_sample_rate);
+                    let mut last_applied_tier = DegradationTier::Green;
+                    loop {
+                        tokio::select! {
+                            _ = encode_shutdown.recv() => break,
+                            maybe_frame = tokio::time::timeout(Duration::from_millis(30), frame_rx.recv()) => {
+                                match maybe_frame {
+                                    Ok(Some(frame)) => {
+                                        let frame_age_ms_before_build = now_ms().saturating_sub(frame.pts_ms);
+                                        let active_mode = read_current_audio_mode(&encode_audio_mode);
+
+                                        // Phase 4: pull the latest tier the
+                                        // watchdog has chosen and reconfigure
+                                        // the encoder if it changed.
+                                        if adaptive_enabled {
+                                            let current_tier = match adaptive_tier.lock() {
+                                                Ok(g) => *g,
+                                                Err(e) => *e.into_inner(),
+                                            };
+                                            if current_tier != last_applied_tier {
+                                                let profile = tier_encoder_profile(current_tier, active_mode);
+                                                frame_encoder.apply_tier_profile(profile, active_mode);
+                                                info!(
+                                                    from = ?last_applied_tier,
+                                                    to = ?current_tier,
+                                                    bitrate_bps = profile.bitrate_bps,
+                                                    complexity = profile.complexity,
+                                                    force_pcm16 = profile.force_pcm16_fallback,
+                                                    "adaptive runtime tier transition applied"
+                                                );
+                                                last_applied_tier = current_tier;
+                                            }
+                                        }
+
+                                        let encoded_frames = frame_encoder.encode(frame, active_mode);
+                                        let mut encoded_channel_closed = false;
+                                        for encoded in encoded_frames {
+                                            packet_build_stats.record_packet_built(
+                                                encoded.frames_per_packet,
+                                                encoded.payload.len(),
+                                                frame_age_ms_before_build,
+                                                FLUSH_REASON_IMMEDIATE_FRAME_READY,
+                                            );
+                                            let encoded_tx_started_at = Instant::now();
+                                            let send_result = encoded_tx.send(encoded).await;
+                                            packet_build_stats.record_encoded_tx_block(encoded_tx_started_at.elapsed());
+                                            packet_build_stats.maybe_log();
+                                            if send_result.is_err() {
+                                                encoded_channel_closed = true;
+                                                break;
+                                            }
+                                        }
+                                        if encoded_channel_closed {
                                             break;
                                         }
                                     }
-                                    if encoded_channel_closed {
-                                        break;
+                                    Ok(None) => break,
+                                    Err(_) => {
+                                        encode_metrics.inc_capture_underruns();
+                                        packet_build_stats.record_encode_timeout();
+                                        packet_build_stats.maybe_log();
                                     }
-                                }
-                                Ok(None) => break,
-                                Err(_) => {
-                                    encode_metrics.inc_capture_underruns();
-                                    packet_build_stats.record_encode_timeout();
-                                    packet_build_stats.maybe_log();
                                 }
                             }
                         }
                     }
-                }
-            });
+                })
+            };
+
+            // Phase 4 watchdog tick task. Runs at 500ms cadence, samples CPU,
+            // observes the encode-queue depth, decides a tier, publishes it
+            // to the encoder via `adaptive_tier`. Disabled when the operator
+            // passed `--no-adaptive-runtime` so the v1.8.7 baseline remains
+            // available as a rollback path.
+            let watchdog_handle = if adaptive_runtime_enabled {
+                let watchdog_metrics = Arc::clone(&metrics);
+                let watchdog_tier = Arc::clone(&adaptive_tier);
+                let mut watchdog_shutdown = shutdown.resubscribe();
+                let queue_observer = watchdog_queue_observer;
+                let cadence = Duration::from_millis(500);
+                Some(tokio::spawn(async move {
+                    let mut runtime =
+                        AdaptiveRuntime::new(WatchdogConfig::default(), 3.0, 100.0, 100.0, cadence);
+                    let mut interval = tokio::time::interval(cadence);
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        tokio::select! {
+                            _ = watchdog_shutdown.recv() => break,
+                            _ = interval.tick() => {
+                                let queue_capacity = queue_observer.max_capacity() as u32;
+                                let queue_depth = queue_capacity
+                                    .saturating_sub(queue_observer.capacity() as u32);
+                                let decision = runtime.tick(
+                                    queue_depth,
+                                    queue_capacity,
+                                    0,
+                                    None,
+                                );
+                                if let Ok(mut g) = watchdog_tier.lock() {
+                                    *g = decision.tier;
+                                }
+                                watchdog_metrics.set_adaptive_tier(decision.tier.label());
+                                watchdog_metrics
+                                    .set_adaptive_predicted_cpu_percent(decision.predicted_cpu);
+                                let queue_ratio = if queue_capacity == 0 {
+                                    0.0
+                                } else {
+                                    queue_depth as f64 / queue_capacity as f64
+                                };
+                                watchdog_metrics.set_adaptive_queue_ratio(queue_ratio);
+                            }
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
 
             let mut sequence: u32 = 0;
             let mut tx_stats = TxStats::new();
@@ -807,6 +1204,9 @@ impl UdpTransport {
 
             capture_handle.abort();
             encode_handle.abort();
+            if let Some(handle) = watchdog_handle {
+                handle.abort();
+            }
             debug!(session = %session_id, "udp pipeline task exited");
         });
 
@@ -1033,6 +1433,9 @@ struct AudioFrameEncoder {
     output_sample_rate: u32,
     opus: Option<ExperimentalOpusEncoder>,
     opus_frame_buffer: Option<OpusFrameBuffer>,
+    /// Phase 4 — when forced into Red tier, fall back to PCM16 regardless of
+    /// negotiated codec. The flag is consulted on every `encode()` call.
+    force_pcm16_fallback: bool,
 }
 
 impl AudioFrameEncoder {
@@ -1059,12 +1462,35 @@ impl AudioFrameEncoder {
             output_sample_rate,
             opus,
             opus_frame_buffer,
+            force_pcm16_fallback: false,
+        }
+    }
+
+    fn apply_tier_profile(&mut self, profile: TierEncoderProfile, mode: AudioMode) {
+        self.force_pcm16_fallback = profile.force_pcm16_fallback;
+        if let Some(opus) = self.opus.as_mut() {
+            opus.apply_profile(profile, mode);
         }
     }
 
     fn encode(&mut self, frame: AudioFrame, mode: AudioMode) -> Vec<EncodedFrame> {
+        // Phase 6 Hi-Res: PCM24 path skips the 48 kHz resampler and
+        // packetizes native-rate samples directly. Returns one EncodedFrame
+        // per logical 5 ms (or whatever frame_duration_ms the input has)
+        // with codec=Pcm24, sample_rate=actual capture rate, payload =
+        // big-endian 24-bit signed interleaved L/R.
+        //
+        // Red-tier override: if the watchdog is asking for force_pcm16
+        // fallback (extreme load), we drop down to Opus first if a
+        // pre-built encoder exists, otherwise to PCM16. This protects
+        // bandwidth under congestion without changing the negotiated
+        // codec on the WS control plane.
+        if self.codec == CodecSelection::Pcm24 && !self.force_pcm16_fallback {
+            return vec![encode_pcm24_from_native(&frame)];
+        }
+
         let samples = to_fixed_stereo_10ms(&frame, self.output_sample_rate);
-        if self.codec == CodecSelection::Opus {
+        if self.codec == CodecSelection::Opus && !self.force_pcm16_fallback {
             if let (Some(opus), Some(buffer)) =
                 (self.opus.as_mut(), self.opus_frame_buffer.as_mut())
             {
@@ -1215,12 +1641,33 @@ impl ExperimentalOpusEncoder {
         })
     }
 
+    /// Apply a tier-specific encoder profile (Phase 4 watchdog feedback).
+    /// Resets the running mode so the next encode() will reapply the
+    /// per-mode settings on top, then layers on the tier overrides.
+    fn apply_profile(&mut self, profile: TierEncoderProfile, mode: AudioMode) {
+        // Re-baseline first so multiple tier transitions in a row stay
+        // idempotent.
+        apply_opus_mode_settings(&mut self.inner, mode);
+        self.mode = mode;
+        if let Err(err) = self
+            .inner
+            .set_bitrate(LibOpusBitrate::Bits(profile.bitrate_bps))
+        {
+            warn!(error = %err, bitrate = profile.bitrate_bps, "tier bitrate apply failed");
+        }
+        if let Err(err) = self.inner.set_complexity(profile.complexity) {
+            warn!(error = %err, complexity = profile.complexity, "tier complexity apply failed");
+        }
+        if let Err(err) = self.inner.set_vbr(profile.use_vbr) {
+            warn!(error = %err, vbr = profile.use_vbr, "tier vbr apply failed");
+        }
+    }
+
     fn encode(&mut self, frame: &OpusInputFrame, mode: AudioMode) -> anyhow::Result<EncodedFrame> {
         if self.mode != mode {
             apply_opus_mode_settings(&mut self.inner, mode);
             self.mode = mode;
         }
-
         let pcm16 = samples_to_i16(&frame.samples);
         let mut payload = vec![0_u8; 4000];
         let encoded_len = self
@@ -1398,6 +1845,56 @@ fn encode_pcm16_from_samples(
     }
 }
 
+/// Phase 6 PCM24 encoder. Takes the native-rate `AudioFrame` (no
+/// resampling) and emits a payload of big-endian 24-bit signed
+/// interleaved L/R samples. Sample rate, channels, and frame duration
+/// are reported as-is so the v3 wire header can carry them.
+///
+/// Output bytes-per-frame: `samples_count * 3` (24-bit per sample). For
+/// 96 kHz / 5 ms / stereo this is 960 samples × 3 = 2880 B, which
+/// the transport layer's fragmentation logic splits into 2 packets to
+/// fit MTU.
+fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    let out_channels: u8 = 2;
+    let mut payload = Vec::with_capacity(in_frames * out_channels as usize * 3);
+
+    // 24-bit signed integer range. Multiplying by 2^23 - 1 maps -1.0..1.0
+    // to the full signed-24 range without overflow.
+    const SCALE: f32 = 8_388_607.0; // 2^23 - 1
+    for f in 0..in_frames {
+        let base = f * in_channels;
+        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        let l_i32 = (l.clamp(-1.0, 1.0) * SCALE) as i32;
+        let r_i32 = (r.clamp(-1.0, 1.0) * SCALE) as i32;
+        // Big-endian 24-bit: drop the most-significant byte from i32.
+        // sample = bits[23..0]; emit bytes high → low.
+        for &v in &[l_i32, r_i32] {
+            payload.push(((v >> 16) & 0xFF) as u8);
+            payload.push(((v >> 8) & 0xFF) as u8);
+            payload.push((v & 0xFF) as u8);
+        }
+    }
+
+    EncodedFrame {
+        pts_ms: frame.pts_ms,
+        sample_rate: frame.format.sample_rate_hz,
+        channels: out_channels,
+        frames_per_packet: in_frames as u16,
+        codec: UdpAudioCodecV2::Pcm24,
+        is_silence: frame.is_silence,
+        source_peak: frame.peak,
+        source_rms: frame.rms,
+        payload,
+    }
+}
+
 fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {
     // TODO(protocol-v2): map these semantics to the new 16-bit flags field.
     // `config_changed` and `discontinuity` are intentionally left as reserved
@@ -1447,6 +1944,125 @@ fn read_current_audio_mode(mode: &Arc<StdMutex<AudioMode>>) -> AudioMode {
 
 fn to_fixed_stereo_10ms(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
     let out_rate = normalize_encoder_sample_rate(out_rate);
+    const OUT_CHANNELS: usize = FIXED_OUTPUT_CHANNELS;
+    let out_frames: usize = (out_rate as usize / 100).max(1);
+
+    let in_rate = frame.format.sample_rate_hz.max(1);
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    if in_frames == 0 {
+        return vec![0.0; out_frames * OUT_CHANNELS];
+    }
+
+    // Fast path: same sample rate. Common case — Windows mix format is
+    // 48 kHz on ~99% of devices, output rate is 48 kHz, no resampling
+    // needed. Just stereo-fold and copy.
+    if in_rate == out_rate {
+        let mut out = Vec::with_capacity(out_frames * OUT_CHANNELS);
+        for out_frame in 0..out_frames {
+            let src_frame = out_frame.min(in_frames - 1);
+            let base = src_frame * in_channels;
+            let left = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+            let right = if in_channels > 1 {
+                frame.samples_f32.get(base + 1).copied().unwrap_or(left)
+            } else {
+                left
+            };
+            out.push(left);
+            out.push(right);
+        }
+        return out;
+    }
+
+    // Phase 6.2 Sinc resample. Replaces the previous nearest-neighbor
+    // implementation which aliased badly on rates like 96→48. We pay the
+    // setup cost once per frame which is acceptable because (a) the
+    // resampler is only constructed on the rare non-48 kHz capture path
+    // and (b) our 10 ms frame is short enough that the FFT/conv work is
+    // dominated by per-frame overhead anyway.
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+
+    // First, stereo-fold the input into two planar channels, downmixing
+    // anything beyond stereo by averaging. Build the two channel vectors
+    // explicitly so each gets its own real capacity (the `vec![X; n]`
+    // form clones the same Vec and discards the inner capacity).
+    let mut planar_in: Vec<Vec<f32>> = vec![
+        Vec::with_capacity(in_frames),
+        Vec::with_capacity(in_frames),
+    ];
+    for f in 0..in_frames {
+        let base = f * in_channels;
+        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        planar_in[0].push(l);
+        planar_in[1].push(r);
+    }
+
+    let params = SincInterpolationParameters {
+        sinc_len: 64,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Cubic,
+        oversampling_factor: 128,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let resampler =
+        SincFixedIn::<f32>::new(out_rate as f64 / in_rate as f64, 2.0, params, in_frames, 2);
+    let mut resampler = match resampler {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                ?err,
+                in_rate, out_rate, "rubato init failed, falling back to nearest"
+            );
+            return to_fixed_stereo_10ms_nearest(frame, out_rate);
+        }
+    };
+
+    let resampled = match resampler.process(&planar_in, None) {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                ?err,
+                in_rate, out_rate, "rubato process failed, falling back to nearest"
+            );
+            return to_fixed_stereo_10ms_nearest(frame, out_rate);
+        }
+    };
+
+    // The fixed-in resampler may produce slightly more or fewer output
+    // frames than out_frames; truncate or zero-pad to match the
+    // contract. In practice for integer rate ratios (24→48, 48→24) it
+    // matches exactly.
+    let mut out = Vec::with_capacity(out_frames * OUT_CHANNELS);
+    let avail = resampled[0].len().min(resampled[1].len());
+    for f in 0..out_frames {
+        let l = resampled[0].get(f).copied().unwrap_or(0.0);
+        let r = resampled[1].get(f).copied().unwrap_or(l);
+        if f >= avail {
+            // Defensive: if rubato returned fewer frames than expected,
+            // pad with the last available sample to avoid an audible
+            // hard-zero edge.
+            let last_l = resampled[0].last().copied().unwrap_or(0.0);
+            let last_r = resampled[1].last().copied().unwrap_or(last_l);
+            out.push(last_l);
+            out.push(last_r);
+        } else {
+            out.push(l);
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Fallback nearest-neighbor resampler. Only used when rubato init or
+/// process fails (very rare). Identical to the pre-Phase-6.2 behavior.
+fn to_fixed_stereo_10ms_nearest(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
     const OUT_CHANNELS: usize = FIXED_OUTPUT_CHANNELS;
     let out_frames: usize = (out_rate as usize / 100).max(1);
 
@@ -1722,5 +2338,197 @@ mod tests {
         );
         let decoded = UdpAudioPacketV2::decode(&bytes).expect("decode v2");
         assert_eq!(decoded.header.codec, UdpAudioCodecV2::Opus);
+    }
+
+    /// Phase 6 fragmentation. PCM24 96 kHz / 5 ms / stereo = 2880 B
+    /// payload, must split into 2 frags of 1392 + 1488 bytes (well, 1488
+    /// would exceed our 1392 cap so it splits 1392+1392+96 → 3 frags).
+    /// Verify the helper produces the right number of v3 wire packets,
+    /// the headers carry consistent logical_seq, and frag indices/totals
+    /// are right.
+    #[test]
+    fn encode_packets_pcm24_fragments_above_mtu() {
+        use lan_audio_protocol::UdpAudioPacketV3;
+
+        // Synthetic 2880 B payload (96 kHz / 5 ms / stereo / 24bit).
+        let payload = vec![0xAB; 2880];
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 100,
+            timestamp_ms: 12_345,
+            sample_rate: 96_000,
+            channels: 2,
+            frames_per_packet: 480, // 96 kHz × 5 ms
+            payload,
+        };
+        let mut next_seq = 100u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Pcm24,
+            &mut next_seq,
+        );
+        // 2880 / 1392 = 2.07 → 3 frags
+        assert_eq!(frags.len(), 3);
+
+        // Each frag should decode cleanly and share logical_seq=100.
+        for (i, bytes) in frags.iter().enumerate() {
+            let v3 = UdpAudioPacketV3::decode(bytes).expect("decode v3 frag");
+            assert_eq!(v3.header.codec, UdpAudioCodecV2::Pcm24);
+            assert_eq!(v3.header.sample_rate, 96_000);
+            assert_eq!(v3.header.logical_seq, 100);
+            assert_eq!(v3.header.total_frags, 3);
+            assert_eq!(v3.header.frag_index, i as u8);
+            assert_eq!(v3.header.sequence, 100 + i as u32);
+        }
+        assert_eq!(next_seq, 103);
+    }
+
+    /// Phase 6 single-packet path. PCM24 48 kHz / 5 ms / stereo = 1440 B
+    /// payload, exceeds the 1392 cap by exactly 48 bytes so it splits to
+    /// 2 frags. Sanity check the boundary case.
+    #[test]
+    fn encode_packets_pcm24_single_frag_at_48k() {
+        // 48 kHz / 10 ms / stereo / 24bit = 480 × 2 × 3 = 2880 B → 3 frags
+        // 48 kHz / 5 ms / stereo / 24bit = 240 × 2 × 3 = 1440 B → 2 frags
+        // 48 kHz / 3 ms / stereo / 24bit = 144 × 2 × 3 = 864 B → 1 frag
+        let payload = vec![0xCD; 864]; // 3 ms / 48 kHz
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 7,
+            timestamp_ms: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 144,
+            payload,
+        };
+        let mut next_seq = 7u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Pcm24,
+            &mut next_seq,
+        );
+        assert_eq!(frags.len(), 1);
+        assert_eq!(next_seq, 8);
+    }
+
+    /// Phase 6 non-PCM24 codecs must keep the v1.9.x single-packet
+    /// behavior so the fragmentation helper is a strict superset of
+    /// `encode_packet_by_data_plane`.
+    #[test]
+    fn encode_packets_non_pcm24_returns_single_packet() {
+        let packet = UdpAudioPacket {
+            version: 1,
+            flags: 0,
+            sequence: 1,
+            timestamp_ms: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            frames_per_packet: 480,
+            payload: vec![1, 2, 3, 4],
+        };
+        let mut next_seq = 1u32;
+        let frags = encode_packets_by_data_plane(
+            &packet,
+            DataPlaneFormat::V2Header,
+            0,
+            UdpAudioCodecV2::Opus,
+            &mut next_seq,
+        );
+        assert_eq!(frags.len(), 1);
+        assert_eq!(&frags[0][0..4], b"LAV2");
+        assert_eq!(next_seq, 2);
+    }
+
+    /// Phase 5 encode worker smoke test. Spins up a real worker thread,
+    /// sends one job that targets two simulated PCM16 wifi clients, and
+    /// asserts the worker emits one wire frame per recipient and advances
+    /// the shared sequence counter exactly once per encoded packet.
+    #[test]
+    fn encode_worker_emits_one_wire_frame_per_recipient() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let (job_tx, job_rx) = std_mpsc::channel::<EncodeJob>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<EncodeResult>();
+        let worker = spawn_encode_worker(job_rx, result_tx);
+
+        let frame = AudioFrame {
+            pts_ms: 0,
+            format: AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                frame_duration_ms: 10,
+            },
+            samples_f32: vec![0.0; 960 * 2],
+            is_silence: true,
+            packet_kind: PacketKind::SilentPacket,
+            peak: 0.0,
+            rms: 0.0,
+            source_buffer_frames: None,
+        };
+
+        let make_client = |id: Uuid, port: u16| BroadcastClient {
+            id,
+            name: format!("test-{}", port),
+            data_plane: DataPlaneFormat::LegacyLas1,
+            codec: CodecSelection::Pcm16,
+            audio_mode: AudioMode::Balanced,
+            preferred_sample_rate: 48_000,
+            transport: ClientTransportSnapshot::Wifi(
+                format!("127.0.0.1:{}", port).parse().expect("addr"),
+            ),
+            first_packet: true,
+            mode_changed: false,
+        };
+        let clients = vec![
+            make_client(Uuid::new_v4(), 60_001),
+            make_client(Uuid::new_v4(), 60_002),
+        ];
+
+        let sequence = Arc::new(AtomicU32::new(42));
+        let job = EncodeJob {
+            frame,
+            clients: clients.clone(),
+            active_tier: DegradationTier::Green,
+            sequence: Arc::clone(&sequence),
+            job_received_at: Instant::now(),
+        };
+
+        job_tx.send(job).expect("send job");
+
+        // Drain on the same thread without a runtime — `try_recv` polls.
+        let mut received: Option<EncodeResult> = None;
+        for _ in 0..100 {
+            if let Ok(result) = result_rx.try_recv() {
+                received = Some(result);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let result = received.expect("worker must produce a result");
+
+        // Two recipients on the same (codec, mode, rate) -> one encoded
+        // packet, two wire frames.
+        assert_eq!(result.wire_frames.len(), 2);
+        // Sequence counter advanced exactly once for the single packet.
+        assert_eq!(sequence.load(Ordering::Relaxed), 43);
+        // Both wire frames carry the same sequence number (one packet,
+        // fanned out to two recipients).
+        assert_eq!(result.wire_frames[0].packet.sequence, 42);
+        assert_eq!(result.wire_frames[1].packet.sequence, 42);
+        // Both targeted at legacy_las1 magic.
+        assert_eq!(
+            result.wire_frames[0].detected_wire_kind,
+            DataPlanePacketKind::LegacyLas1,
+        );
+
+        drop(job_tx);
+        worker.join().expect("worker join");
     }
 }

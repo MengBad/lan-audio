@@ -65,6 +65,26 @@ class OboeAudioTrackController : PlaybackAudioSink {
         // Native Oboe path uses a fixed ring buffer capacity for now.
     }
 
+    override fun setEqSettings(settings: PlaybackEqSettings) {
+        if (!opened) {
+            // The native sink is not yet initialized. Settings will be
+            // re-applied once `init` runs because the Kotlin sink is
+            // recreated and `setEqSettings` is called from
+            // `PlaybackSessionRuntime.openPlaybackSink`.
+            Log.i(
+                logTag,
+                "set_eq_pre_open enabled=${settings.enabled} low=${settings.lowDb} mid=${settings.midDb} high=${settings.highDb}",
+            )
+            return
+        }
+        val clamped = settings.clamped()
+        nativeSetEqSettings(clamped.enabled, clamped.lowDb, clamped.midDb, clamped.highDb)
+        Log.i(
+            logTag,
+            "set_eq_native enabled=${clamped.enabled} low=${clamped.lowDb} mid=${clamped.midDb} high=${clamped.highDb}",
+        )
+    }
+
     override fun writePcm16(data: ByteArray, frames: Int) {
         check(opened) { "Oboe sink is not initialized" }
         val safeFrames = frames.coerceAtLeast(1)
@@ -202,6 +222,7 @@ class OboeAudioTrackController : PlaybackAudioSink {
     private external fun nativeGetSilenceFill(): Int
     private external fun nativeGetUnderrunCount(): Int
     private external fun nativeGetRingBufferLevelFrames(): Int
+    private external fun nativeSetEqSettings(enabled: Boolean, lowDb: Int, midDb: Int, highDb: Int)
 
     companion object {
         private const val SUMMARY_INTERVAL_MS = 5_000L

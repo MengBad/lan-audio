@@ -3,6 +3,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <cstring>
 
@@ -13,13 +14,67 @@ constexpr const char *kTag = "lan_audio_oboe";
 // to eliminate the hard discontinuity.
 constexpr int kFadeRampFrames = 48;
 
+// Phase 6 EQ band centers (Hz). Hard-coded to match the Flutter UI labels:
+// Low 60 Hz, Mid 1 kHz, High 10 kHz. Q is fixed at 0.7 (wide musical
+// peaking).
+constexpr double kEqBandCenterHz[3] = {60.0, 1000.0, 10000.0};
+constexpr double kEqQ = 0.7;
+
 void copy_samples(const int16_t *source, int16_t *dest, int sample_count) {
     if (sample_count <= 0) {
         return;
     }
     std::memcpy(dest, source, static_cast<size_t>(sample_count) * sizeof(int16_t));
 }
+
+int16_t clamp_to_i16(double v) {
+    if (v >= 32767.0) return 32767;
+    if (v <= -32768.0) return -32768;
+    return static_cast<int16_t>(v);
+}
 }  // namespace
+
+void BiquadFilter::reset() {
+    z1_ = 0.0;
+    z2_ = 0.0;
+    y1_ = 0.0;
+    y2_ = 0.0;
+}
+
+void BiquadFilter::setPeaking(double sample_rate_hz, double center_hz, double gain_db, double q) {
+    // RBJ Audio EQ Cookbook peaking biquad. When gain is exactly 0 dB, the
+    // computed coefficients are still flat (b0=1, others=0 effectively),
+    // so we don't special-case it.
+    if (sample_rate_hz <= 0.0 || center_hz <= 0.0 || center_hz >= sample_rate_hz / 2.0) {
+        // Out-of-band — fall back to passthrough.
+        b0_ = 1.0; b1_ = 0.0; b2_ = 0.0;
+        a1_ = 0.0; a2_ = 0.0;
+        return;
+    }
+    const double w0 = 2.0 * M_PI * center_hz / sample_rate_hz;
+    const double cos_w0 = std::cos(w0);
+    const double sin_w0 = std::sin(w0);
+    const double A = std::pow(10.0, gain_db / 40.0);
+    const double alpha = sin_w0 / (2.0 * std::max(0.05, q));
+
+    const double b0 = 1.0 + alpha * A;
+    const double b1 = -2.0 * cos_w0;
+    const double b2 = 1.0 - alpha * A;
+    const double a0 = 1.0 + alpha / A;
+    const double a1 = -2.0 * cos_w0;
+    const double a2 = 1.0 - alpha / A;
+
+    if (a0 == 0.0) {
+        b0_ = 1.0; b1_ = 0.0; b2_ = 0.0;
+        a1_ = 0.0; a2_ = 0.0;
+        return;
+    }
+    b0_ = b0 / a0;
+    b1_ = b1 / a0;
+    b2_ = b2 / a0;
+    a1_ = a1 / a0;
+    a2_ = a2 / a0;
+}
 
 bool PcmRingBuffer::push(const int16_t *data, int frames) {
     if (data == nullptr || frames <= 0 || frames > kCapacityFrames) {
@@ -93,6 +148,17 @@ bool OboeAudioSink::open(int sample_rate, int channel_count) {
     reopen_attempts_.store(0, std::memory_order_release);
     callback_count_.store(0, std::memory_order_release);
 
+    // Phase 6 EQ: rebuild coefficients for the new sample rate (filter
+    // setPeaking depends on it). Reset delay state since the upstream
+    // PCM stream is restarting from scratch.
+    {
+        std::lock_guard<std::mutex> lock(eq_state_mutex_);
+        for (auto &filter : eq_filters_) {
+            filter.reset();
+        }
+    }
+    rebuildEqFilters(sample_rate_, eq_low_db_, eq_mid_db_, eq_high_db_);
+
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -141,7 +207,105 @@ void OboeAudioSink::close() {
 }
 
 bool OboeAudioSink::pushPcm(const int16_t *data, int frames) {
+    // Phase 6 EQ: process in-place before the ring buffer write. We make
+    // a stack-allocated working copy so the original input buffer (owned
+    // by the JNI caller) isn't mutated even when we have to re-clamp into
+    // i16 range after the floating-point biquad pass.
+    if (eq_enabled_.load(std::memory_order_acquire)) {
+        // Bound the working buffer so we don't blow the stack. The Kotlin
+        // sink writes one decoded packet per call (~960 frames stereo at
+        // 48 kHz / 20 ms). We fall back to processing in 1024-frame
+        // chunks if a caller ever sends a larger buffer.
+        constexpr int kChunkFrames = 1024;
+        const int channels = std::max(1, std::min(channel_count_, PcmRingBuffer::kChannels));
+        int16_t scratch[kChunkFrames * PcmRingBuffer::kChannels];
+        int processed = 0;
+        while (processed < frames) {
+            const int chunk = std::min(kChunkFrames, frames - processed);
+            const int sample_count = chunk * channels;
+            std::memcpy(scratch, data + processed * channels,
+                        static_cast<size_t>(sample_count) * sizeof(int16_t));
+            processPcmInPlace(scratch, chunk);
+            const bool ok = ring_buffer_.push(scratch, chunk);
+            if (!ok) {
+                return false;
+            }
+            processed += chunk;
+        }
+        return true;
+    }
     return ring_buffer_.push(data, frames);
+}
+
+void OboeAudioSink::setEqSettings(bool enabled, int low_db, int mid_db, int high_db) {
+    {
+        std::lock_guard<std::mutex> lock(eq_state_mutex_);
+        eq_low_db_ = low_db;
+        eq_mid_db_ = mid_db;
+        eq_high_db_ = high_db;
+        eq_pending_dirty_.store(true, std::memory_order_release);
+    }
+    eq_enabled_.store(enabled, std::memory_order_release);
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        kTag,
+        "eq_settings_applied enabled=%d low_db=%d mid_db=%d high_db=%d sr=%d",
+        enabled ? 1 : 0,
+        low_db,
+        mid_db,
+        high_db,
+        sample_rate_);
+}
+
+void OboeAudioSink::rebuildEqFilters(int sample_rate_hz, int low_db, int mid_db, int high_db) {
+    // Producer-thread side. Coefficients are recomputed in-place; delay
+    // state is preserved so a small gain change doesn't introduce a
+    // discontinuity.
+    const int channels = std::max(1, std::min(channel_count_, PcmRingBuffer::kChannels));
+    const int gain_db[3] = {low_db, mid_db, high_db};
+    for (int band = 0; band < 3; ++band) {
+        for (int ch = 0; ch < channels; ++ch) {
+            auto &filter = eq_filters_[band * PcmRingBuffer::kChannels + ch];
+            filter.setPeaking(
+                static_cast<double>(sample_rate_hz),
+                kEqBandCenterHz[band],
+                static_cast<double>(gain_db[band]),
+                kEqQ);
+        }
+    }
+}
+
+void OboeAudioSink::processPcmInPlace(int16_t *data, int frames) {
+    if (data == nullptr || frames <= 0) {
+        return;
+    }
+    // Drain any pending coefficient update into the producer-owned bank
+    // before we start processing. This is the only point where the
+    // bank's coefficient values can change, so the inner loop never
+    // contends on the mutex.
+    if (eq_pending_dirty_.exchange(false, std::memory_order_acq_rel)) {
+        int low_db, mid_db, high_db, sr;
+        {
+            std::lock_guard<std::mutex> lock(eq_state_mutex_);
+            low_db = eq_low_db_;
+            mid_db = eq_mid_db_;
+            high_db = eq_high_db_;
+            sr = sample_rate_;
+        }
+        rebuildEqFilters(sr, low_db, mid_db, high_db);
+    }
+    const int channels = std::max(1, std::min(channel_count_, PcmRingBuffer::kChannels));
+    for (int i = 0; i < frames; ++i) {
+        for (int ch = 0; ch < channels; ++ch) {
+            const int idx = i * channels + ch;
+            float sample = static_cast<float>(data[idx]);
+            // Cascade Low → Mid → High.
+            for (int band = 0; band < 3; ++band) {
+                sample = eq_filters_[band * PcmRingBuffer::kChannels + ch].processSample(sample);
+            }
+            data[idx] = clamp_to_i16(static_cast<double>(sample));
+        }
+    }
 }
 
 int OboeAudioSink::getSilenceFillCount() const {

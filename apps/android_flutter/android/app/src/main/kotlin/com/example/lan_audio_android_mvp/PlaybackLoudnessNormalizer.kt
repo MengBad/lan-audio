@@ -13,6 +13,7 @@ class PlaybackLoudnessNormalizer {
     private var targetGain: Double = 1.0
     private var rampRemainingSamples: Int = 0
     private var lastAnalysisAtMs: Long = 0L
+    private var consecutiveHighGainWindows: Int = 0
 
     fun setEnabled(enabled: Boolean) {
         requestedEnabled = enabled
@@ -41,7 +42,13 @@ class PlaybackLoudnessNormalizer {
             targetGain = computeTargetGain(input)
             rampRemainingSamples = rampSampleCount()
             lastAnalysisAtMs = nowMs
+            applyHighGainHysteresis()
         }
+        // Peak-Ahead Guard: scan the upcoming buffer's peak and clamp
+        // targetGain so even with the in-progress ramp we never push the
+        // output past the soft-clip ceiling. This protects against transients
+        // that would otherwise overshoot during the 100ms ramp window.
+        applyPeakAheadGuard(input)
         return applyGain(input)
     }
 
@@ -137,6 +144,54 @@ class PlaybackLoudnessNormalizer {
         targetGain = 1.0
         rampRemainingSamples = 0
         lastAnalysisAtMs = 0L
+        consecutiveHighGainWindows = 0
+    }
+
+    /**
+     * Peak-Ahead Guard. Scans the input buffer for its absolute peak and, if
+     * the current effective gain (max of currentGain and targetGain during
+     * ramp) would push that peak past the soft-clip ceiling, lowers
+     * targetGain to keep the signal inside the safe range.
+     */
+    private fun applyPeakAheadGuard(input: ByteArray) {
+        var peak = 0
+        var index = 0
+        while (index + 1 < input.size) {
+            val lo = input[index].toInt() and 0xFF
+            val hi = input[index + 1].toInt()
+            val sample = (hi shl 8) or lo
+            val abs = if (sample < 0) -sample else sample
+            if (abs > peak) peak = abs
+            index += 2
+        }
+        if (peak <= 0) return
+        val effectiveGain = if (currentGain > targetGain) currentGain else targetGain
+        val projected = peak.toDouble() * effectiveGain
+        if (projected > SOFT_CLIP_THRESHOLD) {
+            val safeGain = SOFT_CLIP_THRESHOLD / peak.toDouble()
+            // Only lower targetGain — never raise it. If the existing target
+            // is already lower than safeGain we leave it alone.
+            if (safeGain < targetGain) {
+                targetGain = safeGain.coerceAtLeast(MIN_GAIN)
+            }
+        }
+    }
+
+    /**
+     * Hysteresis on persistently high target gain. If the analyser repeatedly
+     * asks for >= HIGH_GAIN_THRESHOLD across HIGH_GAIN_HOLD_WINDOWS analysis
+     * windows, cap targetGain so we don't accumulate distortion from
+     * over-amplifying already-loud material.
+     */
+    private fun applyHighGainHysteresis() {
+        if (targetGain >= HIGH_GAIN_THRESHOLD) {
+            consecutiveHighGainWindows += 1
+        } else {
+            consecutiveHighGainWindows = 0
+        }
+        if (consecutiveHighGainWindows >= HIGH_GAIN_HOLD_WINDOWS) {
+            targetGain = targetGain.coerceAtMost(HIGH_GAIN_CAP)
+        }
     }
 
     companion object {
@@ -150,5 +205,11 @@ class PlaybackLoudnessNormalizer {
         private const val SOFT_CLIP_THRESHOLD = 28_000.0
         // Maximum output level as fraction of full scale (leaves ~1.2 dB headroom)
         private const val SOFT_CLIP_CEILING = 0.92
+        // High-gain hysteresis: if the analyser keeps asking for >= 1.4x for
+        // 3 consecutive windows, cap the target at 1.3x to avoid stacking
+        // headroom-eating gain on already-loud material.
+        private const val HIGH_GAIN_THRESHOLD = 1.4
+        private const val HIGH_GAIN_CAP = 1.3
+        private const val HIGH_GAIN_HOLD_WINDOWS = 3
     }
 }

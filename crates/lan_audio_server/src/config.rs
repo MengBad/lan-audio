@@ -43,6 +43,12 @@ pub enum DataPlaneFormat {
 pub enum CodecSelection {
     Pcm16,
     Opus,
+    /// Phase 6 Hi-Res passthrough. 24-bit signed integer PCM, no
+    /// compression, transmitted on the v3 data plane with optional
+    /// application-layer fragmentation. Only valid with
+    /// `DataPlaneFormat::V2Header` (which carries v3 packets when this
+    /// codec is active).
+    Pcm24,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +89,7 @@ impl CodecSelection {
         match input {
             "pcm16" | "pcm" => Ok(Self::Pcm16),
             "opus" | "opus_experimental" => Ok(Self::Opus),
+            "pcm24" | "hires" | "hires_pcm24" => Ok(Self::Pcm24),
             other => Err(anyhow!("unsupported codec: {other}")),
         }
     }
@@ -91,6 +98,7 @@ impl CodecSelection {
         match self {
             Self::Pcm16 => "pcm16",
             Self::Opus => "opus",
+            Self::Pcm24 => "pcm24",
         }
     }
 
@@ -98,6 +106,7 @@ impl CodecSelection {
         match self {
             Self::Pcm16 => AudioCodecPreference::Pcm16,
             Self::Opus => AudioCodecPreference::Opus,
+            Self::Pcm24 => AudioCodecPreference::Pcm24,
         }
     }
 
@@ -105,6 +114,7 @@ impl CodecSelection {
         match self {
             Self::Pcm16 => UdpAudioCodecV2::Pcm16,
             Self::Opus => UdpAudioCodecV2::Opus,
+            Self::Pcm24 => UdpAudioCodecV2::Pcm24,
         }
     }
 }
@@ -151,6 +161,10 @@ pub struct ServerConfig {
     pub transport_mode: TransportMode,
     pub force_rollback: bool,
     pub reverse_channel_enabled: bool,
+    /// Phase 4 adaptive runtime (CPU watchdog + tier-based encoder degrade).
+    /// Default ON; pass `--no-adaptive-runtime` on the command line to bypass
+    /// for emergency rollback.
+    pub adaptive_runtime_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -181,6 +195,7 @@ impl Default for ServerConfig {
             transport_mode: TransportMode::WiFi,
             force_rollback: false,
             reverse_channel_enabled: false,
+            adaptive_runtime_enabled: true,
         }
     }
 }
@@ -298,6 +313,12 @@ impl ServerConfig {
                 }
                 "--no-reverse-channel" => {
                     self.reverse_channel_enabled = false;
+                }
+                "--no-adaptive-runtime" => {
+                    self.adaptive_runtime_enabled = false;
+                }
+                "--adaptive-runtime" => {
+                    self.adaptive_runtime_enabled = true;
                 }
                 _ => {}
             }

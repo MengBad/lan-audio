@@ -28,6 +28,9 @@ class MorePage extends StatelessWidget {
     required this.connectActionLabel,
     required this.wsConnected,
     required this.connectionStatusText,
+    // Codec selector (Phase 7)
+    required this.preferredCodec,
+    required this.onPreferredCodecChanged,
     // Equalizer
     required this.eqEnabled,
     required this.eqLowDb,
@@ -104,6 +107,9 @@ class MorePage extends StatelessWidget {
   final String connectActionLabel;
   final bool wsConnected;
   final String connectionStatusText;
+  // Codec selector (Phase 7). `null` means "server default".
+  final String? preferredCodec;
+  final ValueChanged<String?> onPreferredCodecChanged;
   // Equalizer
   final bool eqEnabled;
   final int eqLowDb;
@@ -164,12 +170,14 @@ class MorePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    return SafeArea(
+      child: ListView(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
       children: [
         // ─── Section: 连接 (Connection) ───
-        _sectionHeader(tr('连接', 'Connection')),
-        const SizedBox(height: 8),
+        _sectionCard(
+          title: tr('连接', 'Connection'),
+          children: [
         Text(
           wsConnected
               ? connectionStatusText
@@ -183,6 +191,10 @@ class MorePage extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         SegmentedButton<int>(
+          style: SegmentedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 12),
+          ),
           segments: [
             ButtonSegment(
               value: 0,
@@ -194,7 +206,7 @@ class MorePage extends StatelessWidget {
             ),
             ButtonSegment(
               value: 2,
-              label: Text(tr('USB（adb）', 'USB (adb)')),
+              label: Text(tr('USB(adb)', 'USB(adb)')),
             ),
           ],
           selected: <int>{connectMode},
@@ -306,7 +318,7 @@ class MorePage extends StatelessWidget {
           )
         else
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 100),
+            constraints: const BoxConstraints(maxHeight: 200),
             child: ListView.builder(
               shrinkWrap: true,
               itemCount: servers.length,
@@ -321,7 +333,11 @@ class MorePage extends StatelessWidget {
                   title: Row(
                     children: [
                       Expanded(
-                          child: Text('${s.serverName} (${s.host})')),
+                          child: Text(
+                        '${s.serverName} (${s.host})',
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      )),
                       if (recent)
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -396,10 +412,47 @@ class MorePage extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 20),
+          ],
+        ),
+        // ─── Section: 编码器 (Codec) ───
+        _sectionCard(
+          title: tr('编码器', 'Codec'),
+          children: [
+            Text(
+              tr(
+                '默认按当前模式自动协商。Opus 节省带宽，PCM16 无压缩损失。',
+                'Auto-negotiated per mode by default. Opus saves bandwidth; PCM16 is lossless.',
+              ),
+              style: const TextStyle(fontSize: 12, color: AudioConsoleColors.text2),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(child: _codecChip(null, tr('自动', 'Auto'))),
+                const SizedBox(width: 6),
+                Expanded(child: _codecChip('opus', 'Opus')),
+                const SizedBox(width: 6),
+                Expanded(child: _codecChip('pcm16', 'PCM 16')),
+                const SizedBox(width: 6),
+                Expanded(child: _codecChip('pcm24', 'PCM 24')),
+              ],
+            ),
+            if (preferredCodec == 'pcm24') ...[
+              const SizedBox(height: 6),
+              Text(
+                tr(
+                  '已启用 PCM 24 Hi-Res 直通。需要桌面 mix format 设为 96 kHz 才能听到完整 Hi-Res 效果。LAN 带宽消耗 ~5 Mbps。',
+                  'PCM 24 Hi-Res passthrough enabled. Set Windows mix format to 96 kHz to hear full Hi-Res. LAN bandwidth ~5 Mbps.',
+                ),
+                style: const TextStyle(fontSize: 12, color: AudioConsoleColors.amber),
+              ),
+            ],
+          ],
+        ),
         // ─── Section: 均衡器 (Equalizer) ───
-        _sectionHeader(tr('均衡器', 'Equalizer')),
-        const SizedBox(height: 8),
+        _sectionCard(
+          title: tr('均衡器', 'Equalizer'),
+          children: [
         Row(
           children: [
             Expanded(
@@ -414,36 +467,43 @@ class MorePage extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            _eqPresetButton(tr('平直', 'Flat'), 'flat'),
-            _eqPresetButton(tr('低音增强', 'Bass'), 'bass'),
-            _eqPresetButton(tr('人声清晰', 'Vocal'), 'vocal'),
-            _eqPresetButton(tr('高频亮丽', 'Bright'), 'bright'),
+        if (eqEnabled) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: _eqPresetButton(tr('平直', 'Flat'), 'flat')),
+              const SizedBox(width: 6),
+              Expanded(child: _eqPresetButton(tr('低音增强', 'Bass'), 'bass')),
+              const SizedBox(width: 6),
+              Expanded(child: _eqPresetButton(tr('人声清晰', 'Vocal'), 'vocal')),
+              const SizedBox(width: 6),
+              Expanded(child: _eqPresetButton(tr('高频亮丽', 'Bright'), 'bright')),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _eqRow(tr('低频 60Hz', 'Low 60Hz'), eqLowDb, (v) => onSetEq(lowDb: v)),
+          _eqRow(tr('中频 1kHz', 'Mid 1kHz'), eqMidDb, (v) => onSetEq(midDb: v)),
+          _eqRow(tr('高频 10kHz', 'High 10kHz'), eqHighDb, (v) => onSetEq(highDb: v)),
+        ],
           ],
         ),
-        const SizedBox(height: 6),
-        _eqRow(tr('低频 60Hz', 'Low 60Hz'), eqLowDb, (v) => onSetEq(lowDb: v)),
-        _eqRow(tr('中频 1kHz', 'Mid 1kHz'), eqMidDb, (v) => onSetEq(midDb: v)),
-        _eqRow(tr('高频 10kHz', 'High 10kHz'), eqHighDb, (v) => onSetEq(highDb: v)),
-        const SizedBox(height: 20),
         // ─── Section: 麦克风 (Mic) ───
-        _sectionHeader(tr('麦克风', 'Microphone')),
-        const SizedBox(height: 8),
-        MicStatusWidget(
-          service: micService,
-          host: serviceTargetHost,
-          reversePort: reverseChannelPort,
-          enabled: micEnabled,
-          onToggle: onToggleMic,
+        _sectionCard(
+          title: tr('麦克风', 'Microphone'),
+          children: [
+            MicStatusWidget(
+              service: micService,
+              host: serviceTargetHost,
+              reversePort: reverseChannelPort,
+              enabled: micEnabled,
+              onToggle: onToggleMic,
+            ),
+          ],
         ),
-        const SizedBox(height: 20),
         // ─── Section: 响度归一化 ───
-        _sectionHeader(tr('响度归一化', 'Loudness Normalization')),
-        const SizedBox(height: 8),
+        _sectionCard(
+          title: tr('响度归一化', 'Loudness Normalization'),
+          children: [
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
@@ -461,39 +521,48 @@ class MorePage extends StatelessWidget {
           value: loudnessNormalizationEnabled,
           onChanged: onSetLoudnessNormalization,
         ),
-        const SizedBox(height: 20),
+          ],
+        ),
         // ─── Section: 应用 (App) ───
-        _sectionHeader(tr('应用', 'App')),
-        const SizedBox(height: 8),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(tr('后台播放', 'Background Playback')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: onOpenPowerSavingGuide,
+        _sectionCard(
+          title: tr('应用', 'App'),
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('后台播放', 'Background Playback')),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: onOpenPowerSavingGuide,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('检查更新', 'Check Update')),
+              trailing: updateCheckRunning
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: updateCheckRunning ? null : onCheckUpdate,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('版本', 'Version')),
+              trailing: Text(
+                kAppVersion,
+                style: const TextStyle(color: AudioConsoleColors.text2),
+              ),
+            ),
+          ],
         ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(tr('检查更新', 'Check Update')),
-          trailing: updateCheckRunning
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.chevron_right),
-          onTap: updateCheckRunning ? null : onCheckUpdate,
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(tr('版本', 'Version')),
-          trailing: Text(
-            kAppVersion,
-            style: const TextStyle(color: AudioConsoleColors.text2),
-          ),
-        ),
-        const SizedBox(height: 20),
         // ─── Section: 调试指标 (Debug, collapsed) ───
-        ExpansionTile(
+        Container(
+          decoration: BoxDecoration(
+            color: AudioConsoleColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: AudioConsoleShadow.section,
+          ),
+          child: ExpansionTile(
           tilePadding: EdgeInsets.zero,
           title: Text(
             tr('调试指标', 'Debug Metrics'),
@@ -585,7 +654,9 @@ class MorePage extends StatelessWidget {
             ),
           ],
         ),
+        ),
       ],
+    ),
     );
   }
 
@@ -596,6 +667,31 @@ class MorePage extends StatelessWidget {
         fontWeight: FontWeight.w700,
         fontSize: 16,
         color: AudioConsoleColors.text,
+      ),
+    );
+  }
+
+  /// Wraps a section (header + body) in a rounded card with a subtle shadow.
+  Widget _sectionCard({
+    required String title,
+    required List<Widget> children,
+  }) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AudioConsoleColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: AudioConsoleShadow.section,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(title),
+          const SizedBox(height: 8),
+          ...children,
+        ],
       ),
     );
   }
@@ -629,8 +725,51 @@ class MorePage extends StatelessWidget {
 
   Widget _eqPresetButton(String label, String preset) {
     return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        textStyle: const TextStyle(fontSize: 12),
+      ),
       onPressed: () => onApplyEqPreset(preset),
       child: Text(label),
+    );
+  }
+
+  /// Phase 7 codec picker chip. `value` of `null` selects the auto/default.
+  /// All codec values are real selections; the parent card's hint text
+  /// surfaces caveats (e.g. PCM 24 needs 96 kHz mix format on the Windows
+  /// side to actually be Hi-Res).
+  Widget _codecChip(String? value, String label) {
+    final selected = preferredCodec == value;
+    final bg = selected ? AudioConsoleColors.teal : AudioConsoleColors.surface;
+    final fg = selected ? AudioConsoleColors.bg : AudioConsoleColors.text;
+    return InkWell(
+      onTap: () {
+        onPreferredCodecChanged(value);
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected
+                ? AudioConsoleColors.teal
+                : AudioConsoleColors.text3.withValues(alpha: 0.3),
+            width: 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: fg,
+          ),
+        ),
+      ),
     );
   }
 

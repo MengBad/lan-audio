@@ -40,6 +40,18 @@ class AudioConsoleMotion {
   static const Duration orbPulse = Duration(milliseconds: 2000);
 }
 
+/// Section-card box shadow used by the Audio Console Dark cards.
+/// Soft, low-spread drop shadow that matches the surface color tone.
+class AudioConsoleShadow {
+  static const List<BoxShadow> section = <BoxShadow>[
+    BoxShadow(
+      color: Color.fromRGBO(0, 0, 0, 0.25),
+      blurRadius: 12,
+      offset: Offset(0, 4),
+    ),
+  ];
+}
+
 class AudioConsoleType {
   static const String sansFamily = 'DM Sans';
   static const String monoFamily = 'IBM Plex Mono';
