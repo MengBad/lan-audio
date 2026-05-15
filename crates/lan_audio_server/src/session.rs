@@ -367,6 +367,12 @@ impl SessionServer {
                         TransportMode::WiFi => "usb_tethering_or_5ghz_wifi".to_string(),
                         TransportMode::Usb { .. } => "usb".to_string(),
                     },
+                    // Phase 6.4 Hi-Res hint. Carries the configured
+                    // capture sample rate; on Windows this matches what
+                    // WASAPI's GetMixFormat() returns. Clients use it
+                    // to decide whether asking for PCM24 will actually
+                    // deliver Hi-Res content (mix < 96 kHz → toast).
+                    mix_format_hz: Some(self.cfg.sample_rate),
                 },
             ))?);
         }
@@ -981,6 +987,15 @@ fn negotiate_session_path(
                 || client_capabilities.supports_opus_experimental =>
         {
             CodecSelection::Opus
+        }
+        // Phase 6.4 Hi-Res. Both peers must advertise the capability;
+        // otherwise the server downgrades to Pcm16 to keep older clients
+        // working. PCM24 only flows on the v2_header data plane (which
+        // carries v3 packets when codec=Pcm24).
+        (CodecSelection::Pcm24, DataPlaneFormat::V2Header)
+            if client_capabilities.supports_hires_pcm24 =>
+        {
+            CodecSelection::Pcm24
         }
         _ => CodecSelection::Pcm16,
     };

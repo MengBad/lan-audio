@@ -33,7 +33,10 @@ class OboeAudioTrackController : PlaybackAudioSink {
         transportHint: TransportHint,
         encoding: Int,
     ) {
-        require(encoding == AudioFormat.ENCODING_PCM_16BIT) { "Oboe sink currently supports PCM16 only" }
+        require(
+            encoding == AudioFormat.ENCODING_PCM_16BIT ||
+                encoding == AudioFormat.ENCODING_PCM_FLOAT
+        ) { "Oboe sink only supports PCM16 and PCM_FLOAT (got $encoding)" }
         check(OpusNativeDecoder.isAvailable()) { "shared JNI library is not available" }
         release()
         this.sampleRate = sampleRate
@@ -48,11 +51,17 @@ class OboeAudioTrackController : PlaybackAudioSink {
         lastSummaryAtMs = 0L
         lastLoggedSilenceFill = 0L
         lastLoggedUnderrun = 0
-        val ok = nativeOpen(this.sampleRate, this.channelCount)
+        val ok = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            nativeOpenFloat(this.sampleRate, this.channelCount)
+        } else {
+            nativeOpen(this.sampleRate, this.channelCount)
+        }
         opened = ok
         Log.i(
             logTag,
-            "oboe_open ok=$ok sr=${this.sampleRate} ch=${this.channelCount} sdk=${Build.VERSION.SDK_INT} transport=${transportHint.name.lowercase()}",
+            "oboe_open ok=$ok sr=${this.sampleRate} ch=${this.channelCount} sdk=${Build.VERSION.SDK_INT} " +
+                "transport=${transportHint.name.lowercase()} encoding=" +
+                if (encoding == AudioFormat.ENCODING_PCM_FLOAT) "float" else "i16",
         )
         check(ok) { "failed to open Oboe sink" }
     }
@@ -106,6 +115,34 @@ class OboeAudioTrackController : PlaybackAudioSink {
             Log.w(
                 logTag,
                 "oboe_push_backpressure frames=$safeFrames bytes=${data.size} ring_level=${nativeGetRingBufferLevelFrames()}",
+            )
+        }
+    }
+
+    override fun writePcm24Be(data: ByteArray, frames: Int) {
+        check(opened) { "Oboe sink is not initialized" }
+        check(audioEncoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            "writePcm24Be requires the sink to be opened with ENCODING_PCM_FLOAT"
+        }
+        val safeFrames = frames.coerceAtLeast(1)
+        val expectedBytes = safeFrames * channelCount.coerceAtLeast(1) * 3
+        if (data.size != expectedBytes) {
+            pushFailures += 1
+            Log.e(
+                logTag,
+                "oboe_push24_size_mismatch bytes=${data.size} expected=$expectedBytes frames=$safeFrames channels=$channelCount",
+            )
+            return
+        }
+        updatePcm24Level(data)
+        val ok = nativePushPcm24Be(data, safeFrames)
+        if (ok) {
+            pushedFrames += safeFrames.toLong()
+        } else {
+            pushFailures += 1
+            Log.w(
+                logTag,
+                "oboe_push24_backpressure frames=$safeFrames bytes=${data.size} ring_level=${nativeGetRingBufferLevelFrames()}",
             )
         }
     }
@@ -216,9 +253,43 @@ class OboeAudioTrackController : PlaybackAudioSink {
         lastPcmRms = if (samples == 0) 0.0 else kotlin.math.sqrt(sumSquares / samples)
     }
 
+    /// Phase 6.4 PCM24 BE peak/RMS. Inputs are stride-3 big-endian
+    /// signed 24-bit samples. We convert to the same `[-32768, 32767]`
+    /// scale as the i16 path so the existing UI level meter keeps
+    /// working without a unit change.
+    private fun updatePcm24Level(data: ByteArray) {
+        if (data.size < 3) {
+            lastPcmPeak = 0
+            lastPcmRms = 0.0
+            return
+        }
+        var peak = 0
+        var sumSquares = 0.0
+        var samples = 0
+        var idx = 0
+        while (idx + 2 < data.size) {
+            val b0 = data[idx].toInt()              // signed top byte
+            val b1 = data[idx + 1].toInt() and 0xFF
+            val b2 = data[idx + 2].toInt() and 0xFF
+            val s24 = (b0 shl 16) or (b1 shl 8) or b2
+            // Truncate to top 16 bits so the level meter shows the same
+            // scale i16 callers see; the audible signal range matches.
+            val s16 = s24 shr 8
+            peak = maxOf(peak, kotlin.math.abs(s16))
+            val normalized = s16 / 32768.0
+            sumSquares += normalized * normalized
+            samples += 1
+            idx += 3
+        }
+        lastPcmPeak = peak
+        lastPcmRms = if (samples == 0) 0.0 else kotlin.math.sqrt(sumSquares / samples)
+    }
+
     private external fun nativeOpen(sampleRate: Int, channelCount: Int): Boolean
+    private external fun nativeOpenFloat(sampleRate: Int, channelCount: Int): Boolean
     private external fun nativeClose()
     private external fun nativePushPcm(pcmBytes: ByteArray, frames: Int): Boolean
+    private external fun nativePushPcm24Be(pcm24BeBytes: ByteArray, frames: Int): Boolean
     private external fun nativeGetSilenceFill(): Int
     private external fun nativeGetUnderrunCount(): Int
     private external fun nativeGetRingBufferLevelFrames(): Int

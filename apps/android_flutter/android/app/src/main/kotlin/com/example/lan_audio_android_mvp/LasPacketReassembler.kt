@@ -21,7 +21,7 @@ class LasPacketReassembler {
         var receivedCount: Int,
     )
 
-    private val slots = LinkedHashMap<Long, Slot>(MAX_SLOTS, 0.75f, true)
+    private val slots = LinkedHashMap<Long, Slot>(MAX_SLOTS, 0.75f, false)
 
     /**
      * Feed one wire packet to the reassembler.
@@ -90,7 +90,16 @@ class LasPacketReassembler {
             protocolVersion = template.protocolVersion,
             headerSize = template.headerSize,
             flags = template.flags,
-            sequence = template.sequence,
+            // Phase 6.4 fix: expose `logical_seq` as the wire `sequence`
+            // for downstream consumers. The server gives every frag its
+            // own +1 wire sequence, so a logical packet that's split
+            // into N frags advances the wire counter by N. Jitter
+            // buffers and loss accounting expect a 1-per-logical-packet
+            // counter, so we use logical_seq here. The original wire
+            // sequence is no longer needed past reassembly because
+            // reassembly itself collapses the multi-frag burst into a
+            // single PcmFrame.
+            sequence = key.toInt(),
             timestampMs = template.timestampMs,
             codec = template.codec,
             sampleRate = template.sampleRate,
@@ -109,6 +118,13 @@ class LasPacketReassembler {
     }
 
     private fun evictExcess() {
+        // Phase 6.4 stutter fix: evict the OLDEST logical_seq first
+        // (smallest key in insertion order). The previous LRU-access-
+        // order eviction could discard a partially-complete recent
+        // slot when an older slot was accessed by a late-arriving frag,
+        // causing a whole logical packet to be silently lost. Oldest-
+        // first is safer because if a slot is old enough to be evicted,
+        // its remaining frags are unlikely to arrive.
         while (slots.size > MAX_SLOTS) {
             val it = slots.entries.iterator()
             if (it.hasNext()) {
@@ -119,6 +135,13 @@ class LasPacketReassembler {
     }
 
     companion object {
-        const val MAX_SLOTS = 8
+        // Phase 6.4 stutter fix: increased from 8 to 32. At 48 kHz /
+        // 10 ms / PCM24 the server emits 100 logical packets/sec, each
+        // split into 3 wire fragments. With WiFi reordering, 8 slots
+        // could evict a partially-complete slot before its last frag
+        // arrived (especially during the 222 ms RTT spikes observed in
+        // the field). 32 slots covers ~320 ms of in-flight logical
+        // packets, well above the worst observed spike.
+        const val MAX_SLOTS = 32
     }
 }

@@ -307,6 +307,10 @@ data class PlaybackSnapshot(
     val clientAppVersion: String = "android_flutter",
     val serverPlatform: String? = null,
     val serverAppVersion: String? = null,
+    /// Phase 6.4: WASAPI mix format reported by the server. Used by the
+    /// More-page UI to warn users that PCM24 won't deliver Hi-Res when
+    /// the source is locked to 48 kHz.
+    val serverMixFormatHz: Int? = null,
     val eqSettings: PlaybackEqSettings = PlaybackEqSettings(),
     val loudnessNormalizationEnabled: Boolean = false,
     val reconnectAttempts: Int = 0,
@@ -356,6 +360,7 @@ data class PlaybackSnapshot(
             "clientAppVersion" to clientAppVersion,
             "serverPlatform" to serverPlatform,
             "serverAppVersion" to serverAppVersion,
+            "serverMixFormatHz" to serverMixFormatHz,
             "eqEnabled" to eqSettings.enabled,
             "eqSettings" to mapOf(
                 "enabled" to eqSettings.enabled,

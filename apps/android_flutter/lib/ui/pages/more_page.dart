@@ -31,6 +31,11 @@ class MorePage extends StatelessWidget {
     // Codec selector (Phase 7)
     required this.preferredCodec,
     required this.onPreferredCodecChanged,
+    // Phase 6.4 Hi-Res hint. Server-reported WASAPI mix format (Hz).
+    // When the user picks PCM24 but mix < 96 kHz, the codec card shows
+    // an extra red warning that 24-bit won't actually produce Hi-Res
+    // because the source is locked to 48 kHz.
+    this.serverMixFormatHz,
     // Equalizer
     required this.eqEnabled,
     required this.eqLowDb,
@@ -110,6 +115,7 @@ class MorePage extends StatelessWidget {
   // Codec selector (Phase 7). `null` means "server default".
   final String? preferredCodec;
   final ValueChanged<String?> onPreferredCodecChanged;
+  final int? serverMixFormatHz;
   // Equalizer
   final bool eqEnabled;
   final int eqLowDb;
@@ -446,6 +452,16 @@ class MorePage extends StatelessWidget {
                 ),
                 style: const TextStyle(fontSize: 12, color: AudioConsoleColors.amber),
               ),
+              if (serverMixFormatHz != null && serverMixFormatHz! < 96000) ...[
+                const SizedBox(height: 4),
+                Text(
+                  tr(
+                    '⚠ 检测到桌面 mix format = ${serverMixFormatHz} Hz。请到 Windows 声音设置 → 高级 → 选 96000 Hz / 24 bit，否则 PCM 24 听感与 PCM 16 一致。',
+                    '⚠ Desktop mix format is ${serverMixFormatHz} Hz. Open Windows Sound → Advanced → 96000 Hz / 24-bit, otherwise PCM 24 sounds the same as PCM 16.',
+                  ),
+                  style: const TextStyle(fontSize: 12, color: AudioConsoleColors.error),
+                ),
+              ],
             ],
           ],
         ),

@@ -243,6 +243,10 @@ class _MainShellState extends State<MainShell> {
   int? _protocolVersion;
   Map<String, bool> _negotiatedCapabilities = const {};
   String? _serverPlatform;
+  // Phase 6.4: WASAPI mix format reported by the desktop server. Used
+  // by the More page to warn when PCM 24 is selected on a 48 kHz
+  // source.
+  int? _serverMixFormatHz;
   String? _serverAppVersion;
   Map<String, dynamic> _modeProfile = const {};
   String _connectionPath = 'lan_ip_wifi_or_usb';
@@ -482,6 +486,7 @@ class _MainShellState extends State<MainShell> {
           (snapshot.dataPlane == 'v2_header' ? 2 : 1);
       _negotiatedCapabilities = snapshot.negotiatedCapabilities;
       _serverPlatform = snapshot.serverPlatform;
+      _serverMixFormatHz = snapshot.serverMixFormatHz;
       _serverAppVersion = snapshot.serverAppVersion;
       _modeProfile = snapshot.modeProfile;
       _connectionPath =
@@ -1943,6 +1948,7 @@ class _MainShellState extends State<MainShell> {
           : tr('未连接', 'Disconnected'),
       preferredCodec: _preferredCodec,
       onPreferredCodecChanged: _setPreferredCodec,
+      serverMixFormatHz: _serverMixFormatHz,
       eqEnabled: _eqEnabled,
       eqLowDb: _eqLowDb,
       eqMidDb: _eqMidDb,

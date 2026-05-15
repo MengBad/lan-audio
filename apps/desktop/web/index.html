@@ -69,6 +69,25 @@
         cursor: pointer;
       }
 
+      /* Card grouping */
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 10px;
+      }
+      .card.hero-card { padding: 16px 14px 14px; }
+      .card.is-hidden { display: none; }
+      .section-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        margin-bottom: 8px;
+      }
+
       /* Status row */
       .row-status {
         display: flex;
@@ -209,17 +228,18 @@
       }
 
       /* Debug section */
-      details.debug { margin-top: 8px; }
+      details.debug { margin-top: 0; }
       details.debug summary {
-        padding: 8px 0;
+        padding: 0;
         cursor: pointer;
         font-size: 13px;
         color: var(--muted);
         user-select: none;
         list-style: none;
       }
+      details.debug[open] summary { margin-bottom: 8px; }
       details.debug summary::-webkit-details-marker { display: none; }
-      .debug-content { padding: 8px 0; font-size: 12px; }
+      .debug-content { padding: 0; font-size: 12px; }
 
       .debug-meta {
         font-size: 11px;
@@ -415,59 +435,62 @@
         <button id="updateBannerBtn" type="button"></button>
       </div>
 
-      <!-- Status -->
-      <div class="row-status">
-        <span id="statusDot" class="status-dot"></span>
-        <span id="statusHeadline"></span>
-      </div>
-      <div class="addr" id="addrValue"></div>
-
-      <!-- QR + connection (only when running) -->
-      <div class="qr-row" id="qrPanel">
-        <div class="qr-code" id="qrCode"></div>
-        <div>
-          <div class="qr-info-title" id="qrTitle"></div>
-          <button class="copy-btn" id="copyAddrBtn" type="button" style="margin-top:6px;"></button>
+      <!-- Hero: status + connection + primary action -->
+      <div class="card hero-card">
+        <div class="row-status">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusHeadline"></span>
         </div>
+        <div class="addr" id="addrValue"></div>
+
+        <!-- QR + connection (only when running) -->
+        <div class="qr-row" id="qrPanel">
+          <div class="qr-code" id="qrCode"></div>
+          <div>
+            <div class="qr-info-title" id="qrTitle"></div>
+            <button class="copy-btn" id="copyAddrBtn" type="button" style="margin-top:6px;"></button>
+          </div>
+        </div>
+
+        <!-- Primary action -->
+        <button class="primary" id="primaryActionBtn"></button>
+        <div class="muted" id="nextStep" style="margin-top:6px; text-align:center;"></div>
+
+        <!-- Error + guidance -->
+        <div class="error-text" id="errorText"></div>
+        <details class="guidance-panel" id="firewallGuide" style="display:none;">
+          <summary id="firewallGuideTitle"></summary>
+          <pre id="firewallGuideBody"></pre>
+        </details>
       </div>
-
-      <!-- Primary action -->
-      <button class="primary" id="primaryActionBtn"></button>
-      <div class="muted" id="nextStep" style="margin-top:6px; text-align:center;"></div>
-
-      <!-- Error + guidance -->
-      <div class="error-text" id="errorText"></div>
-      <details class="guidance-panel" id="firewallGuide" style="display:none;">
-        <summary id="firewallGuideTitle"></summary>
-        <pre id="firewallGuideBody"></pre>
-      </details>
-
-      <hr class="divider" />
 
       <!-- Settings -->
-      <div class="field">
-        <span id="audioSourceLabel">音频源</span>
-        <select id="audioSourceSelect">
-          <option value="windows_loopback" data-i18n="loopback">系统音频</option>
-          <option value="synthetic" data-i18n="synthetic">测试音</option>
-        </select>
+      <div class="card">
+        <div class="section-title" id="settingsSectionTitle">推流设置</div>
+        <div class="field">
+          <span id="audioSourceLabel">音频源</span>
+          <select id="audioSourceSelect">
+            <option value="windows_loopback" data-i18n="loopback">系统音频</option>
+            <option value="synthetic" data-i18n="synthetic">测试音</option>
+          </select>
+        </div>
+        <div class="field">
+          <span id="codecLabelTop">编码</span>
+          <select id="codecSelect">
+            <option value="opus" data-i18n="opusExperimental">Opus</option>
+            <option value="pcm16" data-i18n="pcm16">PCM16</option>
+            <option value="pcm24" data-i18n="pcm24Hires">PCM 24 (Hi-Res)</option>
+          </select>
+        </div>
+        <div class="muted" id="pcm24Hint" style="display:none;margin-top:4px;font-size:11px;color:var(--warn);"></div>
+        <label class="field-toggle">
+          <input type="checkbox" id="fallbackToggle" />
+          <span id="fallbackLabel"></span>
+        </label>
       </div>
-      <div class="field">
-        <span id="codecLabelTop">编码</span>
-        <select id="codecSelect">
-          <option value="opus" data-i18n="opusExperimental">Opus</option>
-          <option value="pcm16" data-i18n="pcm16">PCM16</option>
-        </select>
-      </div>
-      <label class="field-toggle">
-        <input type="checkbox" id="fallbackToggle" />
-        <span id="fallbackLabel"></span>
-      </label>
-
-      <hr class="divider" />
 
       <!-- Latency comparison chart (Phase 5 visualization) -->
-      <div class="latency-card" id="latencyCard">
+      <div class="card is-hidden" id="latencyCard">
         <div class="latency-header">
           <span class="latency-title" id="latencyTitle">延迟对比</span>
           <span class="latency-meta" id="latencyMeta">60s · 0.5s</span>
@@ -481,10 +504,32 @@
         </div>
       </div>
 
-      <hr class="divider" />
+      <!-- Mic / Virtual Device Status (first-class card) -->
+      <div class="card" id="micCard">
+        <div class="section-title">🎤 <span id="micCardTitle">麦克风反向通道</span></div>
+        <div class="usb-row">状态: <strong id="micStatusText">未激活</strong></div>
+        <div class="usb-row" id="micWarningRow" style="display:none;color:var(--warn);">
+          <span id="micWarningText"></span>
+        </div>
+        <div class="usb-row" style="font-size:10px;color:var(--muted);margin-top:4px;" id="micHelpText">
+          需要安装 VB-Cable 虚拟音频设备。<a href="#" id="micHelpLink" style="color:var(--accent);">下载 VB-Cable</a>
+        </div>
+      </div>
 
-      <!-- Debug (collapses everything technical) -->
-      <details class="debug" id="debugDetails">
+      <!-- USB Panel (first-class card, only when USB available) -->
+      <div class="card is-hidden" id="usbPanel">
+        <div class="section-title" id="usbTitle">USB 模式(adb)</div>
+        <div class="usb-block-actions">
+          <button id="usbRefreshBtn" type="button"></button>
+          <button id="usbDisableBtn" type="button"></button>
+        </div>
+        <div class="usb-row"><strong id="usbStateLabel"></strong>: <span id="usbStateValue"></span></div>
+        <div class="usb-row"><strong id="usbForwardLabel"></strong>: <span id="usbForwardValue"></span></div>
+        <div class="usb-device-list" id="usbDeviceList"></div>
+      </div>
+
+      <!-- Debug (technical readouts only) -->
+      <details class="card debug" id="debugDetails">
         <summary id="debugSummary">▸ 调试信息</summary>
         <div class="debug-content">
           <!-- Health strip -->
@@ -528,36 +573,14 @@
             <input type="checkbox" id="dumpToggle" />
             <span id="dumpLabel"></span>
           </label>
+        </div>
+      </details>
 
-          <!-- Mic / Virtual Device Status -->
-          <div class="usb-block" id="micBlock">
-            <div class="usb-block-title">🎤 麦克风反向通道</div>
-            <div class="usb-row">状态: <strong id="micStatusText">未激活</strong></div>
-            <div class="usb-row" id="micWarningRow" style="display:none;color:var(--warn);">
-              <span id="micWarningText"></span>
-            </div>
-            <div class="usb-row" style="font-size:10px;color:var(--muted);margin-top:4px;" id="micHelpText">
-              需要安装 VB-Cable 虚拟音频设备。<a href="#" id="micHelpLink" style="color:var(--accent);">下载 VB-Cable</a>
-            </div>
-          </div>
-
-          <!-- USB Panel -->
-          <div class="usb-block" id="usbPanel" style="display:none;">
-            <div class="usb-block-title" id="usbTitle"></div>
-            <div class="usb-block-actions">
-              <button id="usbRefreshBtn" type="button"></button>
-              <button id="usbDisableBtn" type="button"></button>
-            </div>
-            <div class="usb-row"><strong id="usbStateLabel"></strong>: <span id="usbStateValue"></span></div>
-            <div class="usb-row"><strong id="usbForwardLabel"></strong>: <span id="usbForwardValue"></span></div>
-            <div class="usb-device-list" id="usbDeviceList"></div>
-          </div>
-
-          <!-- Logs -->
-          <div class="log-block">
-            <div class="log-title" id="logSummaryLabel">运行日志</div>
-            <div class="log-pane" id="logPane"></div>
-          </div>
+      <!-- Logs (separate collapsible card) -->
+      <details class="card debug" id="logsDetails">
+        <summary id="logsSummary">▸ 运行日志</summary>
+        <div class="debug-content">
+          <div class="log-pane" id="logPane"></div>
         </div>
       </details>
 
@@ -575,6 +598,8 @@
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
+          pcm24Hires: 'PCM 24 (Hi-Res)',
+          pcm24Hint: 'Hi-Res 直通：原生采样率，不重采样。建议 Windows 声音设置 96 kHz / 24-bit；带宽 ~4.6 Mbps。弱 WiFi 下可能丢包。',
           opusExperimental: 'Opus',
           fallback: '采集失败回退测试音',
           safeMode: '安全模式',
@@ -648,6 +673,9 @@
           healthStreamLabel: '推流',
           healthDevicesLabel: '设备',
           logSummaryLabel: '运行日志',
+          settingsSectionTitle: '推流设置',
+          micCardTitle: '麦克风反向通道',
+          logsSummary: '▸ 运行日志',
           groupTx: '发送',
           groupCapture: '采集',
           groupStatus: '状态',
@@ -685,6 +713,8 @@
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
+          pcm24Hires: 'PCM 24 (Hi-Res)',
+          pcm24Hint: 'Hi-Res passthrough: native rate, no resampling. Recommended Windows mix format 96 kHz / 24-bit; bandwidth ~4.6 Mbps. May drop on weak Wi-Fi.',
           opusExperimental: 'Opus',
           fallback: 'Fallback to test tone on capture failure',
           safeMode: 'Safe mode',
@@ -758,6 +788,9 @@
           healthStreamLabel: 'Stream',
           healthDevicesLabel: 'Devices',
           logSummaryLabel: 'Runtime logs',
+          settingsSectionTitle: 'Streaming Settings',
+          micCardTitle: 'Mic Reverse Channel',
+          logsSummary: '▸ Runtime Logs',
           groupTx: 'Send',
           groupCapture: 'Capture',
           groupStatus: 'State',
@@ -1045,7 +1078,9 @@
 
         document.getElementById('healthStreamLabel').textContent = t('healthStreamLabel');
         document.getElementById('healthDevicesLabel').textContent = t('healthDevicesLabel');
-        document.getElementById('logSummaryLabel').textContent = t('logSummaryLabel');
+        document.getElementById('logsSummary').textContent = t('logsSummary');
+        document.getElementById('settingsSectionTitle').textContent = t('settingsSectionTitle');
+        document.getElementById('micCardTitle').textContent = t('micCardTitle');
 
         // Localize <select> option labels
         const audioSel = document.getElementById('audioSourceSelect');
@@ -1097,6 +1132,14 @@
         const codecSelect = document.getElementById('codecSelect');
         if (codecSelect.value !== snapshot.codec_selection) {
           codecSelect.value = snapshot.codec_selection;
+        }
+        // PCM24 hint: only visible when user selects PCM 24 in the desktop UI
+        const pcm24Hint = document.getElementById('pcm24Hint');
+        if (codecSelect.value === 'pcm24') {
+          pcm24Hint.textContent = t('pcm24Hint');
+          pcm24Hint.style.display = 'block';
+        } else {
+          pcm24Hint.style.display = 'none';
         }
         document.getElementById('fallbackToggle').checked = !!snapshot.fallback_to_synthetic;
         document.getElementById('dumpToggle').checked = !!snapshot.capture_dump_wav;
@@ -1202,9 +1245,15 @@
           micHelpText.style.display = 'none';
         }
 
-        // USB panel visibility
-        document.getElementById('usbPanel').style.display =
-          (snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0)) ? 'block' : 'none';
+        // USB panel visibility (first-class card; show only when USB or adb devices visible)
+        const usbPanel = document.getElementById('usbPanel');
+        const showUsb =
+          snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0);
+        usbPanel.classList.toggle('is-hidden', !showUsb);
+
+        // Latency chart only when service is running (avoids empty chart in idle UI)
+        const latencyCard = document.getElementById('latencyCard');
+        latencyCard.classList.toggle('is-hidden', snapshot.service_status !== 'running');
 
         // Disable controls during busy
         const disabled = state.busy;
@@ -1264,9 +1313,10 @@
         }
       }
 
-      // Derive data plane from codec: opus -> v2_header, pcm16 -> legacy_las1.
+      // Derive data plane from codec: opus/pcm24 -> v2_header, pcm16 -> legacy_las1.
+      // (PCM24 needs v3 packets which only flow on the v2_header data plane.)
       function deriveDataPlaneFromCodec(codec) {
-        return codec === 'opus' ? 'v2_header' : 'legacy_las1';
+        return codec === 'pcm16' ? 'legacy_las1' : 'v2_header';
       }
 
       async function applySettings(overrides = {}) {
