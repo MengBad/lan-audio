@@ -780,6 +780,9 @@ fn effective_codec_for_desktop_config(cfg: &DesktopServiceConfig) -> CodecSelect
         selected_data_plane_for_desktop_config(cfg),
     ) {
         (CodecSelection::Opus, DataPlaneFormat::V2Header) => CodecSelection::Opus,
+        // Phase 6: Hi-Res PCM24 only flows on the v2_header data plane (carries
+        // v3 packets). On legacy_las1 we degrade to Pcm16 like Opus does.
+        (CodecSelection::Pcm24, DataPlaneFormat::V2Header) => CodecSelection::Pcm24,
         _ => CodecSelection::Pcm16,
     }
 }
@@ -906,7 +909,7 @@ fn default_protocol_capabilities() -> ProtocolCapabilities {
         supports_usb_tethering: true,
         supports_usb_direct_future: false,
         supports_reverse_channel: true,
-        supports_hires_pcm24: false,
+        supports_hires_pcm24: true,
     }
 }
 

@@ -170,6 +170,13 @@ pub struct ServerInfo {
     pub data_plane: String,
     pub gray_mode: bool,
     pub recommended_connection: String,
+    /// Phase 6.4 Hi-Res hint. Reports the WASAPI mix format sample rate
+    /// (Hz) the server is currently capturing at. Clients can use this
+    /// to warn users that asking for PCM24 won't actually deliver
+    /// Hi-Res when the source is 48 kHz. `None` for older servers and
+    /// for non-Windows backends; deserialization tolerates absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix_format_hz: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

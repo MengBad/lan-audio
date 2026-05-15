@@ -1854,9 +1854,41 @@ fn encode_pcm16_from_samples(
 /// 96 kHz / 5 ms / stereo this is 960 samples × 3 = 2880 B, which
 /// the transport layer's fragmentation logic splits into 2 packets to
 /// fit MTU.
+/// Phase 6.4 Hi-Res cap. Per the design spec
+/// (`docs/hires_pcm24.md` Q1), PCM24 only supports up to 96 kHz to keep
+/// LAN bandwidth bounded and packet fragmentation simple. When the
+/// capture device runs at a higher native rate (some Windows mix
+/// formats are 192 kHz / 384 kHz), we resample down to 96 kHz before
+/// emitting the 24-bit payload. Below 96 kHz we pass through native.
+const MAX_PCM24_OUTPUT_SAMPLE_RATE: u32 = 96_000;
+
+fn pcm24_target_sample_rate(input_rate: u32) -> u32 {
+    if input_rate > MAX_PCM24_OUTPUT_SAMPLE_RATE {
+        MAX_PCM24_OUTPUT_SAMPLE_RATE
+    } else {
+        input_rate
+    }
+}
+
 fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
     let in_channels = usize::from(frame.format.channels.max(1));
-    let in_frames = frame.samples_f32.len() / in_channels;
+    let in_rate = frame.format.sample_rate_hz.max(1);
+    let target_rate = pcm24_target_sample_rate(in_rate);
+
+    // Build the working float sample stream. When the native capture
+    // rate exceeds the PCM24 cap we run a sinc resampler (rubato) so
+    // wire bandwidth stays sane (~4.6 Mbps at 96 kHz vs ~18 Mbps at
+    // 384 kHz). Same-rate fast path skips the resampler.
+    let resampled: Option<Vec<f32>> = if target_rate != in_rate {
+        Some(resample_stereo_for_pcm24(frame, in_rate, target_rate))
+    } else {
+        None
+    };
+    let (samples_f32, working_channels): (&[f32], usize) = match resampled.as_ref() {
+        Some(r) => (r.as_slice(), 2),
+        None => (frame.samples_f32.as_slice(), in_channels),
+    };
+    let in_frames = samples_f32.len() / working_channels;
     let out_channels: u8 = 2;
     let mut payload = Vec::with_capacity(in_frames * out_channels as usize * 3);
 
@@ -1864,10 +1896,10 @@ fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
     // to the full signed-24 range without overflow.
     const SCALE: f32 = 8_388_607.0; // 2^23 - 1
     for f in 0..in_frames {
-        let base = f * in_channels;
-        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
-        let r = if in_channels > 1 {
-            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        let base = f * working_channels;
+        let l = samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if working_channels > 1 {
+            samples_f32.get(base + 1).copied().unwrap_or(l)
         } else {
             l
         };
@@ -1884,7 +1916,7 @@ fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
 
     EncodedFrame {
         pts_ms: frame.pts_ms,
-        sample_rate: frame.format.sample_rate_hz,
+        sample_rate: target_rate,
         channels: out_channels,
         frames_per_packet: in_frames as u16,
         codec: UdpAudioCodecV2::Pcm24,
@@ -1893,6 +1925,70 @@ fn encode_pcm24_from_native(frame: &AudioFrame) -> EncodedFrame {
         source_rms: frame.rms,
         payload,
     }
+}
+
+/// Resample the working `AudioFrame` to `out_rate` for the PCM24 path.
+/// Returns interleaved L/R `Vec<f32>` at the target rate. Falls back to
+/// nearest-neighbor on rubato failure, mirroring the Opus resampler's
+/// degradation path.
+fn resample_stereo_for_pcm24(frame: &AudioFrame, in_rate: u32, out_rate: u32) -> Vec<f32> {
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    if in_frames == 0 || in_rate == out_rate {
+        return frame.samples_f32.clone();
+    }
+    // Build planar input: L channel, R channel.
+    let mut planar_in = vec![Vec::with_capacity(in_frames); 2];
+    for f in 0..in_frames {
+        let base = f * in_channels;
+        let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let r = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        planar_in[0].push(l);
+        planar_in[1].push(r);
+    }
+    let params = SincInterpolationParameters {
+        sinc_len: 64,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Cubic,
+        oversampling_factor: 128,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let resampler = SincFixedIn::<f32>::new(
+        out_rate as f64 / in_rate as f64,
+        2.0,
+        params,
+        in_frames,
+        2,
+    );
+    let mut resampler = match resampler {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(?err, in_rate, out_rate, "pcm24 rubato init failed");
+            return frame.samples_f32.clone();
+        }
+    };
+    let resampled = match resampler.process(&planar_in, None) {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(?err, in_rate, out_rate, "pcm24 rubato process failed");
+            return frame.samples_f32.clone();
+        }
+    };
+    // Interleave back to L/R.
+    let out_frames = resampled[0].len();
+    let mut interleaved = Vec::with_capacity(out_frames * 2);
+    for f in 0..out_frames {
+        interleaved.push(resampled[0][f]);
+        interleaved.push(resampled[1].get(f).copied().unwrap_or(resampled[0][f]));
+    }
+    interleaved
 }
 
 fn legacy_flags_for_frame(frame: &EncodedFrame) -> u8 {

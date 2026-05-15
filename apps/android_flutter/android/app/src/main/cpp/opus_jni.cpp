@@ -222,6 +222,23 @@ Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeOpen(
     return g_sink->open(sample_rate, channel_count) ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeOpenFloat(
+    JNIEnv *env, jobject, jint sample_rate, jint channel_count) {
+    if (sample_rate <= 0 || channel_count <= 0 || channel_count > 2) {
+        throw_illegal_state(env, "invalid Oboe float sink format");
+        return JNI_FALSE;
+    }
+    if (g_sink != nullptr) {
+        g_sink->close();
+        delete g_sink;
+        g_sink = nullptr;
+    }
+    g_sink = new OboeAudioSink();
+    g_sink_channel_count = channel_count;
+    return g_sink->openFloat(sample_rate, channel_count) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativeClose(
     JNIEnv *, jobject) {
@@ -263,6 +280,45 @@ Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativePushPcm
     }
     const bool ok = g_sink->pushPcm(reinterpret_cast<int16_t *>(data), frames);
     env->ReleaseByteArrayElements(pcm_bytes, data, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_lan_1audio_1android_1mvp_OboeAudioTrackController_nativePushPcm24Be(
+    JNIEnv *env, jobject, jbyteArray pcm24_be_bytes, jint frames) {
+    if (g_sink == nullptr || pcm24_be_bytes == nullptr || frames <= 0) {
+        return JNI_FALSE;
+    }
+    if (!g_sink->isFloatPath()) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            "lan_audio_oboe",
+            "nativePushPcm24Be called on non-float sink — open with nativeOpenFloat first");
+        return JNI_FALSE;
+    }
+    const jsize len = env->GetArrayLength(pcm24_be_bytes);
+    if (len <= 0) {
+        return JNI_FALSE;
+    }
+    const int channel_count = std::max(1, g_sink_channel_count);
+    const int expected_bytes = frames * channel_count * 3;  // PCM24
+    if (len != expected_bytes) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            "lan_audio_oboe",
+            "nativePushPcm24Be size mismatch bytes=%d expected=%d frames=%d channels=%d",
+            static_cast<int>(len),
+            expected_bytes,
+            frames,
+            channel_count);
+        return JNI_FALSE;
+    }
+    auto *data = env->GetByteArrayElements(pcm24_be_bytes, nullptr);
+    if (data == nullptr) {
+        return JNI_FALSE;
+    }
+    const bool ok = g_sink->pushPcm24Be(reinterpret_cast<uint8_t *>(data), frames);
+    env->ReleaseByteArrayElements(pcm24_be_bytes, data, JNI_ABORT);
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
