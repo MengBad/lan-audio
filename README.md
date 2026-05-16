@@ -1,7 +1,7 @@
 <p align="center">
-  <h1 align="center">🔊 LAN Audio</h1>
+  <h1 align="center">LAN Audio</h1>
   <p align="center">
-    Stream your Windows PC audio to Android phones over Wi-Fi or USB.<br/>
+    Stream Windows PC audio to Android phones over Wi-Fi or USB.<br/>
     Turn any Android device into a wireless speaker.
   </p>
 </p>
@@ -15,44 +15,44 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> &nbsp;|&nbsp;
   <a href="https://github.com/MengBad/lan-audio/releases">Download</a> &nbsp;|&nbsp;
-  <a href="CHANGELOG.md">Changelog</a>
+  <a href="CHANGELOG.md">Changelog</a> &nbsp;|&nbsp;
+  <a href="README.zh-CN.md">中文文档</a>
 </p>
 
 ---
 
-## What is this?
+## Overview
 
-LAN Audio captures system audio from a Windows PC and streams it in real-time to Android devices over your local network. Your phone becomes a low-latency wireless speaker.
+LAN Audio captures system audio from a Windows PC via WASAPI Loopback and streams it in real-time to Android devices on the same local network. Supports Wi-Fi and USB (adb) connections with automatic mDNS discovery.
 
 **Use cases:**
-- Your PC doesn't have good speakers, but your phone/tablet does
-- You want to listen to PC audio from another room
-- You need a quick wireless speaker without buying hardware
-
-## Screenshots
-
-<!-- 
-  TODO: Add real screenshots here
-  Place them in screenshots/ directory:
-  - screenshots/desktop.png (Windows desktop app)
-  - screenshots/android-playback.png (Android playing)
-  - screenshots/android-discovery.png (Android discovering servers)
--->
-
-> Screenshots coming soon. Download the app from [Releases](https://github.com/MengBad/lan-audio/releases) to try it out.
+- PC speakers are weak, but your phone/tablet sounds better
+- Listen to PC audio from another room
+- Quick wireless speaker setup without extra hardware
 
 ## Features
 
-- **Low latency** — ~64ms (p95) in low_latency mode over Wi-Fi, even lower on USB
-- **Opus codec** — 48kHz VBR encoding, low bandwidth usage
-- **Auto-discovery** — mDNS finds nearby senders automatically, no manual IP needed
-- **Three modes** — low_latency / balanced / high_quality
+### Audio Pipeline
+- **Hi-Res PCM24 passthrough** — 24-bit 96 kHz native-rate streaming (Protocol v3), LAN-only
+- **Opus codec** — 48kHz VBR encoding with sinc resampler for non-48kHz sources
+- **Three playback modes** — low_latency (~64ms p95) / balanced / high_quality
+- **Native 3-band EQ** — biquad peaking filter on Oboe path (60Hz / 1kHz / 10kHz) with presets
+- **Loudness normalization** — auto gain control in balanced/high_quality modes
+- **Adaptive runtime** — server-side CPU + queue watchdog auto-downgrades codec under pressure
+
+### Connectivity
+- **Auto-discovery** — mDNS scan finds nearby servers, no manual IP needed
+- **USB mode** — stable wired connection via adb, no Wi-Fi required
 - **Auto-reconnect** — exponential backoff on network interruptions
-- **Equalizer** — 3-band EQ with presets (Flat, Bass Boost, Vocal, Treble)
-- **Reverse mic** — stream Android mic back to PC (port 7878)
-- **Remote volume** — control phone volume from PC
 - **Multi-device** — up to 4 phones receiving simultaneously
-- **USB mode** — use a USB cable for more stable connection via adb
+- **Remote volume** — control phone volume from PC
+
+### Android Client
+- **Codec picker** — choose Auto / Opus / PCM 16 / PCM 24 from the UI
+- **Latency chart** — real-time comparison of baseline vs current latency
+- **Audio quality strip** — shows negotiated codec, sample rate, channels
+- **Reverse mic** — stream Android microphone back to PC (port 7878)
+- **Background playback** — ForegroundService with MediaSession, survives screen-off
 
 ## Quick Start
 
@@ -73,7 +73,7 @@ cargo run -p lan_audio_server --bin desktop_headless -- --audio-source windows_l
 1. Connect PC and phone to the same Wi-Fi network
 2. Start LAN Audio on Windows
 3. Open the app on Android — it auto-discovers the PC
-4. Tap to connect and start streaming
+4. Tap connect and start streaming
 
 **USB mode** (more stable, no Wi-Fi needed):
 ```powershell
@@ -86,8 +86,8 @@ cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-se
 | :--- | :--- |
 | Audio capture | WASAPI Loopback (Windows) |
 | Desktop GUI | Tauri 2 + Rust |
-| Transport | TCP, custom Protocol v2 |
-| Codec | Opus 48kHz VBR |
+| Transport | UDP data + WebSocket control, Protocol v2/v3 |
+| Codec | Opus 48kHz VBR, PCM16, PCM24 |
 | Android client | Flutter + Kotlin |
 | Audio output | Oboe (NDK), AudioTrack fallback |
 | Discovery | mDNS |
@@ -96,16 +96,16 @@ cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-se
 
 ```
 apps/
-  android_flutter/     Android client (Flutter + Kotlin native)
-  desktop/             Windows desktop (Tauri)
+  android_flutter/       Android client (Flutter + Kotlin Native)
+  desktop/               Windows desktop (Tauri + Rust)
 
 crates/
-  lan_audio_protocol/  Protocol definitions & parsing
-  lan_audio_server/    Audio capture, encoding, transport
-  lan_audio_domain/    Shared types
+  lan_audio_protocol/    Protocol definitions & wire format parsing
+  lan_audio_server/      Audio capture, encoding, transport, adaptive runtime
+  lan_audio_domain/      Shared types & constants
 
-docs/                  Protocol specs, architecture
-scripts/               Build & release scripts
+docs/                    Protocol specs, architecture, design docs
+scripts/                 Build, validation & release scripts
 ```
 
 ## Development
@@ -120,7 +120,7 @@ scripts/               Build & release scripts
 ### Build & Test
 
 ```powershell
-# One-step validation
+# One-step validation (format + check + test)
 powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
 
 # Or manually
@@ -135,14 +135,21 @@ cargo test -p lan_audio_protocol -p lan_audio_server
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 ```
 
-## Docs
+## Documentation
 
-- [Protocol Spec](docs/protocol.md) — wire format & negotiation
-- [Protocol v2 Migration](docs/protocol_v2_migration.md)
-- [Architecture](docs/architecture.md)
-- [Desktop UI Design](docs/desktop_ui.md)
-- [Dev Setup](docs/dev_setup.md)
-- [Known Issues](docs/known_issues.md)
+| Document | Description |
+| :--- | :--- |
+| [Protocol Spec](docs/protocol.md) | Wire format, packet structure, negotiation |
+| [Protocol v2 Migration](docs/protocol_v2_migration.md) | Migration guide from v1 to v2 |
+| [Hi-Res PCM24](docs/hires_pcm24.md) | PCM24 passthrough design spec |
+| [Architecture](docs/architecture.md) | System architecture overview |
+| [Desktop UI Design](docs/desktop_ui.md) | Desktop client UI spec |
+| [Dev Setup](docs/dev_setup.md) | Development environment setup |
+| [Known Issues](docs/known_issues.md) | Known bugs and limitations |
+| [Roadmap](docs/roadmap.md) | Feature roadmap |
+| [Release Policy](docs/RELEASE_POLICY.md) | Versioning & release process |
+
+> For Chinese documentation, see [README.zh-CN.md](README.zh-CN.md)
 
 ## License
 
