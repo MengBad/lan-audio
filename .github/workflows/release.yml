@@ -249,58 +249,68 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/release
+          TAG="${{ needs.resolve.outputs.tag }}"
+          VERSION="${{ needs.resolve.outputs.version }}"
 
+          # Try to extract the matching section from CHANGELOG.md.
+          # Pattern: starts with "## [X.Y.Z]" and ends before the next "## [".
+          changelog_section=""
+          if [ -f CHANGELOG.md ]; then
+            changelog_section=$(awk -v ver="$VERSION" '
+              BEGIN { found=0 }
+              /^## \[/ {
+                if (found) exit
+                if (index($0, "[" ver "]")) { found=1; next }
+              }
+              found { print }
+            ' CHANGELOG.md)
+          fi
+
+          # If workflow_dispatch provided explicit inputs, prefer those.
           fixes_input='${{ github.event_name == 'workflow_dispatch' && inputs.fixes || '' }}'
           verified_scope_input='${{ github.event_name == 'workflow_dispatch' && inputs.verified_scope || '' }}'
           known_limitations_input='${{ github.event_name == 'workflow_dispatch' && inputs.known_limitations || '' }}'
 
           {
-            echo "## LAN Audio ${{ needs.resolve.outputs.tag }}"
+            echo "## LAN Audio ${TAG}"
             echo
             echo "- Main path: \`windows_loopback + v2_header + opus\`"
             echo "- Rollback path: \`legacy_las1 + pcm16\` (permanently retained; \`--force-rollback\` or UI safe mode)"
-            echo "- Codec status: \`opus stable\` on the recommended v2 path"
-            echo "- APK signing: fixed release keystore; supports in-place upgrade installs"
             echo
 
-            echo "## What Changed"
-            if [ -n "$fixes_input" ]; then
+            # Body: use CHANGELOG extract if available, else workflow_dispatch inputs, else minimal fallback.
+            if [ -n "$changelog_section" ]; then
+              echo "$changelog_section"
+            elif [ -n "$fixes_input" ]; then
+              echo "## What Changed"
               while IFS= read -r line; do
                 [ -z "$line" ] && continue
                 echo "- $line"
               done <<< "$fixes_input"
             else
-              echo "- Playback core debt cleared with extracted state machine and jitter coordinator."
-              echo "- Android power-saving guidance added for background playback restrictions."
-              echo "- Android 3-band EQ, loudness normalization, and multi-device streaming up to 4 clients."
-              echo "- mDNS nearby-device discovery, smart reconnect, and connection history/favorites."
-              echo "- Contributor docs, issue/PR templates, protocol coverage reporting, and changelog."
+              echo "## What Changed"
+              echo
+              echo "_No CHANGELOG.md entry found for ${VERSION}. See the commit history below._"
             fi
             echo
 
-            echo "## Verified Scope"
             if [ -n "$verified_scope_input" ]; then
+              echo "## Verified Scope"
               while IFS= read -r line; do
                 [ -z "$line" ] && continue
                 echo "- $line"
               done <<< "$verified_scope_input"
-            else
-              echo "- Verified device: \`5391d451\` (\`Xiaomi 24129PN74C\`)"
-              echo "- Verified scenarios: \`USB direct\`, \`WiFi + windows_loopback\`, \`2 Android clients\`"
-              echo "- Latency probe: \`low_latency p95=64ms\`, \`balanced p95=185ms\`, \`high_quality p95=505ms\`"
+              echo
             fi
-            echo
 
-            echo "## Known Limitations"
             if [ -n "$known_limitations_input" ]; then
+              echo "## Known Limitations"
               while IFS= read -r line; do
                 [ -z "$line" ] && continue
                 echo "- $line"
               done <<< "$known_limitations_input"
-            else
-              echo "- Desktop per-device disconnect command is deferred to v1.8."
+              echo
             fi
-            echo
 
             echo "## Rollback"
             echo "- Desktop CLI: \`--force-rollback\`"
