@@ -1436,6 +1436,62 @@ struct AudioFrameEncoder {
     /// Phase 4 — when forced into Red tier, fall back to PCM16 regardless of
     /// negotiated codec. The flag is consulted on every `encode()` call.
     force_pcm16_fallback: bool,
+    /// Phase 6.4 v6 — persistent resampler for non-48kHz capture inputs.
+    /// Re-created only when the input rate changes (very rare). Re-using
+    /// the same instance across frames preserves the sinc filter's
+    /// internal history buffer, eliminating per-frame edge artifacts
+    /// that produced audible "电音/爆音" on 96/192 kHz USB DACs.
+    persistent_resampler: Option<PersistentSincResampler>,
+}
+
+/// Phase 6.4 v6: persistent stereo sinc resampler. Maintains the
+/// rubato `SincFixedIn` instance across calls so sinc convolution
+/// has continuous history at frame boundaries. Re-built on input rate
+/// change. Holds two scratch planar input vectors so we don't
+/// re-allocate per frame.
+struct PersistentSincResampler {
+    inner: rubato::SincFixedIn<f32>,
+    in_rate: u32,
+    out_rate: u32,
+    in_frames: usize,
+    planar_in: [Vec<f32>; 2],
+}
+
+impl PersistentSincResampler {
+    fn new(in_rate: u32, out_rate: u32, in_frames: usize) -> Option<Self> {
+        use rubato::{
+            SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+        };
+        let params = SincInterpolationParameters {
+            sinc_len: 64,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Cubic,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let inner = SincFixedIn::<f32>::new(
+            out_rate as f64 / in_rate as f64,
+            2.0,
+            params,
+            in_frames,
+            2,
+        )
+        .ok()?;
+        Some(Self {
+            inner,
+            in_rate,
+            out_rate,
+            in_frames,
+            planar_in: [
+                Vec::with_capacity(in_frames),
+                Vec::with_capacity(in_frames),
+            ],
+        })
+    }
+
+    fn matches(&self, in_rate: u32, out_rate: u32, in_frames: usize) -> bool {
+        self.in_rate == in_rate && self.out_rate == out_rate && self.in_frames == in_frames
+    }
 }
 
 impl AudioFrameEncoder {
@@ -1463,6 +1519,7 @@ impl AudioFrameEncoder {
             opus,
             opus_frame_buffer,
             force_pcm16_fallback: false,
+            persistent_resampler: None,
         }
     }
 
@@ -1489,7 +1546,7 @@ impl AudioFrameEncoder {
             return vec![encode_pcm24_from_native(&frame)];
         }
 
-        let samples = to_fixed_stereo_10ms(&frame, self.output_sample_rate);
+        let samples = self.resample_to_stereo_10ms(&frame);
         if self.codec == CodecSelection::Opus && !self.force_pcm16_fallback {
             if let (Some(opus), Some(buffer)) =
                 (self.opus.as_mut(), self.opus_frame_buffer.as_mut())
@@ -1524,6 +1581,128 @@ impl AudioFrameEncoder {
             self.output_sample_rate,
         )]
     }
+
+    /// Phase 6.4 v6: stateful resample to fixed 10ms stereo at output rate.
+    /// Replaces the per-frame `to_fixed_stereo_10ms` call which created
+    /// a new SincFixedIn resampler on every frame, dropping the sinc
+    /// filter's history buffer between frames and producing audible
+    /// edge artifacts ("电音/爆音") on non-48kHz captures (USB DACs at
+    /// 96/192 kHz).
+    ///
+    /// This helper:
+    /// - Uses the same fast path as before when in_rate == out_rate
+    /// - Lazily builds a persistent SincFixedIn on first non-48kHz call
+    /// - Reuses it across frames (preserving filter history)
+    /// - Rebuilds it only if the input rate or frame size changes
+    ///   (e.g. when the WASAPI mix format renegotiates)
+    fn resample_to_stereo_10ms(&mut self, frame: &AudioFrame) -> Vec<f32> {
+        let out_rate = normalize_encoder_sample_rate(self.output_sample_rate);
+        let in_rate = frame.format.sample_rate_hz.max(1);
+        let in_channels = usize::from(frame.format.channels.max(1));
+        let in_frames = frame.samples_f32.len() / in_channels;
+        let out_frames: usize = (out_rate as usize / 100).max(1);
+
+        if in_frames == 0 {
+            return vec![0.0; out_frames * FIXED_OUTPUT_CHANNELS];
+        }
+
+        // Same-rate fast path. No resampler needed; we still drop the
+        // persistent one to free memory in case the input was just on
+        // a non-default rate and is now back to native.
+        if in_rate == out_rate {
+            self.persistent_resampler = None;
+            return same_rate_stereo_fold(frame, out_frames);
+        }
+
+        // Build or rebuild the persistent resampler if rate/frame size
+        // changed. Rebuilds are rare — only when the WASAPI mix format
+        // renegotiates (driver reload, device switch).
+        let needs_rebuild = match self.persistent_resampler.as_ref() {
+            Some(r) => !r.matches(in_rate, out_rate, in_frames),
+            None => true,
+        };
+        if needs_rebuild {
+            match PersistentSincResampler::new(in_rate, out_rate, in_frames) {
+                Some(r) => {
+                    self.persistent_resampler = Some(r);
+                }
+                None => {
+                    warn!(
+                        in_rate, out_rate, in_frames,
+                        "rubato persistent init failed, falling back to nearest"
+                    );
+                    return to_fixed_stereo_10ms_nearest(frame, out_rate);
+                }
+            }
+        }
+
+        let resampler = self.persistent_resampler.as_mut().unwrap();
+        // Stereo-fold input into the persistent planar scratch buffers.
+        resampler.planar_in[0].clear();
+        resampler.planar_in[1].clear();
+        for f in 0..in_frames {
+            let base = f * in_channels;
+            let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+            let r = if in_channels > 1 {
+                frame.samples_f32.get(base + 1).copied().unwrap_or(l)
+            } else {
+                l
+            };
+            resampler.planar_in[0].push(l);
+            resampler.planar_in[1].push(r);
+        }
+        let resampled = match rubato::Resampler::process(
+            &mut resampler.inner,
+            &resampler.planar_in,
+            None,
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!(
+                    ?err, in_rate, out_rate,
+                    "rubato persistent process failed, falling back to nearest"
+                );
+                // Drop the broken resampler so the next call rebuilds.
+                self.persistent_resampler = None;
+                return to_fixed_stereo_10ms_nearest(frame, out_rate);
+            }
+        };
+        let avail = resampled[0].len().min(resampled[1].len());
+        let mut out = Vec::with_capacity(out_frames * FIXED_OUTPUT_CHANNELS);
+        for f in 0..out_frames {
+            if f >= avail {
+                let last_l = resampled[0].last().copied().unwrap_or(0.0);
+                let last_r = resampled[1].last().copied().unwrap_or(last_l);
+                out.push(last_l);
+                out.push(last_r);
+            } else {
+                out.push(resampled[0][f]);
+                out.push(resampled[1][f]);
+            }
+        }
+        out
+    }
+}
+
+/// Same-rate stereo-fold helper used by both the encoder fast path and
+/// the legacy `to_fixed_stereo_10ms` standalone helper.
+fn same_rate_stereo_fold(frame: &AudioFrame, out_frames: usize) -> Vec<f32> {
+    let in_channels = usize::from(frame.format.channels.max(1));
+    let in_frames = frame.samples_f32.len() / in_channels;
+    let mut out = Vec::with_capacity(out_frames * FIXED_OUTPUT_CHANNELS);
+    for out_frame in 0..out_frames {
+        let src_frame = out_frame.min(in_frames.saturating_sub(1));
+        let base = src_frame * in_channels;
+        let left = frame.samples_f32.get(base).copied().unwrap_or(0.0);
+        let right = if in_channels > 1 {
+            frame.samples_f32.get(base + 1).copied().unwrap_or(left)
+        } else {
+            left
+        };
+        out.push(left);
+        out.push(right);
+    }
+    out
 }
 
 const DEFAULT_OUTPUT_SAMPLE_RATE: u32 = 48_000;

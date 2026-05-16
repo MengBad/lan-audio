@@ -102,6 +102,7 @@ class _MicStatusWidgetState extends State<MicStatusWidget>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const Divider(),
         Row(
           children: [
             AnimatedBuilder(

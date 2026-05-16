@@ -42,18 +42,8 @@ class StreamSessionManager(
             capabilities: Map<String, Boolean>,
             transportType: String,
         )
-        fun onServerInfo(
-            platform: String?,
-            appVersion: String?,
-            currentAudioMode: String,
-            mixFormatHz: Int? = null,
-        )
-        fun onAudioModeChanged(
-            mode: String,
-            applied: Boolean,
-            reason: String,
-            effectiveCodec: String? = null,
-        )
+        fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String)
+        fun onAudioModeChanged(mode: String, applied: Boolean, reason: String)
         fun onClientCountUpdated(count: Int)
         fun onTcpRoundTripMs(roundTripMs: Int, medianMs: Int)
         fun onError(code: String, message: String)
@@ -297,14 +287,6 @@ class StreamSessionManager(
                                 "supports_stable_audio_track" to true,
                                 "supports_usb_tethering" to true,
                                 "supports_usb_direct_future" to false,
-                                // Phase 6.4 Hi-Res. We can decode v3 PCM24
-                                // packets and route them through the
-                                // float-aware Oboe sink (which preserves
-                                // the full 24-bit dynamic range). On
-                                // pre-O_MR1 devices the legacy
-                                // AudioTrackController is used and we
-                                // still degrade to PCM16 in the runtime.
-                                "supports_hires_pcm24" to true,
                             ),
                         ),
                     )
@@ -360,16 +342,10 @@ class StreamSessionManager(
                             "server_info" -> {
                                 val mode = msg.optString("current_audio_mode", currentAudioMode)
                                 currentAudioMode = mode
-                                val mixFormatHz = if (msg.has("mix_format_hz") && !msg.isNull("mix_format_hz")) {
-                                    msg.optInt("mix_format_hz", 0).takeIf { it > 0 }
-                                } else {
-                                    null
-                                }
                                 callback.onServerInfo(
                                     msg.optString("platform").ifBlank { null },
                                     msg.optString("app_version").ifBlank { null },
                                     mode,
-                                    mixFormatHz,
                                 )
                                 callback.onLog("v2_server_info")
                             }
@@ -396,13 +372,10 @@ class StreamSessionManager(
                                 val mode = msg.optString("mode", currentAudioMode)
                                 val applied = msg.optBoolean("applied", false)
                                 val reason = msg.optString("reason", "")
-                                val effectiveCodec = msg
-                                    .optString("effective_codec", "")
-                                    .takeIf { it.isNotEmpty() }
                                 if (applied) {
                                     currentAudioMode = mode
                                 }
-                                callback.onAudioModeChanged(mode, applied, reason, effectiveCodec)
+                                callback.onAudioModeChanged(mode, applied, reason)
                                 callback.onLog("v2_audio_mode_changed:$mode")
                             }
                             "client_list" -> {

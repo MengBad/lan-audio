@@ -4,6 +4,23 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.10.2] - 2026-05-16
+
+### Fixed
+
+- **Resampler edge artifact ("电音/爆音") on non-48 kHz USB DACs**. The Opus / PCM16 encode path created a fresh `rubato::SincFixedIn` resampler instance for every 10 ms audio frame. Each new instance starts with empty filter history, so the sinc convolution at frame boundaries produced edge artifacts — about 12% of samples at each frame transition were corrupted. With a 96 kHz USB DAC (HiBy FC1, K3, etc.) the artifacts manifested as a continuous high-frequency crackle audible across all codecs.
+- The fix moves the resampler to a persistent field on `AudioFrameEncoder`. The instance is built once per (in_rate, out_rate, in_frames) combination and reused across frames, preserving the sinc filter's internal history buffer for continuous sample reconstruction. Same-rate fast path and nearest-neighbor fallback are unchanged.
+- Affects all capture inputs where `mix_format_hz != output_sample_rate` (typically Hi-Res USB DACs running at 96/192 kHz, but also any device with a non-48 kHz Windows mix format).
+
+### Reverted
+
+- Android-side PCM24 Hi-Res passthrough has been **temporarily reverted** to the v1.9.4 baseline. The Oboe Float callback path was unstable across test devices (Shared mode consumed audio at the device native rate instead of the requested 48 kHz). PCM24 support will return as a fully isolated playback path in a future release; the wire protocol (v3, fragmentation, `supports_hires_pcm24`) remains intact server-side for forward compatibility.
+
+### Notes
+
+- This release fixes the long-standing crackle that affected **all encoding modes** when used with Hi-Res USB DACs as the Windows default output. Users on the standard 48 kHz mix format were unaffected and see no behavior change.
+- No protocol changes. Existing v1.10.x clients will benefit from the server fix without an Android update.
+
 ## [1.10.0] - 2026-05-14
 
 ### Added — Hi-Res PCM24 Passthrough (Phase 6)
