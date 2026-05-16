@@ -34,15 +34,6 @@ interface PlaybackAudioSink {
 
     fun writePcm16(data: ByteArray, frames: Int)
 
-    /// Phase 6.4 Hi-Res passthrough. Pushes raw big-endian 24-bit signed
-    /// integer samples directly into the sink. The sink is expected to
-    /// have been initialized with `encoding = ENCODING_PCM_FLOAT`. The
-    /// default no-op throws so the legacy [AudioTrackController] surfaces
-    /// "I never expected PCM24" instead of silently swallowing audio.
-    fun writePcm24Be(data: ByteArray, frames: Int) {
-        throw UnsupportedOperationException("PCM24 passthrough not supported by this sink")
-    }
-
     fun stop()
 
     fun release()

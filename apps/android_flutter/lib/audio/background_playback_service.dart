@@ -18,7 +18,6 @@ class PlaybackServiceSnapshot {
     required this.negotiatedCapabilities,
     required this.serverPlatform,
     required this.serverAppVersion,
-    this.serverMixFormatHz,
     required this.transportMode,
     required this.playbackBackend,
     required this.connectedClientCount,
@@ -44,10 +43,6 @@ class PlaybackServiceSnapshot {
   final Map<String, bool> negotiatedCapabilities;
   final String? serverPlatform;
   final String? serverAppVersion;
-  // Phase 6.4 Hi-Res hint. WASAPI mix format reported by the desktop
-  // server. Used by the More page to warn when PCM24 is selected on a
-  // 48 kHz source (which won't actually deliver Hi-Res content).
-  final int? serverMixFormatHz;
   final String transportMode;
   final String playbackBackend;
   final int connectedClientCount;
@@ -118,8 +113,6 @@ class PlaybackServiceSnapshot {
               const <String, bool>{},
       serverPlatform: normalized['server_platform']?.toString(),
       serverAppVersion: normalized['server_app_version']?.toString(),
-      serverMixFormatHz: (normalized['server_mix_format_hz'] as num?)?.toInt() ??
-          (normalized['serverMixFormatHz'] as num?)?.toInt(),
       transportMode:
           '${normalized['transport_mode'] ?? normalized['transport'] ?? 'wifi'}',
       playbackBackend:
@@ -162,7 +155,6 @@ class PlaybackServiceSnapshot {
       'negotiated_capabilities': negotiatedCapabilities,
       'server_platform': serverPlatform,
       'server_app_version': serverAppVersion,
-      'server_mix_format_hz': serverMixFormatHz,
       'transport_mode': transportMode,
       'playback_backend': playbackBackend,
       'connected_client_count': connectedClientCount,

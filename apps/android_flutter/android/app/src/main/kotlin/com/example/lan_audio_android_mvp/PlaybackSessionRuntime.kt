@@ -30,7 +30,6 @@ class PlaybackSessionRuntime(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var playbackSink: PlaybackAudioSink = createPlaybackSink()
     private val opusDecoder = OpusFrameDecoder()
-    private val pcmReassembler = LasPacketReassembler()
     private val controlExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(playoutThreadFactory())
     private var playoutFuture: ScheduledFuture<*>? = null
@@ -326,19 +325,13 @@ class PlaybackSessionRuntime(
                 }
             }
 
-            override fun onServerInfo(
-                platform: String?,
-                appVersion: String?,
-                currentAudioMode: String,
-                mixFormatHz: Int?,
-            ) {
+            override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
                 if (generation != streamGeneration) return
                 applyAudioModeProfile(currentAudioMode, "server_info")
                 stateStore.update {
                     it.copy(
                         serverPlatform = platform,
                         serverAppVersion = appVersion,
-                        serverMixFormatHz = mixFormatHz,
                         currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
                         modeProfile = PlaybackModeProfiles.forMode(
                             currentAudioMode,
@@ -348,12 +341,7 @@ class PlaybackSessionRuntime(
                 }
             }
 
-            override fun onAudioModeChanged(
-                mode: String,
-                applied: Boolean,
-                reason: String,
-                effectiveCodec: String?,
-            ) {
+            override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
                 if (generation != streamGeneration) return
                 if (applied) {
                     applyAudioModeProfile(mode, reason)
@@ -362,11 +350,6 @@ class PlaybackSessionRuntime(
                     it.copy(
                         currentAudioMode = PlaybackModeProfiles.normalize(mode),
                         modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
-                        // Phase 6: surface the resolved codec the server
-                        // actually applied so the UI can show the
-                        // negotiated value (e.g. "Pcm24 requested → Opus
-                        // applied" when the server downgrades).
-                        effectiveCodec = effectiveCodec ?: it.effectiveCodec,
                         recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                     )
                 }
@@ -584,13 +567,7 @@ class PlaybackSessionRuntime(
         }, 10L, 10L, TimeUnit.MILLISECONDS)
     }
 
-    private fun handleUdpPacket(wirePacket: LasPacket) {
-        // Phase 6: feed all packets through the v3 reassembler so PCM24
-        // multi-frag logical frames get rebuilt before the rest of the
-        // pipeline sees them. Non-fragmented packets pass through
-        // unchanged. Returns null while a partial logical_seq is still
-        // accumulating frags.
-        val packet = pcmReassembler.feed(wirePacket) ?: return
+    private fun handleUdpPacket(packet: LasPacket) {
         rxWindowFrames += 1
         val currentSeq = packet.sequence
         rxLastSeqWindow = currentSeq
@@ -624,7 +601,6 @@ class PlaybackSessionRuntime(
             discontinuityCount += 1
             jitterBuffer.clear()
             opusDecoder.release()
-            pcmReassembler.reset()
             lastSeq = null
             stateStore.update { it.copy(recentLog = "udp_discontinuity_reset") }
         }
@@ -635,7 +611,6 @@ class PlaybackSessionRuntime(
             lastSeq = null
             resetPlayoutScheduleAfterModeSwitch()
             opusDecoder.release()
-            pcmReassembler.reset()
             if (options.resetBufferOnSwitch) {
                 withPlaybackSinkLock {
                     playbackSink.stop()
@@ -795,26 +770,12 @@ class PlaybackSessionRuntime(
                     DecodeResult(null, 0f)
                 }
             }
-            LasPacket.CODEC_PCM24 -> {
-                // Phase 6.4 Hi-Res passthrough: keep the BE 24-bit
-                // payload intact through the jitter buffer. The Oboe
-                // sink (opened in float mode) decodes BE → float at the
-                // JNI boundary, preserving the full 24-bit dynamic
-                // range. The legacy lossy BE→i16 conversion is gone.
-                DecodeResult(packet, 0f)
-            }
             else -> {
                 publishError("unsupported_codec", "unsupported codec=${packet.codec}")
                 DecodeResult(null, 0f)
             }
         }
     }
-
-    /// Phase 6.4: PCM24 BE → i16 LE conversion is no longer used.
-    /// The Oboe sink runs in float mode for PCM24 and reads BE bytes
-    /// directly via `nativePushPcm24Be`. This helper was the v1.10.0
-    /// stop-gap that dropped the bottom 8 bits; keeping the function
-    /// body would just be dead code.
 
     private fun maybeLogDecodeAndRxSummary(nowMs: Long) {
         if (lastDecodeSummaryAtMs == 0L) {
@@ -969,65 +930,17 @@ class PlaybackSessionRuntime(
         consecutiveEmptyQueueMisses = 0
         bufferingCandidateSinceMs = 0
         consecutivePlayoutHits += 1
-        val nextFormat = ActiveAudioFormat(
+        lastAudioFormat = ActiveAudioFormat(
             sampleRate = frame.sampleRate,
             channels = frame.channels,
             frameSamplesPerChannel = frame.frameDurationMs * frame.sampleRate / 1000,
-            codec = frame.codec,
         )
-        val codecChanged = lastAudioFormat?.codec != nextFormat.codec
-        lastAudioFormat = nextFormat
 
-        if (!audioInit || codecChanged) {
-            Log.i(
-                logTag,
-                "init AudioTrack sr=${frame.sampleRate} ch=${frame.channels} codec=${frame.codec}",
-            )
+        if (!audioInit) {
+            Log.i(logTag, "init AudioTrack sr=${frame.sampleRate} ch=${frame.channels}")
             withPlaybackSinkLock {
-                if (audioInit) {
-                    playbackSink.stop()
-                    playbackSink.release()
-                    audioStarted = false
-                }
                 initPlaybackSink(lastAudioFormat!!)
                 audioInit = true
-            }
-            // Phase 6.4 Hi-Res: codec switch invalidates any in-flight
-            // PCM16 packets still queued in the jitter buffer because
-            // their byte stride (2 bytes/sample/channel) doesn't match
-            // PCM24's stride (3) and the playback path branches on the
-            // first frame's codec. Drop the queue and let the new
-            // stream re-fill from scratch with consistent codec frames.
-            if (codecChanged) {
-                jitterBuffer.clear()
-                pcmReassembler.reset()
-                Log.i(logTag, "codec_switch_clear_buffers codec=${frame.codec}")
-            }
-            // Phase 6.4 Hi-Res: PCM24 frames are 3× the size of PCM16
-            // and run at 96 kHz native, so the WiFi delivery jitter that
-            // a PCM16 / 48 kHz buffer absorbs as 80ms of headroom only
-            // covers ~40ms here. Bump the jitter buffer + drop threshold
-            // to high_quality-class numbers so transient WiFi spikes
-            // don't trigger underrun + audible breakup.
-            if (codecChanged && frame.codec == LasPacket.CODEC_PCM24) {
-                val hiResStart = 240
-                val hiResMax = 600
-                val hiResDrop = 500
-                options = options.copy(
-                    startBufferMs = hiResStart,
-                    maxBufferMs = hiResMax,
-                    dropThresholdMs = hiResDrop,
-                    targetTotalLatencyMs = hiResStart + 100,
-                    maxTotalLatencyMs = hiResMax + 200,
-                    audioQueueSoftCapMs = 240,
-                    bufferingEnterDelayMs = 240,
-                )
-                jitterBuffer.reconfigure(hiResStart, hiResMax, hiResDrop)
-                playbackSink.setQueueSoftCapFrames(msToFrames(options.audioQueueSoftCapMs))
-                Log.i(
-                    logTag,
-                    "pcm24_buffer_override start=${hiResStart}ms max=${hiResMax}ms drop=${hiResDrop}ms",
-                )
             }
         }
         val preWriteAudioQueuedMs = stateStore.current().metrics.audioTrackQueuedMs
@@ -1037,26 +950,13 @@ class PlaybackSessionRuntime(
             jitterBufferedMs = jitterBuffer.bufferedMs(),
         )
         loudnessNormalizer.configure(frame.sampleRate, frame.channels)
-        val isPcm24 = frame.codec == LasPacket.CODEC_PCM24
-        // Phase 6.4: the loudness normalizer is i16-only. For PCM24
-        // float passthrough we skip it and rely on float-domain EQ
-        // (in the Oboe sink) for tone shaping. Loudness normalization
-        // for Hi-Res is left as a separate pass.
-        val processedPayload = if (isPcm24) {
-            writeBatch.payload
-        } else {
-            loudnessNormalizer.process(writeBatch.payload, now)
-        }
+        val processedPayload = loudnessNormalizer.process(writeBatch.payload, now)
         val audioStats = withPlaybackSinkLock {
             if (!audioStarted) {
                 playbackSink.start()
                 audioStarted = true
             }
-            if (isPcm24) {
-                playbackSink.writePcm24Be(processedPayload, writeBatch.pcmFrames)
-            } else {
-                playbackSink.writePcm16(processedPayload, writeBatch.pcmFrames)
-            }
+            playbackSink.writePcm16(processedPayload, writeBatch.pcmFrames)
             playbackSink.stats()
         }
         val writtenPacketCount = writeBatch.packetCount.coerceAtLeast(1)
@@ -1299,19 +1199,13 @@ class PlaybackSessionRuntime(
                     }
                 }
 
-                override fun onServerInfo(
-                    platform: String?,
-                    appVersion: String?,
-                    currentAudioMode: String,
-                    mixFormatHz: Int?,
-                ) {
+                override fun onServerInfo(platform: String?, appVersion: String?, currentAudioMode: String) {
                     if (generation != streamGeneration) return
                     applyAudioModeProfile(currentAudioMode, "server_info")
                     stateStore.update {
                         it.copy(
                             serverPlatform = platform,
                             serverAppVersion = appVersion,
-                            serverMixFormatHz = mixFormatHz,
                             currentAudioMode = PlaybackModeProfiles.normalize(currentAudioMode),
                             modeProfile = PlaybackModeProfiles.forMode(
                                 currentAudioMode,
@@ -1321,12 +1215,7 @@ class PlaybackSessionRuntime(
                     }
                 }
 
-                override fun onAudioModeChanged(
-                    mode: String,
-                    applied: Boolean,
-                    reason: String,
-                    effectiveCodec: String?,
-                ) {
+                override fun onAudioModeChanged(mode: String, applied: Boolean, reason: String) {
                     if (generation != streamGeneration) return
                     if (applied) {
                         applyAudioModeProfile(mode, reason)
@@ -1335,7 +1224,6 @@ class PlaybackSessionRuntime(
                         it.copy(
                             currentAudioMode = PlaybackModeProfiles.normalize(mode),
                             modeProfile = PlaybackModeProfiles.forMode(mode, currentTransportHint),
-                            effectiveCodec = effectiveCodec ?: it.effectiveCodec,
                             recentLog = if (applied) "audio_mode_changed:$mode" else "audio_mode_rejected:$reason",
                         )
                     }
@@ -1747,22 +1635,13 @@ class PlaybackSessionRuntime(
 
     private fun initPlaybackSink(format: ActiveAudioFormat) {
         val preferredSink = createPlaybackSink()
-        // Phase 6.4: PCM24 → float Oboe path. Falling back to the legacy
-        // AudioTrackController (used on pre-O_MR1 devices) means we
-        // can't run float; the runtime stays on PCM16 there because the
-        // legacy sink doesn't override writePcm24Be.
-        val encoding = if (format.codec == LasPacket.CODEC_PCM24 && preferredSink is OboeAudioTrackController) {
-            AudioFormat.ENCODING_PCM_FLOAT
-        } else {
-            AudioFormat.ENCODING_PCM_16BIT
-        }
         val initializedSink = try {
             preferredSink.init(
                 sampleRate = format.sampleRate,
                 channels = format.channels,
                 frameSamplesPerChannel = format.frameSamplesPerChannel,
                 transportHint = currentTransportHint,
-                encoding = encoding,
+                encoding = AudioFormat.ENCODING_PCM_16BIT,
             )
             preferredSink
         } catch (t: Throwable) {
@@ -1956,9 +1835,7 @@ class PlaybackSessionRuntime(
         audioQueuedMs: Int,
         jitterBufferedMs: Int,
     ): WriteBatch {
-        // Phase 6.4: PCM24 = 3 bytes/sample/channel; PCM16 = 2.
-        val bytesPerSample = if (first.codec == LasPacket.CODEC_PCM24) 3 else 2
-        val bytesPerFrame = first.channels.coerceAtLeast(1) * bytesPerSample
+        val bytesPerFrame = first.channels.coerceAtLeast(1) * 2
         fun frameCountFor(payload: ByteArray): Int = (payload.size / bytesPerFrame).coerceAtLeast(1)
 
         val batchSize = targetWriteBatchSize(
@@ -1977,10 +1854,7 @@ class PlaybackSessionRuntime(
         chunks.add(first.payload)
         repeat(batchSize - 1) {
             val next = jitterBuffer.popContiguousForBatch() ?: return@repeat
-            if (next.sampleRate == first.sampleRate &&
-                next.channels == first.channels &&
-                next.codec == first.codec
-            ) {
+            if (next.sampleRate == first.sampleRate && next.channels == first.channels) {
                 chunks.add(next.payload)
             }
         }
@@ -2242,10 +2116,6 @@ class PlaybackSessionRuntime(
         val sampleRate: Int,
         val channels: Int,
         val frameSamplesPerChannel: Int,
-        /// Phase 6.4: when `codec == CODEC_PCM24` the runtime opens the
-        /// Oboe sink in float mode and pushes raw BE 24-bit bytes; the
-        /// loudness normalizer (i16-only) is bypassed.
-        val codec: Int = LasPacket.CODEC_PCM16,
     )
 
     private data class AudioBackendConfig(

@@ -9,11 +9,6 @@ data class PcmFrame(
     val sampleRate: Int,
     val channels: Int,
     val frameDurationMs: Int,
-    /// Phase 6.4: codec discriminator so the playback path knows whether
-    /// `payload` holds little-endian PCM16 (default) or big-endian PCM24
-    /// passthrough bytes. Defaults to PCM16 to keep all existing call
-    /// sites compiling unchanged.
-    val codec: Int = LasPacket.CODEC_PCM16,
 )
 
 data class JitterStats(
@@ -70,7 +65,6 @@ class PlaybackJitterBuffer(
             sampleRate = packet.sampleRate,
             channels = packet.channels,
             frameDurationMs = frameDurationMs,
-            codec = packet.codec,
         )
 
         if (frames.containsKey(frame.sequence)) {
