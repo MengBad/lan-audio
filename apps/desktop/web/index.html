@@ -27,16 +27,16 @@
       }
 
       /* App container */
-      .app { max-width: 480px; margin: 16px auto; padding: 0 14px; }
+      .app { max-width: 560px; margin: 12px auto; padding: 0 16px; }
 
       /* Header */
       .header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 14px;
+        margin-bottom: 10px;
       }
-      .title { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
+      .title { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
       .lang-toggle {
         background: var(--panel);
         color: var(--text);
@@ -74,10 +74,10 @@
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 10px;
-        padding: 14px;
-        margin-bottom: 10px;
+        padding: 12px 14px;
+        margin-bottom: 8px;
       }
-      .card.hero-card { padding: 16px 14px 14px; }
+      .card.hero-card { padding: 14px; }
       .card.is-hidden { display: none; }
       .section-title {
         font-size: 11px;
@@ -85,7 +85,7 @@
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.6px;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
       }
 
       /* Status row */
@@ -93,11 +93,11 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
       }
       .status-dot {
-        width: 9px; height: 9px;
+        width: 8px; height: 8px;
         border-radius: 50%;
         background: var(--muted);
         flex-shrink: 0;
@@ -107,7 +107,7 @@
       .status-dot.busy    { background: var(--warn); }
       .addr {
         font-family: var(--mono);
-        font-size: 13px;
+        font-size: 12px;
         color: var(--muted);
         margin-top: 2px;
         word-break: break-all;
@@ -116,21 +116,21 @@
       /* QR + connect inline row */
       .qr-row {
         display: none;
-        grid-template-columns: 80px 1fr;
-        gap: 12px;
+        grid-template-columns: 64px 1fr;
+        gap: 10px;
         align-items: center;
-        margin: 14px 0;
+        margin: 10px 0;
       }
       .qr-row.visible { display: grid; }
       .qr-code {
-        width: 80px; height: 80px;
+        width: 64px; height: 64px;
         border-radius: 6px;
         background: #0b111a;
         display: grid;
         place-items: center;
         overflow: hidden;
       }
-      .qr-code svg { width: 72px; height: 72px; }
+      .qr-code svg { width: 56px; height: 56px; }
       .qr-info-title {
         font-size: 12px;
         color: var(--muted);
@@ -152,15 +152,15 @@
       /* Primary action */
       .primary {
         width: 100%;
-        height: 40px;
+        height: 36px;
         border: 0;
         border-radius: 8px;
         background: var(--accent);
         color: #07110f;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
-        margin-top: 10px;
+        margin-top: 8px;
         transition: opacity 0.15s, background 0.15s;
       }
       .primary:hover { opacity: 0.9; }
@@ -191,7 +191,7 @@
       hr.divider {
         border: 0;
         border-top: 1px solid rgba(255,255,255,0.09);
-        margin: 14px 0;
+        margin: 10px 0;
       }
 
       /* Setting fields */
@@ -199,7 +199,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 6px 0;
+        padding: 4px 0;
         font-size: 13px;
       }
       .field select {
@@ -207,9 +207,9 @@
         color: var(--text);
         border: 1px solid rgba(255,255,255,0.14);
         border-radius: 6px;
-        padding: 5px 10px;
-        font-size: 13px;
-        min-width: 140px;
+        padding: 4px 10px;
+        font-size: 12px;
+        min-width: 130px;
         cursor: pointer;
       }
       .field select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
@@ -218,8 +218,8 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0 6px 2px;
-        font-size: 13px;
+        padding: 4px 0 4px 2px;
+        font-size: 12px;
         cursor: pointer;
       }
       .field-toggle input[type="checkbox"] {
@@ -252,8 +252,8 @@
       .debug-groups {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 8px;
-        margin-top: 10px;
+        gap: 6px;
+        margin-top: 8px;
       }
       .group-title {
         font-size: 9px;
@@ -261,18 +261,18 @@
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
       }
       .kv {
         font-size: 10px;
-        line-height: 1.6;
+        line-height: 1.5;
         font-family: var(--mono);
         color: var(--text);
       }
       .kv div { opacity: 0.85; }
 
       .debug-actions {
-        margin-top: 10px;
+        margin-top: 8px;
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
@@ -298,55 +298,70 @@
         background: #131720;
         border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 10px 12px 8px;
+        padding: 8px 10px 6px;
       }
       .latency-header {
         display: flex;
         justify-content: space-between;
-        align-items: baseline;
-        font-size: 10px;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+      .latency-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .latency-title {
+        font-size: 11px;
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        font-weight: 500;
-        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      .latency-value {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent);
       }
       .latency-meta { color: #4a5568; font-family: var(--mono); }
       #latencyCanvas {
         display: block;
         width: 100%;
-        height: 120px;
+        height: 70px;
       }
-      .latency-legend {
-        display: flex;
+      .legend-item {
+        display: inline-flex;
         align-items: center;
-        justify-content: center;
-        gap: 6px;
-        margin-top: 6px;
-        font-size: 10px;
-        color: var(--muted);
+        gap: 4px;
       }
       .legend-dot {
         display: inline-block;
-        width: 8px;
-        height: 8px;
+        width: 7px;
+        height: 7px;
         border-radius: 50%;
       }
-      .legend-text { color: var(--muted); }
+      .legend-dash {
+        display: inline-block;
+        width: 10px;
+        height: 0;
+        border-top: 1.5px dashed #60a5fa;
+      }
+      .legend-text { color: var(--muted); font-size: 10px; }
 
       /* USB block inside debug */
       .usb-block {
-        margin-top: 10px;
+        margin-top: 8px;
         border-top: 1px solid var(--line);
-        padding-top: 8px;
+        padding-top: 6px;
       }
       .usb-block-title {
         font-size: 11px;
         font-weight: 500;
         color: var(--muted);
-        margin-bottom: 6px;
+        margin-bottom: 4px;
       }
-      .usb-block-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+      .usb-block-actions { display: flex; gap: 6px; margin-bottom: 4px; }
       .usb-block-actions button {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -357,9 +372,9 @@
         cursor: pointer;
       }
       .usb-block-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
-      .usb-row { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+      .usb-row { font-size: 11px; color: var(--muted); margin-bottom: 1px; }
       .usb-row strong { color: var(--text); font-weight: 500; }
-      .usb-device-list { display: grid; gap: 4px; margin-top: 6px; }
+      .usb-device-list { display: grid; gap: 3px; margin-top: 4px; }
       .usb-device { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
       .usb-meta { color: var(--muted); }
 
@@ -375,14 +390,14 @@
         margin-bottom: 4px;
       }
       .log-pane {
-        max-height: 120px;
+        max-height: 100px;
         overflow: auto;
         font-family: var(--mono);
         font-size: 11px;
-        line-height: 1.5;
+        line-height: 1.4;
         color: var(--muted);
       }
-      .log-line { white-space: pre-wrap; margin-bottom: 2px; }
+      .log-line { white-space: pre-wrap; margin-bottom: 1px; }
 
       /* Loading spinner for primary button */
       @keyframes spin { to { transform: rotate(360deg); } }
@@ -404,14 +419,14 @@
       }
 
       /* Responsive breakpoints */
-      @media (max-width: 520px) {
+      @media (max-width: 580px) {
         .app { padding: 0 10px; margin: 10px auto; }
         .field select { min-width: 100px; }
         .qr-row { flex-direction: column; align-items: flex-start; }
       }
       @media (max-width: 360px) {
         .app { padding: 0 8px; }
-        .title { font-size: 14px; }
+        .title { font-size: 13px; }
         .field { flex-direction: column; align-items: flex-start; gap: 4px; }
         .field select { width: 100%; min-width: unset; }
       }
@@ -479,29 +494,25 @@
           <select id="codecSelect">
             <option value="opus" data-i18n="opusExperimental">Opus</option>
             <option value="pcm16" data-i18n="pcm16">PCM16</option>
-            <option value="pcm24" data-i18n="pcm24Hires">PCM 24 (Hi-Res)</option>
           </select>
         </div>
-        <div class="muted" id="pcm24Hint" style="display:none;margin-top:4px;font-size:11px;color:var(--warn);"></div>
         <label class="field-toggle">
           <input type="checkbox" id="fallbackToggle" />
           <span id="fallbackLabel"></span>
         </label>
       </div>
 
-      <!-- Latency comparison chart (Phase 5 visualization) -->
+      <!-- Latency chart (Phase 5 visualization — Scheme A) -->
       <div class="card is-hidden" id="latencyCard">
         <div class="latency-header">
-          <span class="latency-title" id="latencyTitle">延迟对比</span>
-          <span class="latency-meta" id="latencyMeta">60s · 0.5s</span>
+          <div class="latency-header-left">
+            <span class="latency-title" id="latencyTitle">延迟</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#00d4aa;box-shadow:0 0 4px rgba(0,212,170,0.5);"></span><span class="legend-text" id="latencyLegendCurrent">当前</span></span>
+            <span class="legend-item"><span class="legend-dash"></span><span class="legend-text" id="latencyLegendBefore">基线</span></span>
+          </div>
+          <span class="latency-value" id="latencyValue">--</span>
         </div>
-        <canvas id="latencyCanvas" width="440" height="120"></canvas>
-        <div class="latency-legend">
-          <span class="legend-dot" style="background:#3b82f6;box-shadow:0 0 6px rgba(59,130,246,0.55);"></span>
-          <span class="legend-text" id="latencyLegendBefore">优化前</span>
-          <span class="legend-dot" style="background:#00d4aa;box-shadow:0 0 6px rgba(0,212,170,0.55);margin-left:14px;"></span>
-          <span class="legend-text" id="latencyLegendCurrent">当前</span>
-        </div>
+        <canvas id="latencyCanvas" width="440" height="70"></canvas>
       </div>
 
       <!-- Mic / Virtual Device Status (first-class card) -->
@@ -598,8 +609,6 @@
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          pcm24Hires: 'PCM 24 (Hi-Res)',
-          pcm24Hint: 'Hi-Res 直通：原生采样率，不重采样。建议 Windows 声音设置 96 kHz / 24-bit；带宽 ~4.6 Mbps。弱 WiFi 下可能丢包。',
           opusExperimental: 'Opus',
           fallback: '采集失败回退测试音',
           safeMode: '安全模式',
@@ -666,9 +675,8 @@
           debugMetaVersion: '版本',
           debugMetaSession: '会话',
           debugMetaMode: '模式',
-          latencyTitle: '延迟对比',
-          latencyMeta: '60s · 0.5s',
-          latencyLegendBefore: '优化前',
+          latencyTitle: '延迟',
+          latencyLegendBefore: '基线',
           latencyLegendCurrent: '当前',
           healthStreamLabel: '推流',
           healthDevicesLabel: '设备',
@@ -713,8 +721,6 @@
           legacy: 'Legacy LAS1',
           v2Header: 'V2 Header',
           pcm16: 'PCM16',
-          pcm24Hires: 'PCM 24 (Hi-Res)',
-          pcm24Hint: 'Hi-Res passthrough: native rate, no resampling. Recommended Windows mix format 96 kHz / 24-bit; bandwidth ~4.6 Mbps. May drop on weak Wi-Fi.',
           opusExperimental: 'Opus',
           fallback: 'Fallback to test tone on capture failure',
           safeMode: 'Safe mode',
@@ -781,10 +787,9 @@
           debugMetaVersion: 'Version',
           debugMetaSession: 'Session',
           debugMetaMode: 'Mode',
-          latencyTitle: 'Latency Comparison',
-          latencyMeta: '60s · 0.5s',
-          latencyLegendBefore: 'Before',
-          latencyLegendCurrent: 'Current',
+          latencyTitle: 'Latency',
+          latencyLegendBefore: 'Base',
+          latencyLegendCurrent: 'Now',
           healthStreamLabel: 'Stream',
           healthDevicesLabel: 'Devices',
           logSummaryLabel: 'Runtime logs',
@@ -1068,7 +1073,6 @@
         document.getElementById('codecLabel').textContent = t('debugMetaCodec');
         // Latency comparison chart i18n
         document.getElementById('latencyTitle').textContent = t('latencyTitle');
-        document.getElementById('latencyMeta').textContent = t('latencyMeta');
         document.getElementById('latencyLegendBefore').textContent = t('latencyLegendBefore');
         document.getElementById('latencyLegendCurrent').textContent = t('latencyLegendCurrent');
         document.getElementById('protocolLabel').textContent = t('debugMetaProtocol');
@@ -1132,14 +1136,6 @@
         const codecSelect = document.getElementById('codecSelect');
         if (codecSelect.value !== snapshot.codec_selection) {
           codecSelect.value = snapshot.codec_selection;
-        }
-        // PCM24 hint: only visible when user selects PCM 24 in the desktop UI
-        const pcm24Hint = document.getElementById('pcm24Hint');
-        if (codecSelect.value === 'pcm24') {
-          pcm24Hint.textContent = t('pcm24Hint');
-          pcm24Hint.style.display = 'block';
-        } else {
-          pcm24Hint.style.display = 'none';
         }
         document.getElementById('fallbackToggle').checked = !!snapshot.fallback_to_synthetic;
         document.getElementById('dumpToggle').checked = !!snapshot.capture_dump_wav;
@@ -1313,8 +1309,7 @@
         }
       }
 
-      // Derive data plane from codec: opus/pcm24 -> v2_header, pcm16 -> legacy_las1.
-      // (PCM24 needs v3 packets which only flow on the v2_header data plane.)
+      // Derive data plane from codec: opus -> v2_header, pcm16 -> legacy_las1.
       function deriveDataPlaneFromCodec(codec) {
         return codec === 'pcm16' ? 'legacy_las1' : 'v2_header';
       }
@@ -1478,7 +1473,7 @@
           const ctx = canvasEl.getContext('2d');
           const dpr = window.devicePixelRatio || 1;
           const cssW = canvasEl.clientWidth || 440;
-          const cssH = canvasEl.clientHeight || 120;
+          const cssH = canvasEl.clientHeight || 70;
           if (canvasEl.width !== Math.round(cssW * dpr) || canvasEl.height !== Math.round(cssH * dpr)) {
             canvasEl.width = Math.round(cssW * dpr);
             canvasEl.height = Math.round(cssH * dpr);
@@ -1486,21 +1481,22 @@
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.clearRect(0, 0, cssW, cssH);
 
-          const yLabelW = 32;
-          const plot = { x: yLabelW, y: 4, w: cssW - yLabelW - 4, h: cssH - 8 };
+          const yLabelW = 24;
+          const plot = { x: yLabelW, y: 2, w: cssW - yLabelW - 2, h: cssH - 4 };
 
           // Auto-scale Y.
           let mx = 50;
-          for (const v of baseline) if (v > mx) mx = v;
+          const baseVal = baseline.length ? baseline[baseline.length - 1] : 0;
+          if (baseVal > mx) mx = baseVal;
           for (const v of current) if (v > mx) mx = v;
-          const maxVal = Math.min(1000, Math.max(50, mx * 1.15));
+          const maxVal = Math.min(1000, Math.max(50, mx * 1.2));
 
-          // Grid + Y labels
-          ctx.font = '9px "SF Mono", Consolas, monospace';
+          // Grid: 3 lines, only top/bottom labeled.
+          ctx.font = '8px "SF Mono", Consolas, monospace';
           ctx.fillStyle = 'rgba(74,85,104,0.9)';
-          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-          ctx.lineWidth = 1;
-          const gridLines = 4;
+          ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+          ctx.lineWidth = 0.5;
+          const gridLines = 3;
           for (let i = 0; i <= gridLines; i++) {
             const t = i / gridLines;
             const y = plot.y + plot.h * (1 - t);
@@ -1508,65 +1504,123 @@
             ctx.moveTo(plot.x, y);
             ctx.lineTo(plot.x + plot.w, y);
             ctx.stroke();
-            const value = Math.round(maxVal * t);
-            const text = String(value);
-            const w = ctx.measureText(text).width;
-            ctx.fillText(text, plot.x - w - 4, y + 3);
+            if (i === 0 || i === gridLines) {
+              const value = Math.round(maxVal * t);
+              const text = String(value);
+              const w = ctx.measureText(text).width;
+              ctx.fillText(text, plot.x - w - 3, y + 3);
+            }
           }
 
-          drawSeries(ctx, plot, baseline, '#3b82f6', maxVal);
-          drawSeries(ctx, plot, current, '#00d4aa', maxVal);
+          // Dashed baseline.
+          if (baseVal > 0) {
+            const baseY = plot.y + plot.h * (1 - Math.min(1, baseVal / maxVal));
+            ctx.setLineDash([4, 3]);
+            ctx.strokeStyle = 'rgba(96,165,250,0.7)';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(plot.x, baseY);
+            ctx.lineTo(plot.x + plot.w, baseY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Label on right.
+            ctx.font = '9px "SF Mono", Consolas, monospace';
+            ctx.fillStyle = 'rgba(96,165,250,0.8)';
+            const label = String(Math.round(baseVal));
+            const lw = ctx.measureText(label).width;
+            ctx.fillText(label, plot.x + plot.w - lw, baseY - 3);
+          }
+
+          // Current series with smooth curve.
+          drawSmoothSeries(ctx, plot, current, '#00d4aa', maxVal);
+
+          // Update real-time value display.
+          const valueEl = document.getElementById('latencyValue');
+          if (valueEl) {
+            const latest = current.length ? current[current.length - 1] : 0;
+            valueEl.textContent = latest > 0 ? `${Math.round(latest)}ms` : '--';
+          }
         }
 
-        function drawSeries(ctx, plot, values, color, maxVal) {
+        function drawSmoothSeries(ctx, plot, values, color, maxVal) {
           if (!values.length) return;
           const stride = plot.w / Math.max(1, MAX_SAMPLES - 1);
           const startX = plot.x + plot.w - stride * (values.length - 1);
 
-          // Filled area
-          const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
-          grad.addColorStop(0, hexWithAlpha(color, 0.35));
-          grad.addColorStop(1, hexWithAlpha(color, 0.02));
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          let firstX = startX;
-          let firstY = plot.y + plot.h;
+          // Build points.
+          const points = [];
           for (let i = 0; i < values.length; i++) {
             const x = startX + stride * i;
             const v = Math.max(0, Math.min(maxVal, values[i]));
             const y = plot.y + plot.h * (1 - v / maxVal);
-            if (i === 0) {
-              firstX = x;
-              firstY = y;
-              ctx.moveTo(x, plot.y + plot.h);
-              ctx.lineTo(x, y);
-            } else {
-              ctx.lineTo(x, y);
-            }
+            points.push({ x, y });
           }
-          const lastX = startX + stride * (values.length - 1);
-          ctx.lineTo(lastX, plot.y + plot.h);
-          ctx.closePath();
+
+          // Catmull-Rom to cubic bezier path.
           ctx.save();
           ctx.beginPath();
           ctx.rect(plot.x, plot.y, plot.w, plot.h);
           ctx.clip();
-          ctx.fill();
-          ctx.restore();
 
-          // Stroke
+          const path = new Path2D();
+          path.moveTo(points[0].x, points[0].y);
+          for (let i = 0; i < points.length - 1; i++) {
+            const p0 = i > 0 ? points[i - 1] : points[i];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = i + 2 < points.length ? points[i + 2] : points[i + 1];
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+            path.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+          }
+
+          // Fill area.
+          const fillPath = new Path2D();
+          fillPath.moveTo(points[0].x, plot.y + plot.h);
+          fillPath.lineTo(points[0].x, points[0].y);
+          for (let i = 0; i < points.length - 1; i++) {
+            const p0 = i > 0 ? points[i - 1] : points[i];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = i + 2 < points.length ? points[i + 2] : points[i + 1];
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+            fillPath.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+          }
+          fillPath.lineTo(points[points.length - 1].x, plot.y + plot.h);
+          fillPath.closePath();
+
+          const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
+          grad.addColorStop(0, hexWithAlpha(color, 0.30));
+          grad.addColorStop(1, hexWithAlpha(color, 0.02));
+          ctx.fillStyle = grad;
+          ctx.fill(fillPath);
+
+          // Stroke.
           ctx.strokeStyle = color;
-          ctx.lineWidth = 1.6;
+          ctx.lineWidth = 1.8;
           ctx.lineJoin = 'round';
           ctx.lineCap = 'round';
-          ctx.beginPath();
-          for (let i = 0; i < values.length; i++) {
-            const x = startX + stride * i;
-            const v = Math.max(0, Math.min(maxVal, values[i]));
-            const y = plot.y + plot.h * (1 - v / maxVal);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          ctx.stroke(path);
+
+          // Dot at latest point.
+          if (points.length > 0) {
+            const last = points[points.length - 1];
+            ctx.beginPath();
+            ctx.arc(last.x, last.y, 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(last.x, last.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = hexWithAlpha(color, 0.25);
+            ctx.fill();
           }
-          ctx.stroke();
+
+          ctx.restore();
         }
 
         function hexWithAlpha(hex, alpha) {

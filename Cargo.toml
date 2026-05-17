@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "1.10.2"
+version = "1.11.0"
 authors = ["LAN Audio MVP Team"]
 
 [workspace.dependencies]

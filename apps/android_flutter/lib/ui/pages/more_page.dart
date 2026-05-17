@@ -190,21 +190,21 @@ class MorePage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
+        SizedBox(
+          width: double.infinity,
           child: SegmentedButton<int>(
             segments: [
               ButtonSegment(
                 value: 0,
-                label: Text(tr('发现设备', 'Discovered')),
+                label: Text(tr('发现', 'Discover'), overflow: TextOverflow.ellipsis),
               ),
               ButtonSegment(
                 value: 1,
-                label: Text(tr('手动地址', 'Manual')),
+                label: Text(tr('手动', 'Manual'), overflow: TextOverflow.ellipsis),
               ),
               ButtonSegment(
                 value: 2,
-                label: Text(tr('USB（adb）', 'USB (adb)')),
+                label: Text(tr('USB', 'USB'), overflow: TextOverflow.ellipsis),
               ),
             ],
             selected: <int>{connectMode},
@@ -432,20 +432,8 @@ class MorePage extends StatelessWidget {
                 Expanded(child: _codecChip('opus', 'Opus')),
                 const SizedBox(width: 6),
                 Expanded(child: _codecChip('pcm16', 'PCM 16')),
-                const SizedBox(width: 6),
-                Expanded(child: _codecChip('pcm24', 'PCM 24')),
               ],
             ),
-            if (preferredCodec == 'pcm24') ...[
-              const SizedBox(height: 6),
-              Text(
-                tr(
-                  'PCM 24 Hi-Res 直通路径正在开发，当前会自动回退到 Opus。',
-                  'PCM 24 Hi-Res passthrough is in development; the server will fall back to Opus.',
-                ),
-                style: const TextStyle(fontSize: 12, color: AudioConsoleColors.amber),
-              ),
-            ],
           ],
         ),
         // ─── Section: 均衡器 (Equalizer) ───
@@ -734,21 +722,14 @@ class MorePage extends StatelessWidget {
   }
 
   /// Phase 7 codec picker chip. `value` of `null` selects the auto/default.
-  /// `pcm24` is rendered greyed-out because the Hi-Res passthrough path is
-  /// not implemented yet — selecting it tells the server to fall back to
-  /// Opus, and surfaces the warning text in the parent card.
   Widget _codecChip(String? value, String label) {
     final selected = preferredCodec == value;
-    final disabled = value == 'pcm24';
     final bg = selected ? AudioConsoleColors.teal : AudioConsoleColors.surface;
     final fg = selected
         ? AudioConsoleColors.bg
-        : (disabled ? AudioConsoleColors.text3 : AudioConsoleColors.text);
+        : AudioConsoleColors.text;
     return InkWell(
       onTap: () {
-        // We still allow tapping pcm24 — it will be applied as a request,
-        // and the server's downgrade plus the in-card hint inform the user
-        // that passthrough is not yet available.
         onPreferredCodecChanged(value);
       },
       borderRadius: BorderRadius.circular(8),

@@ -1469,23 +1469,15 @@ impl PersistentSincResampler {
             oversampling_factor: 128,
             window: WindowFunction::BlackmanHarris2,
         };
-        let inner = SincFixedIn::<f32>::new(
-            out_rate as f64 / in_rate as f64,
-            2.0,
-            params,
-            in_frames,
-            2,
-        )
-        .ok()?;
+        let inner =
+            SincFixedIn::<f32>::new(out_rate as f64 / in_rate as f64, 2.0, params, in_frames, 2)
+                .ok()?;
         Some(Self {
             inner,
             in_rate,
             out_rate,
             in_frames,
-            planar_in: [
-                Vec::with_capacity(in_frames),
-                Vec::with_capacity(in_frames),
-            ],
+            planar_in: [Vec::with_capacity(in_frames), Vec::with_capacity(in_frames)],
         })
     }
 
@@ -1628,7 +1620,9 @@ impl AudioFrameEncoder {
                 }
                 None => {
                     warn!(
-                        in_rate, out_rate, in_frames,
+                        in_rate,
+                        out_rate,
+                        in_frames,
                         "rubato persistent init failed, falling back to nearest"
                     );
                     return to_fixed_stereo_10ms_nearest(frame, out_rate);
@@ -1651,22 +1645,21 @@ impl AudioFrameEncoder {
             resampler.planar_in[0].push(l);
             resampler.planar_in[1].push(r);
         }
-        let resampled = match rubato::Resampler::process(
-            &mut resampler.inner,
-            &resampler.planar_in,
-            None,
-        ) {
-            Ok(r) => r,
-            Err(err) => {
-                warn!(
-                    ?err, in_rate, out_rate,
-                    "rubato persistent process failed, falling back to nearest"
-                );
-                // Drop the broken resampler so the next call rebuilds.
-                self.persistent_resampler = None;
-                return to_fixed_stereo_10ms_nearest(frame, out_rate);
-            }
-        };
+        let resampled =
+            match rubato::Resampler::process(&mut resampler.inner, &resampler.planar_in, None) {
+                Ok(r) => r,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        in_rate,
+                        out_rate,
+                        "rubato persistent process failed, falling back to nearest"
+                    );
+                    // Drop the broken resampler so the next call rebuilds.
+                    self.persistent_resampler = None;
+                    return to_fixed_stereo_10ms_nearest(frame, out_rate);
+                }
+            };
         let avail = resampled[0].len().min(resampled[1].len());
         let mut out = Vec::with_capacity(out_frames * FIXED_OUTPUT_CHANNELS);
         for f in 0..out_frames {
@@ -2139,13 +2132,8 @@ fn resample_stereo_for_pcm24(frame: &AudioFrame, in_rate: u32, out_rate: u32) ->
         oversampling_factor: 128,
         window: WindowFunction::BlackmanHarris2,
     };
-    let resampler = SincFixedIn::<f32>::new(
-        out_rate as f64 / in_rate as f64,
-        2.0,
-        params,
-        in_frames,
-        2,
-    );
+    let resampler =
+        SincFixedIn::<f32>::new(out_rate as f64 / in_rate as f64, 2.0, params, in_frames, 2);
     let mut resampler = match resampler {
         Ok(r) => r,
         Err(err) => {
@@ -2263,10 +2251,8 @@ fn to_fixed_stereo_10ms(frame: &AudioFrame, out_rate: u32) -> Vec<f32> {
     // anything beyond stereo by averaging. Build the two channel vectors
     // explicitly so each gets its own real capacity (the `vec![X; n]`
     // form clones the same Vec and discards the inner capacity).
-    let mut planar_in: Vec<Vec<f32>> = vec![
-        Vec::with_capacity(in_frames),
-        Vec::with_capacity(in_frames),
-    ];
+    let mut planar_in: Vec<Vec<f32>> =
+        vec![Vec::with_capacity(in_frames), Vec::with_capacity(in_frames)];
     for f in 0..in_frames {
         let base = f * in_channels;
         let l = frame.samples_f32.get(base).copied().unwrap_or(0.0);
