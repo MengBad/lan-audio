@@ -1,6 +1,6 @@
 {
     "productName":  "LAN Audio",
-    "version":  "1.12.0",
+    "version":  "1.13.0",
     "identifier":  "com.example.lanaudio.desktop",
     "build":  {
                   "beforeDevCommand":  "",
