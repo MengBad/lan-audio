@@ -4,6 +4,62 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.13] - 2026-05-18
+
+### Added — Ultra Low Latency Mode
+
+- **Ultra-low-latency mode** (`ultra_low_latency`). Fourth playback mode targeting ≤30ms end-to-end latency for gaming and video sync scenarios.
+- **5ms capture frames**. WASAPI capture period reduced from 10ms to 5ms when ultra-low-latency mode is active, halving capture latency.
+- **PCM16 passthrough by default**. Ultra-low-latency mode skips Opus encoding entirely (0ms encode latency) and transmits raw PCM16 at 5ms frame cadence (200 packets/sec).
+- **Android playback profile**. `startBufferMs=10`, `maxBufferMs=60`, `frameDurationMs=5`, `dropThresholdMs=40` — aggressive jitter buffer for minimal playback delay.
+- **Auto-degradation**. When network jitter p95 exceeds 10ms over a sliding window, the mode automatically falls back to `low_latency` with reason `auto_degraded_jitter`.
+- **Protocol capability**. `supports_ultra_low_latency` field added to `ProtocolCapabilities`. Both peers must declare support for the mode to be activatable.
+- **UI**. Mode selector now shows 4 options: "极速 ≤30ms" / "低延迟 ~64ms" / "均衡" / "高质量".
+
+### Latency Budget
+
+| Stage | Before (low_latency) | Now (ultra_low_latency) |
+|-------|---------------------|--------------------------|
+| Capture | 10ms | 5ms |
+| Encode | 20ms (Opus) | 0ms (PCM16 passthrough) |
+| Transport | ~2ms | ~2ms |
+| Jitter buffer | 40ms | 10ms |
+| Playback | ~10ms | ~5ms (Oboe Exclusive) |
+| **Total** | **~64ms** | **~22ms** |
+
+## [1.12] - 2026-05-18
+
+### Fixed
+
+- **Windows window not appearing on startup**. The `tauri.conf.json` contained an invalid `"focus": true` field that caused Tauri to panic silently in release builds. Removed the invalid field; window now appears correctly with `visible: true` + `center: true`.
+- **ICO icon generation**. The icon generation script produced a 247-byte malformed ICO. Fixed to produce proper multi-size ICO (4962 bytes).
+
+### Changed
+
+- **System tray optimization**. Added "显示窗口" (Show Window), "退出" (Quit) menu items. Left-click tray icon now shows/focuses the window. Added tooltip "LAN Audio".
+- **New app icons**. Custom-designed icons for both Windows (.ico) and Android (mipmap) — dark rounded square with audio waveform bars and WiFi signal arc.
+- **Window dimensions**. Reduced from 1180×760 to 680×760 to match actual content width. Added `center: true` for centered startup.
+- **Product name**. Simplified from "LAN Audio Desktop Client" to "LAN Audio" across all surfaces.
+
+### Cleaned Up
+
+- **Version consistency**. Fixed `kAppVersion` from stale '1.8.3' to match VERSION file.
+- **Package rename**. `lan_audio_android_mvp` → `lan_audio_android` in pubspec.yaml.
+- **App label**. Changed from Chinese-only "LAN Audio 控制台" to universal "LAN Audio".
+- **Removed CAMERA permission**. Unnecessary for an audio streaming app.
+- **Removed PCM24 from UI**. Codec picker now shows only Auto / Opus / PCM 16 (protocol layer retained for future use).
+- **Debug section renamed**. "调试指标" → "高级信息" for less developer-facing appearance.
+- **Mic card hidden by default**. Only shown when virtual audio device is detected or mic is active.
+- **Stale docs removed**. Deleted `docs/roadmap-v1.4.md`, rewrote `docs/roadmap.md` for current state.
+
+## [1.11] - 2026-05-18
+
+### Changed — UI Polish & Latency Chart Redesign
+
+- **Latency chart Scheme A**. Replaced dual area-fill chart with: smooth Catmull-Rom curve (current) + dashed horizontal baseline reference + real-time ms value in top-right corner. Y-axis simplified to top/bottom labels only. Latest point highlighted with glowing dot.
+- **Windows desktop layout optimization**. Container widened to 560px, card padding/spacing tightened, QR code shrunk to 64px, latency chart height reduced to 70px.
+- **Android UI fixes**. Fixed mode selector button overflow (shortened labels), removed PCM24 codec option, removed mysterious white Divider line in mic section.
+
 ## [1.10.2] - 2026-05-16
 
 ### Fixed
