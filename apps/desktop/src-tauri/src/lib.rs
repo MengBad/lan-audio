@@ -24,7 +24,7 @@ use lan_audio_server::service::LanAudioService;
 use lan_audio_server::usb_transport::adb_devices;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -963,15 +963,26 @@ fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
         .build()?;
 
     let menu = MenuBuilder::new(app)
-        .text("check_updates", "检查更新")
+        .text("show_window", "显示窗口")
         .separator()
+        .text("check_updates", "检查更新")
         .item(&volume_menu)
+        .separator()
+        .text("quit", "退出")
         .build()?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("LAN Audio")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "show_window" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
             "check_updates" => {
                 if let Some(state) = app.try_state::<AppState>() {
                     spawn_update_check(
@@ -999,7 +1010,25 @@ fn setup_tray_menu(app: &tauri::App) -> tauri::Result<()> {
                     }
                 }
             }
+            "quit" => {
+                app.exit(0);
+            }
             _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
         })
         .build(app)?;
     Ok(())

@@ -1,35 +1,37 @@
 {
-    "$schema":  "https://schema.tauri.app/config/2",
-    "productName":  "LAN Audio Desktop Client",
-    "version":  "1.11.0",
-    "identifier":  "com.example.lanaudio.desktop",
-    "build":  {
-                  "beforeDevCommand":  "",
-                  "beforeBuildCommand":  "",
-                  "frontendDist":  "../web"
-              },
-    "app":  {
-                "withGlobalTauri":  true,
-                "windows":  [
-                                {
-                                    "label":  "main",
-                                    "title":  "LAN Audio Desktop Client",
-                                    "width":  1180,
-                                    "height":  760,
-                                    "minWidth":  980,
-                                    "minHeight":  680,
-                                    "resizable":  true
-                                }
-                            ],
-                "security":  {
-                                 "csp":  null
-                             }
-            },
-    "bundle":  {
-                   "active":  true,
-                   "targets":  "all",
-                   "icon":  [
-                                "icons/icon.ico"
-                            ]
-               }
+  "productName": "LAN Audio",
+  "version": "1.11.0",
+  "identifier": "com.example.lanaudio.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "LAN Audio",
+        "width": 620,
+        "height": 720,
+        "minWidth": 420,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "visible": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
 }
