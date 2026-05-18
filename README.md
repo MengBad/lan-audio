@@ -33,8 +33,8 @@ LAN Audio captures system audio from a Windows PC via WASAPI Loopback and stream
 ## Features
 
 ### Audio Pipeline
-- **Hi-Res PCM24 passthrough** — 24-bit 96 kHz native-rate streaming (Protocol v3), LAN-only
 - **Opus codec** — 48kHz VBR encoding with sinc resampler for non-48kHz sources
+- **PCM16 lossless** — uncompressed fallback for maximum compatibility
 - **Three playback modes** — low_latency (~64ms p95) / balanced / high_quality
 - **Native 3-band EQ** — biquad peaking filter on Oboe path (60Hz / 1kHz / 10kHz) with presets
 - **Loudness normalization** — auto gain control in balanced/high_quality modes
@@ -45,14 +45,20 @@ LAN Audio captures system audio from a Windows PC via WASAPI Loopback and stream
 - **USB mode** — stable wired connection via adb, no Wi-Fi required
 - **Auto-reconnect** — exponential backoff on network interruptions
 - **Multi-device** — up to 4 phones receiving simultaneously
-- **Remote volume** — control phone volume from PC
+- **Remote volume** — control phone volume from PC tray menu
 
 ### Android Client
-- **Codec picker** — choose Auto / Opus / PCM 16 / PCM 24 from the UI
-- **Latency chart** — real-time comparison of baseline vs current latency
+- **Codec picker** — choose Auto / Opus / PCM 16 from the UI
+- **Latency chart** — real-time smooth curve with dashed baseline reference and live ms readout
 - **Audio quality strip** — shows negotiated codec, sample rate, channels
 - **Reverse mic** — stream Android microphone back to PC (port 7878)
 - **Background playback** — ForegroundService with MediaSession, survives screen-off
+
+### Windows Desktop
+- **System tray** — left-click to show window, right-click for quick menu (volume, updates, quit)
+- **Compact UI** — Audio Console Dark theme, all controls visible without scrolling
+- **Auto-start streaming** — one-click start/stop with QR code for phone connection
+- **Safe mode** — one-click rollback to legacy path for troubleshooting
 
 ## Quick Start
 
@@ -87,7 +93,7 @@ cargo run -p lan_audio_server --bin desktop_headless -- --transport usb --adb-se
 | Audio capture | WASAPI Loopback (Windows) |
 | Desktop GUI | Tauri 2 + Rust |
 | Transport | UDP data + WebSocket control, Protocol v2/v3 |
-| Codec | Opus 48kHz VBR, PCM16, PCM24 |
+| Codec | Opus 48kHz VBR, PCM16 |
 | Android client | Flutter + Kotlin |
 | Audio output | Oboe (NDK), AudioTrack fallback |
 | Discovery | mDNS |
@@ -141,7 +147,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 | :--- | :--- |
 | [Protocol Spec](docs/protocol.md) | Wire format, packet structure, negotiation |
 | [Protocol v2 Migration](docs/protocol_v2_migration.md) | Migration guide from v1 to v2 |
-| [Hi-Res PCM24](docs/hires_pcm24.md) | PCM24 passthrough design spec |
 | [Architecture](docs/architecture.md) | System architecture overview |
 | [Desktop UI Design](docs/desktop_ui.md) | Desktop client UI spec |
 | [Dev Setup](docs/dev_setup.md) | Development environment setup |
