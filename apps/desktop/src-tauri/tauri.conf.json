@@ -1,37 +1,37 @@
 {
-  "productName": "LAN Audio",
-  "version": "1.11.0",
-  "identifier": "com.example.lanaudio.desktop",
-  "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
-    "frontendDist": "../web"
-  },
-  "app": {
-    "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "LAN Audio",
-        "width": 680,
-        "height": 760,
-        "minWidth": 480,
-        "minHeight": 600,
-        "resizable": true,
-        "center": true,
-        "visible": true,
-        "decorations": true
-      }
-    ],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/icon.ico"
-    ]
-  }
+    "productName":  "LAN Audio",
+    "version":  "1.12.0",
+    "identifier":  "com.example.lanaudio.desktop",
+    "build":  {
+                  "beforeDevCommand":  "",
+                  "beforeBuildCommand":  "",
+                  "frontendDist":  "../web"
+              },
+    "app":  {
+                "withGlobalTauri":  true,
+                "windows":  [
+                                {
+                                    "label":  "main",
+                                    "title":  "LAN Audio",
+                                    "width":  680,
+                                    "height":  760,
+                                    "minWidth":  480,
+                                    "minHeight":  600,
+                                    "resizable":  true,
+                                    "center":  true,
+                                    "visible":  true,
+                                    "decorations":  true
+                                }
+                            ],
+                "security":  {
+                                 "csp":  null
+                             }
+            },
+    "bundle":  {
+                   "active":  true,
+                   "targets":  "all",
+                   "icon":  [
+                                "icons/icon.ico"
+                            ]
+               }
 }
