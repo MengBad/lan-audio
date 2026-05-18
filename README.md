@@ -35,10 +35,12 @@ LAN Audio captures system audio from a Windows PC via WASAPI Loopback and stream
 ### Audio Pipeline
 - **Opus codec** — 48kHz VBR encoding with sinc resampler for non-48kHz sources
 - **PCM16 lossless** — uncompressed fallback for maximum compatibility
-- **Three playback modes** — low_latency (~64ms p95) / balanced / high_quality
+- **Four playback modes** — ultra_low_latency (≤30ms) / low_latency (~64ms) / balanced / high_quality
+- **5ms frame duration** — ultra-low-latency mode uses 5ms capture and transport frames for minimal pipeline delay
 - **Native 3-band EQ** — biquad peaking filter on Oboe path (60Hz / 1kHz / 10kHz) with presets
 - **Loudness normalization** — auto gain control in balanced/high_quality modes
 - **Adaptive runtime** — server-side CPU + queue watchdog auto-downgrades codec under pressure
+- **Auto-degradation** — ultra-low-latency mode automatically falls back to low_latency when network jitter is too high
 
 ### Connectivity
 - **Auto-discovery** — mDNS scan finds nearby servers, no manual IP needed
