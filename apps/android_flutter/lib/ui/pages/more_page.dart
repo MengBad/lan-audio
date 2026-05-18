@@ -552,7 +552,7 @@ class MorePage extends StatelessWidget {
           child: ExpansionTile(
           tilePadding: EdgeInsets.zero,
           title: Text(
-            tr('调试指标', 'Debug Metrics'),
+            tr('高级信息', 'Advanced Info'),
             style: const TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 16,
@@ -629,12 +629,18 @@ class MorePage extends StatelessWidget {
             const SizedBox(height: 6),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(6),
-              color: Colors.black,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AudioConsoleColors.bg2,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AudioConsoleColors.border),
+              ),
               child: Text(
-                wsLog.isEmpty ? '(empty)' : wsLog,
+                wsLog.isEmpty ? tr('无日志', 'No logs') : wsLog,
                 style: const TextStyle(
-                    color: Colors.greenAccent, fontSize: 11),
+                    color: AudioConsoleColors.text2,
+                    fontSize: 10,
+                    fontFamily: 'monospace'),
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
               ),
