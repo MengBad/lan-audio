@@ -1604,6 +1604,8 @@ class _MainShellState extends State<MainShell> {
 
   AudioModePreference _modeFromId(String id) {
     switch (id) {
+      case 'ultra_low_latency':
+        return AudioModePreference.ultraLowLatency;
       case 'low_latency':
         return AudioModePreference.lowLatency;
       case 'high_quality':
