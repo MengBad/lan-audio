@@ -154,6 +154,7 @@ enum ConnectMode {
 }
 
 enum AudioModePreference {
+  ultraLowLatency,
   lowLatency,
   balanced,
   highQuality,
@@ -328,6 +329,8 @@ class _MainShellState extends State<MainShell> {
 
   AudioModePreference _audioModeFromWire(String value) {
     switch (value) {
+      case 'ultra_low_latency':
+        return AudioModePreference.ultraLowLatency;
       case 'low_latency':
         return AudioModePreference.lowLatency;
       case 'high_quality':
@@ -339,6 +342,8 @@ class _MainShellState extends State<MainShell> {
 
   String _audioModeWire(AudioModePreference mode) {
     switch (mode) {
+      case AudioModePreference.ultraLowLatency:
+        return 'ultra_low_latency';
       case AudioModePreference.lowLatency:
         return 'low_latency';
       case AudioModePreference.highQuality:
@@ -350,6 +355,8 @@ class _MainShellState extends State<MainShell> {
 
   String _audioModeLabel(AudioModePreference mode) {
     switch (mode) {
+      case AudioModePreference.ultraLowLatency:
+        return tr('极速', 'Ultra');
       case AudioModePreference.lowLatency:
         return tr('低延迟', 'Low Latency');
       case AudioModePreference.highQuality:
@@ -1584,6 +1591,8 @@ class _MainShellState extends State<MainShell> {
 
   String _modeId(AudioModePreference mode) {
     switch (mode) {
+      case AudioModePreference.ultraLowLatency:
+        return 'ultra_low_latency';
       case AudioModePreference.lowLatency:
         return 'low_latency';
       case AudioModePreference.balanced:
@@ -1743,19 +1752,24 @@ class _MainShellState extends State<MainShell> {
     _maybeSelectRecentOrFirst();
     final modeItems = <ModeSelectorItem>[
       ModeSelectorItem(
+        id: 'ultra_low_latency',
+        name: tr('极速', 'Ultra'),
+        desc: tr('≤30ms', '≤30ms'),
+      ),
+      ModeSelectorItem(
         id: 'low_latency',
-        name: tr('低延迟', 'Low Latency'),
-        desc: tr('游戏/视频', 'Games/Video'),
+        name: tr('低延迟', 'Low'),
+        desc: tr('~64ms', '~64ms'),
       ),
       ModeSelectorItem(
         id: 'balanced',
         name: tr('均衡', 'Balanced'),
-        desc: tr('日常使用', 'Daily'),
+        desc: tr('日常', 'Daily'),
       ),
       ModeSelectorItem(
         id: 'high_quality',
-        name: tr('高质量', 'High Quality'),
-        desc: tr('音乐欣赏', 'Music'),
+        name: tr('高质量', 'HQ'),
+        desc: tr('音乐', 'Music'),
       ),
     ];
 
@@ -1881,6 +1895,8 @@ class _MainShellState extends State<MainShell> {
       return null;
     }
     switch (mode) {
+      case AudioModePreference.ultraLowLatency:
+        return 64.0; // baseline is the old low_latency performance
       case AudioModePreference.lowLatency:
         return 110.0;
       case AudioModePreference.balanced:

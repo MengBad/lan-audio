@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
             supports_hires_pcm24: false,
+            supports_ultra_low_latency: true,
         },
         preferred_audio_mode: AudioMode::Balanced,
     });

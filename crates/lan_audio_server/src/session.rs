@@ -1021,6 +1021,7 @@ fn legacy_client_capabilities() -> ProtocolCapabilities {
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
         supports_hires_pcm24: false,
+        supports_ultra_low_latency: false,
     }
 }
 
@@ -1082,6 +1083,7 @@ pub(crate) fn default_server_capabilities() -> ProtocolCapabilities {
         supports_usb_direct_future: false,
         supports_reverse_channel: false,
         supports_hires_pcm24: false,
+        supports_ultra_low_latency: true,
     }
 }
 

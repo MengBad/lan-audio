@@ -1864,6 +1864,7 @@ impl ExperimentalOpusEncoder {
 
 fn apply_opus_mode_settings(encoder: &mut LibOpusEncoder, mode: AudioMode) {
     let (bitrate_bps, complexity, use_vbr) = match mode {
+        AudioMode::UltraLowLatency => (48_000, 0, false),
         AudioMode::LowLatency => (64_000, 1, false),
         AudioMode::Balanced => (96_000, 2, true),
         AudioMode::HighQuality => (128_000, 4, true),
@@ -1893,7 +1894,7 @@ fn apply_opus_mode_settings(encoder: &mut LibOpusEncoder, mode: AudioMode) {
 
 fn opus_application(mode: AudioMode) -> LibOpusApplication {
     match mode {
-        AudioMode::LowLatency => LibOpusApplication::LowDelay,
+        AudioMode::UltraLowLatency | AudioMode::LowLatency => LibOpusApplication::LowDelay,
         AudioMode::Balanced | AudioMode::HighQuality => LibOpusApplication::Audio,
     }
 }

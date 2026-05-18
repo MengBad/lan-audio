@@ -43,6 +43,12 @@ pub struct TierEncoderProfile {
 pub fn tier_encoder_profile(tier: DegradationTier, mode: AudioMode) -> TierEncoderProfile {
     // Baseline = the per-mode defaults that existed before adaptive degrade.
     let baseline = match mode {
+        AudioMode::UltraLowLatency => TierEncoderProfile {
+            bitrate_bps: 48_000,
+            complexity: 0,
+            use_vbr: false,
+            force_pcm16_fallback: true,
+        },
         AudioMode::LowLatency => TierEncoderProfile {
             bitrate_bps: 64_000,
             complexity: 1,

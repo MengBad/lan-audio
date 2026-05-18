@@ -1442,8 +1442,9 @@
         let timer = null;
 
         function modeBaseline(modeId) {
-          // Pre-optimization (v1.7-and-earlier) reference latency per mode.
+          // Pre-optimization reference latency per mode.
           switch (modeId) {
+            case 'ultra_low_latency': return 64;
             case 'low_latency': return 110;
             case 'high_quality': return 320;
             default: return 180;

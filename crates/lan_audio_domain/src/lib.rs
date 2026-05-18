@@ -4,6 +4,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioMode {
+    UltraLowLatency,
     LowLatency,
     #[default]
     Balanced,
@@ -105,6 +106,24 @@ pub struct ModeContract {
 
 pub fn mode_contract(mode: AudioMode) -> ModeContract {
     match mode {
+        AudioMode::UltraLowLatency => ModeContract {
+            mode,
+            preferred_transport: vec![TransportType::Usb, TransportType::Wifi],
+            preferred_codec: AudioCodecPreference::Pcm16,
+            target_buffer_ms: BufferTargetMs { min: 5, max: 20 },
+            late_policy: LatePolicy::AggressiveDrop,
+            recovery_policy: RecoveryPolicy::FastResync,
+            output_backend_priority: vec![OutputBackend::FastPath],
+            promise: "ultra low latency, gaming/video sync".to_string(),
+            tuning: PlaybackTuning {
+                start_buffer_ms: 10,
+                max_buffer_ms: 60,
+                batch_frames: 1,
+                drop_threshold_ms: 40,
+                frame_duration_ms: 5,
+                reset_buffer_on_switch: true,
+            },
+        },
         AudioMode::LowLatency => ModeContract {
             mode,
             preferred_transport: vec![TransportType::Usb, TransportType::Wifi],

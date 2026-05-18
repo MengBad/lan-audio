@@ -126,6 +126,11 @@ pub struct ProtocolCapabilities {
     /// `false` so older peers stay on the Opus / Pcm16 path.
     #[serde(default)]
     pub supports_hires_pcm24: bool,
+    /// Ultra-low-latency mode capability. The peer supports 5ms frame
+    /// duration, exclusive audio output, and aggressive jitter buffer
+    /// settings for ≤30ms end-to-end latency.
+    #[serde(default)]
+    pub supports_ultra_low_latency: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -895,6 +900,7 @@ mod tests {
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
             supports_hires_pcm24: false,
+            supports_ultra_low_latency: true,
         };
         let json = serde_json::to_string(&caps).expect("serialize caps");
         let decoded: ProtocolCapabilities = serde_json::from_str(&json).expect("deserialize caps");
@@ -937,6 +943,7 @@ mod tests {
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
                 supports_hires_pcm24: false,
+                supports_ultra_low_latency: true,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -974,6 +981,7 @@ mod tests {
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
                 supports_hires_pcm24: false,
+                supports_ultra_low_latency: true,
             },
             message: "ok".to_string(),
         });
@@ -1022,6 +1030,7 @@ mod tests {
                 supports_usb_direct_future: false,
                 supports_reverse_channel: false,
                 supports_hires_pcm24: false,
+                supports_ultra_low_latency: true,
             },
             preferred_audio_mode: AudioMode::Balanced,
         });
@@ -1436,6 +1445,7 @@ mod tests {
             supports_usb_direct_future: false,
             supports_reverse_channel: false,
             supports_hires_pcm24: false,
+            supports_ultra_low_latency: true,
         };
         let json = serde_json::to_string(&caps).unwrap();
         assert!(json.contains("supports_reverse_channel"));

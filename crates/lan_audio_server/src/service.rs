@@ -259,6 +259,7 @@ impl LanAudioService {
 
 fn audio_mode_txt(mode: AudioMode) -> &'static str {
     match mode {
+        AudioMode::UltraLowLatency => "ultra_low_latency",
         AudioMode::LowLatency => "low_latency",
         AudioMode::Balanced => "balanced",
         AudioMode::HighQuality => "high_quality",
