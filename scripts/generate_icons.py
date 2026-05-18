@@ -90,8 +90,9 @@ def generate_windows_ico():
 
     ico_path = os.path.join(REPO_ROOT, "apps", "desktop", "src-tauri", "icons", "icon.ico")
     os.makedirs(os.path.dirname(ico_path), exist_ok=True)
-    images[0].save(ico_path, format="ICO", sizes=[(s, s) for s in sizes], append_images=images[1:])
-    print(f"Generated: {ico_path}")
+    # Save the largest image first, append smaller ones.
+    images[-1].save(ico_path, format="ICO", append_images=images[:-1])
+    print(f"Generated: {ico_path} ({os.path.getsize(ico_path)} bytes)")
 
 
 def generate_android_icons():
