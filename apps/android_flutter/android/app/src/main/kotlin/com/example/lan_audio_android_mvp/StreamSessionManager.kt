@@ -287,6 +287,7 @@ class StreamSessionManager(
                                 "supports_stable_audio_track" to true,
                                 "supports_usb_tethering" to true,
                                 "supports_usb_direct_future" to false,
+                                "supports_ultra_low_latency" to true,
                             ),
                         ),
                     )

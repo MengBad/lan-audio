@@ -1493,10 +1493,27 @@ class PlaybackSessionRuntime(
             recentArrivalIntervalsMs.addLast(interval)
         }
 
-        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "low_latency") {
+        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "low_latency" &&
+            PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) != "ultra_low_latency") {
             adaptiveStableSinceMs = 0
             adaptiveStartBufferMs = null
             jitterP95Ms = null
+            return
+        }
+
+        // Ultra-low-latency auto-degradation: if jitter p95 exceeds 10ms,
+        // automatically switch to low_latency mode.
+        if (PlaybackModeProfiles.normalize(stateStore.current().currentAudioMode) == "ultra_low_latency") {
+            if (recentArrivalIntervalsMs.size >= JITTER_P95_WINDOW_FRAMES) {
+                val p95 = percentile95(recentArrivalIntervalsMs)
+                jitterP95Ms = p95
+                if (p95 > 10) {
+                    Log.w(logTag, "ultra_low_latency auto-degrade: jitter p95=${p95}ms > 10ms, switching to low_latency")
+                    setAudioMode("low_latency", reason = "auto_degraded_jitter")
+                    return
+                }
+            }
+            // For ultra_low_latency, don't apply the adaptive buffer boost — just degrade.
             return
         }
         if (recentArrivalIntervalsMs.isEmpty()) {

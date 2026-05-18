@@ -145,6 +145,26 @@ object PlaybackModeProfiles {
     fun forMode(mode: String, transportHint: TransportHint = TransportHint.Wifi): PlaybackModeProfile {
         val normalized = normalize(mode)
         val base = when (normalized) {
+            "ultra_low_latency" -> PlaybackModeProfile(
+                mode = "ultra_low_latency",
+                transportHint = transportHint,
+                startBufferMs = 10,
+                maxBufferMs = 60,
+                batchFrames = 1,
+                dropThresholdMs = 40,
+                targetTotalLatencyMs = 30,
+                maxTotalLatencyMs = 50,
+                audioQueueSoftCapMs = 15,
+                bufferingEnterDelayMs = 60,
+                preferLowLatencyPath = true,
+                preferStableAudioTrack = false,
+                preferredCodec = "pcm16",
+                preferredSampleFormat = "pcm16",
+                lowLatencyBufferMultiplier = 1,
+                lowLatencyFallbackBufferMultiplier = 2,
+                frameDurationMs = 5,
+                resetBufferOnSwitch = true,
+            )
             "low_latency" -> PlaybackModeProfile(
                 mode = "low_latency",
                 transportHint = transportHint,
@@ -244,6 +264,7 @@ object PlaybackModeProfiles {
 
     fun normalize(mode: String): String {
         return when (mode.lowercase()) {
+            "ultra_low_latency" -> "ultra_low_latency"
             "low_latency" -> "low_latency"
             "high_quality" -> "high_quality"
             else -> "balanced"
