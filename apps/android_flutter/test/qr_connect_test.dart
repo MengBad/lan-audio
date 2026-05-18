@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/main.dart';
+import 'package:lan_audio_android/main.dart';
 
 void main() {
   test('parseLanAudioUri accepts host and ws port', () {

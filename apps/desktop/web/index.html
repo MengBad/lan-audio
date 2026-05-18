@@ -515,8 +515,8 @@
         <canvas id="latencyCanvas" width="440" height="70"></canvas>
       </div>
 
-      <!-- Mic / Virtual Device Status (first-class card) -->
-      <div class="card" id="micCard">
+      <!-- Mic / Virtual Device Status (hidden by default, shown when relevant) -->
+      <div class="card is-hidden" id="micCard">
         <div class="section-title">🎤 <span id="micCardTitle">麦克风反向通道</span></div>
         <div class="usb-row">状态: <strong id="micStatusText">未激活</strong></div>
         <div class="usb-row" id="micWarningRow" style="display:none;color:var(--warn);">
@@ -618,7 +618,7 @@
           rollbackConfirm: '切换到回滚模式将使用 PCM16 编码,延迟更高但兼容性更好。\n确认切换?',
           qrTitle: '扫码连接',
           qrSubtitle: 'Android 端扫码后会自动填入并连接。',
-          dump: '导出 capture wav(调试)',
+          dump: '录制音频到文件',
           exportDiag: '导出诊断包',
           exportDiagDone: '诊断包已导出: {path}',
           updateBannerText: '发现新版本 v{version}',
@@ -730,7 +730,7 @@
           rollbackConfirm: 'Switching to rollback mode uses PCM16 encoding. Latency is higher, but compatibility is better.\nContinue?',
           qrTitle: 'Scan to connect',
           qrSubtitle: 'Scan from Android to fill and connect automatically.',
-          dump: 'Export capture wav (debug)',
+          dump: 'Record audio to file',
           exportDiag: 'Export support bundle',
           exportDiagDone: 'Support bundle exported: {path}',
           updateBannerText: 'New version v{version} is available',
@@ -1220,11 +1220,14 @@
           logPane.appendChild(div);
         });
 
-        // Mic / virtual device status
+        // Mic / virtual device status — only show card when mic is active or there's a warning
+        const micCard = document.getElementById('micCard');
         const micStatus = document.getElementById('micStatusText');
         const micWarningRow = document.getElementById('micWarningRow');
         const micWarningText = document.getElementById('micWarningText');
         const micHelpText = document.getElementById('micHelpText');
+        const showMic = snapshot.mic_active || snapshot.virtual_device_warning || snapshot.virtual_device_detected;
+        micCard.classList.toggle('is-hidden', !showMic);
         if (snapshot.mic_active) {
           micStatus.textContent = `活跃 · ${snapshot.mic_peak_db?.toFixed(0) ?? '-'} dB`;
           micStatus.style.color = 'var(--accent)';

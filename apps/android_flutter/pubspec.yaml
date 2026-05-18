@@ -1,5 +1,5 @@
-name: lan_audio_android_mvp
-description: LAN Audio Android debug client MVP.
+name: lan_audio_android
+description: LAN Audio — stream Windows PC audio to Android over Wi-Fi or USB.
 publish_to: "none"
 version: 1.11.0+3110
 

@@ -1,8 +1,8 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/audio/jitter_buffer.dart';
-import 'package:lan_audio_android_mvp/audio/las_packet.dart';
+import 'package:lan_audio_android/audio/jitter_buffer.dart';
+import 'package:lan_audio_android/audio/las_packet.dart';
 
 void main() {
   test('jitter buffer starts after enough buffered frames', () {

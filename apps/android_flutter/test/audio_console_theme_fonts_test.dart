@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/ui/audio_console_theme.dart';
+import 'package:lan_audio_android/ui/audio_console_theme.dart';
 
 void main() {
   test('theme and semantic text styles use expected font families', () {

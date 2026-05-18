@@ -19,7 +19,7 @@ import 'ui/pages/play_page.dart';
 import 'ui/pages/power_saving_guide_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
-const String kAppVersion = '1.8.3';
+const String kAppVersion = '1.11';
 const String kUiBuildTag = 'UI build: audio-console-dark-v$kAppVersion';
 const bool kUseBackgroundPlaybackService = true;
 
@@ -33,7 +33,7 @@ class LanAudioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LAN Audio Console',
+      title: 'LAN Audio',
       theme: buildAudioConsoleTheme(),
       home: const MainShell(),
       routes: {
@@ -1761,7 +1761,7 @@ class _MainShellState extends State<MainShell> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(tr('LAN Audio 控制台', 'LAN Audio Console')),
+        title: Text(tr('LAN Audio', 'LAN Audio')),
         actions: [
           IconButton(
             key: const Key('advanced_debug_entry'),

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/ui/audio_console_status.dart';
+import 'package:lan_audio_android/ui/audio_console_status.dart';
 
 void main() {
   test('maps to streaming when runtime state is streaming', () {

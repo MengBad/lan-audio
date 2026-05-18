@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/update_version.dart';
+import 'package:lan_audio_android/update_version.dart';
 
 void main() {
   test('v1.7 greater than v1.6 reports update', () {

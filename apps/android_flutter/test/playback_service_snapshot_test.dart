@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/audio/background_playback_service.dart';
+import 'package:lan_audio_android/audio/background_playback_service.dart';
 
 void main() {
   test('PlaybackServiceSnapshot parses stable service snapshot contract', () {

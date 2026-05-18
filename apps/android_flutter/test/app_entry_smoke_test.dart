@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/main.dart';
-import 'package:lan_audio_android_mvp/ui/mic_status_widget.dart';
-import 'package:lan_audio_android_mvp/ui/widgets/danger_action_button.dart';
-import 'package:lan_audio_android_mvp/ui/widgets/mode_selector_widget.dart';
+import 'package:lan_audio_android/main.dart';
+import 'package:lan_audio_android/ui/mic_status_widget.dart';
+import 'package:lan_audio_android/ui/widgets/danger_action_button.dart';
+import 'package:lan_audio_android/ui/widgets/mode_selector_widget.dart';
 
 void main() {
   testWidgets('app entry uses Audio Console Dark instead of MVP UI',
@@ -19,7 +19,7 @@ void main() {
     expect(app.theme?.brightness, Brightness.dark);
 
     // App title is correct (not MVP)
-    expect(app.title, equals('LAN Audio Console'));
+    expect(app.title, equals('LAN Audio'));
 
     // No MVP string anywhere in the widget tree
     expect(find.textContaining('MVP'), findsNothing);
@@ -31,7 +31,7 @@ void main() {
     expect(find.byType(ModeSelectorWidget), findsOneWidget);
     expect(find.byType(DangerActionButton), findsOneWidget);
     // JitterGraphWidget is conditionally rendered (only when streaming),
-    // so it may not be present in idle state — verify MicStatusWidget instead.
+    // so it may not be present in idle state 鈥?verify MicStatusWidget instead.
     // MicStatusWidget is on the Audio tab (offstage in IndexedStack).
     expect(find.byType(MicStatusWidget, skipOffstage: false), findsOneWidget);
 

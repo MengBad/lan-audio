@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/ui/metric_display_sampler.dart';
+import 'package:lan_audio_android/ui/metric_display_sampler.dart';
 
 void main() {
   test('buffer metric sampler publishes at most once per second', () {

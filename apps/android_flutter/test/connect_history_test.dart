@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lan_audio_android_mvp/connect_history.dart';
+import 'package:lan_audio_android/connect_history.dart';
 
 void main() {
   test('history upsert increments and keeps latest connection first', () {
