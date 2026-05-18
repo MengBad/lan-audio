@@ -47,7 +47,7 @@ pub fn tier_encoder_profile(tier: DegradationTier, mode: AudioMode) -> TierEncod
             bitrate_bps: 48_000,
             complexity: 0,
             use_vbr: false,
-            force_pcm16_fallback: true,
+            force_pcm16_fallback: false,
         },
         AudioMode::LowLatency => TierEncoderProfile {
             bitrate_bps: 64_000,
