@@ -273,6 +273,7 @@ impl ServerConfig {
                         .next()
                         .ok_or_else(|| anyhow!("missing value for --audio-mode"))?;
                     self.current_audio_mode = match value.as_str() {
+                        "ultra_low_latency" => AudioMode::UltraLowLatency,
                         "low_latency" => AudioMode::LowLatency,
                         "balanced" => AudioMode::Balanced,
                         "high_quality" => AudioMode::HighQuality,

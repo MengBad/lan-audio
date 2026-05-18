@@ -1240,9 +1240,15 @@ impl UdpTransport {
     }
 
     fn build_synthetic_source(&self) -> Box<dyn AudioCaptureSource> {
+        let frame_duration_ms = if self.cfg.current_audio_mode == AudioMode::UltraLowLatency {
+            5
+        } else {
+            10
+        };
         let format = AudioFormat {
             sample_rate_hz: self.cfg.sample_rate,
             channels: self.cfg.channels as u16,
+            frame_duration_ms,
             ..AudioFormat::default()
         };
         match self.cfg.synthetic_signal {
@@ -1255,9 +1261,15 @@ impl UdpTransport {
     }
 
     fn build_windows_loopback_source(&self) -> anyhow::Result<Box<dyn AudioCaptureSource>> {
+        let frame_duration_ms = if self.cfg.current_audio_mode == AudioMode::UltraLowLatency {
+            5
+        } else {
+            10
+        };
         let format = AudioFormat {
             sample_rate_hz: self.cfg.sample_rate,
             channels: self.cfg.channels as u16,
+            frame_duration_ms,
             ..AudioFormat::default()
         };
         let source = WindowsLoopbackCapture::new_default_output(
