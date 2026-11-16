@@ -695,8 +695,13 @@ class MainActivity : FlutterActivity() {
                         (it as? Number)?.toInt()
                     } ?: emptyList()
                     val jitterP50Us = (metrics?.get("jitter_p50_us") as? Number)?.toInt() ?: 0
-                    val jitterP95Us = (metrics?.get("jitter_p95_ms") as? Number)?.let { it.toInt() * 1000 } ?: 0
-                    val underrun = (metrics?.get("jitterUnderrun") as? Number)?.toInt() ?: 0
+                    val jitterP95Ms = (metrics?.get("jitter_p95_ms") as? Number)?.toInt()
+                        ?: (metrics?.get("jitterP95Ms") as? Number)?.toInt()
+                        ?: 0
+                    val jitterP95Us = jitterP95Ms * 1000
+                    val underrun = (metrics?.get("underrun") as? Number)?.toInt()
+                        ?: (metrics?.get("jitterUnderrun") as? Number)?.toInt()
+                        ?: 0
 
                     val payload: Map<String, Any?> = mapOf(
                         "jitterHistoryUs" to jitterHistory,

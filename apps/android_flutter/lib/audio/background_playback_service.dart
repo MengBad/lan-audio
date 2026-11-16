@@ -262,4 +262,8 @@ class BackgroundPlaybackService {
         await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('getSnapshot');
     return PlaybackServiceSnapshot.fromMap(raw ?? const <String, dynamic>{});
   }
+
+  void dispose() {
+    _events = null;
+  }
 }

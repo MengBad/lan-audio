@@ -191,7 +191,9 @@ impl Default for ServerConfig {
             current_audio_mode: AudioMode::Balanced,
             codec_selection: CodecSelection::Opus,
             data_plane_format: DataPlaneFormat::V2Header,
-            allow_loopback_v2_header_gray: false,
+            // Default main path keeps windows_loopback + v2_header + opus;
+            // the flag only gates the extra loopback v2 gray rollout path.
+            allow_loopback_v2_header_gray: true,
             transport_mode: TransportMode::WiFi,
             force_rollback: false,
             reverse_channel_enabled: false,
@@ -332,15 +334,23 @@ impl ServerConfig {
 pub fn select_data_plane_format(
     desired: DataPlaneFormat,
     audio_source: AudioSourceKind,
-    _allow_loopback_v2_header_gray: bool,
+    allow_loopback_v2_header_gray: bool,
 ) -> DataPlaneFormat {
     if desired != DataPlaneFormat::V2Header {
         return desired;
     }
 
+    // Gate only the windows_loopback v2-gray data plane; synthetic v2 stays
+    // available for tests and explicit rollback config keeps legacy as-is.
     match audio_source {
         AudioSourceKind::Synthetic => desired,
-        AudioSourceKind::WindowsLoopback => desired,
+        AudioSourceKind::WindowsLoopback => {
+            if allow_loopback_v2_header_gray {
+                DataPlaneFormat::V2Header
+            } else {
+                DataPlaneFormat::LegacyLas1
+            }
+        }
     }
 }
 

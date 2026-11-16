@@ -1261,8 +1261,8 @@
         // V2 protocol path / active data plane / rollback availability
         const parts = [];
         if (snapshot.protocol_path) parts.push(`${t('protocolPath')}: ${snapshot.protocol_path}`);
-        if (snapshot.active_data_plane) {
-          parts.push(`${t('activeDataPlane')}: ${dataPlaneName(snapshot.active_data_plane)}`);
+        if (snapshot.service_snapshot?.active_data_plane) {
+          parts.push(`${t('activeDataPlane')}: ${dataPlaneName(snapshot.service_snapshot.active_data_plane)}`);
         }
         parts.push(t(snapshot.rollback_available ? 'rollbackAvailable' : 'rollbackUnavailable'));
         document.getElementById('v2StatusValue').textContent = parts.join(' · ');
@@ -1306,9 +1306,9 @@
 
         const captureLines = [
           `<div>${t('captureFrames')}: ${num(m.capture_frames)}</div>`,
-          `<div>${t('captureErrors')}: ${num(m.capture_errors)}</div>`,
-          m.capture_source ? `<div>${t('captureSource')}: ${m.capture_source}</div>` : '',
-          typeof m.peak_rms === 'number' ? `<div>${t('peakRms')}: ${m.peak_rms}</div>` : '',
+          `<div>${t('captureErrors')}: ${num(m.capture_read_errors)}</div>`,
+          m.current_audio_source ? `<div>${t('captureSource')}: ${m.current_audio_source}</div>` : '',
+          typeof m.capture_last_peak === 'number' ? `<div>${t('peakRms')}: ${m.capture_last_peak}</div>` : '',
           `<div>${t('rttMs')}: ${num(runtimeMetrics.rtt_ms)}</div>`,
           `<div>${t('reconnectCount')}: ${num(runtimeMetrics.reconnect_count)}</div>`,
           `<div>${t('decodeErrors')}: ${num(runtimeMetrics.decode_errors)}</div>`,

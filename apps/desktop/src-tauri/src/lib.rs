@@ -536,6 +536,16 @@ fn check_for_updates(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    // Only allow vetted links used by the UI (VB-Cable download).
+    const ALLOWED: &[&str] = &["https://vb-audio.com/Cable/"];
+    if !ALLOWED.contains(&url.as_str()) {
+        return Err("url not allowed".to_string());
+    }
+    open::that_detached(url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn open_release_page(state: State<'_, AppState>) -> Result<(), String> {
     let url = state
         .update_state
@@ -1092,6 +1102,7 @@ pub fn run() {
             get_connection_qr_svg,
             check_for_updates,
             open_release_page
+            open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

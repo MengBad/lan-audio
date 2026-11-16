@@ -4,6 +4,14 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.16.2] - 2026-05-25
+
+### Fixed — Final Release Candidate
+
+- Deep audit fixes: CI Flutter pinned to 3.41.6 (unblocks Gradle 8.9 build); backend gray-toggle honored with default main path preserved; desktop snapshot field names corrected and `open_external_url` registered with URL allowlist; Android EventChannel lifecycle, jitter metric keys and async setState guards fixed.
+- `bump_version.ps1` UTF-8 corruption root cause fixed and verified (Chinese content preserved on bump).
+- Main path `windows_loopback + v2_header + opus`; rollback `legacy_las1 + pcm16` retained. Known unverified: device long-run on current UI build, USB direct 10min, duplicate client_key teardown.
+
 ## [1.16.1] - 2026-05-25
 
 ### Fixed — Release Pipeline

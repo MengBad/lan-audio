@@ -143,3 +143,16 @@ cargo run -p lan_audio_server --bin desktop_headless -- --no-adaptive-runtime
 ## 9. 接手结论
 
 代码主路径、回滚路径、发布门控、版本一致性、生产入口测试、规则文档这六条接手基线现已**落地并可用**；`check_version_sync.ps1` / `assert_release_gate.ps1` / `cargo fmt` / `flutter analyze` / `flutter test` 全套实跑通过，`cargo check` / `cargo test` 受本机缺 MSVC linker 阻塞（已记录，不写成通过）。真机长稳与部分历史 known_issue 仍是**未验证**，按 P0 排队。当前停在 `v1.15` 已发布之后的"继续灰度/继续修复"状态，本轮不发版、不提交、不打 tag。
+## 10. v1.16.1 深度体检与最终修复（2026-05-25）
+
+四维度只读体检（Android / Windows 桌面 / Rust 后端 / 工程发布）后发现并修复：
+- **工程 P0**：CI Flutter 从 `channel: stable` 固定为 `3.41.6`（本地全绿版本），规避 Flutter 3.47+ 要求 Gradle≥9.3.1 而项目为 8.9 的构建失败；`AGENTS.md` / `docs/roadmap.md` 版本标题对齐 v1.16.1。
+- **后端 P0**：`select_data_plane_format` 真正使用灰度开关（默认 true 保持 windows_loopback+v2_header 主路径，flag=false 时回退 legacy_las1）；灰度开关测试契约同步。
+- **桌面 P1**：前端 snapshot 字段名修正（`active_data_plane` 取 `service_snapshot`，采集指标取 `capture_read_errors`/`current_audio_source`/`capture_last_peak`）；补 `open_external_url` 命令（URL 白名单）。
+- **Android P1**：EventChannel 流 dispose 清理、jitter p95/underrun 指标键对齐、异步 setState 补 mounted 守卫。
+
+**已知未修（如实记录，不写成已稳定）**：
+- 后端 FIX2：重复 client_key 重连时旧 WebSocket writer 无 per-client 关闭句柄，可能残留到对端断开（需扩展 `ClientHandle` 存 shutdown 信号，跨 handle_client/registry，风险高，本轮不动）。
+- 桌面 Rust：`commands.rs`/`state.rs`/`orchestrator.rs` 为死代码（`lib.rs` 未 mod 声明），真实逻辑在 lib.rs；三文件与运行实现已漂移，后续应删除或接入，避免误改。
+- 门控证据：`artifacts/release/acceptance_gate.json` 的 artifact-presence 字段为历史值；本机无 v1.16.1 本地产物，最终 APK/EXE 由 GitHub Actions 云端产出。真机长稳样本仍是 2026-04-22 debug 构建，**当前 UI 构建未做长稳验证**。
+- 发布按"人工判定 + CI 编译门控"执行：编译/CI/门控契约全过；真机长稳与 USB direct 10min 仍列为未验证。

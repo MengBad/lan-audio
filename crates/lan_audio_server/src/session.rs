@@ -1241,11 +1241,12 @@ mod tests {
 
     #[test]
     fn negotiate_session_path_recommends_loopback_v2_by_default() {
+        // Default config carries allow_loopback_v2_header_gray=true, which is
+        // what makes the windows_loopback main path stay on v2_header + opus.
         let cfg = ServerConfig {
             data_plane_format: DataPlaneFormat::V2Header,
             codec_selection: CodecSelection::Opus,
             audio_source: AudioSourceKind::WindowsLoopback,
-            allow_loopback_v2_header_gray: false,
             ..ServerConfig::default()
         };
 

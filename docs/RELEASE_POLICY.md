@@ -2,8 +2,8 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.16.1`
-- Current version (short version): `1.16.1`
+- Latest shipped release: `v1.16.2`
+- Current version (short version): `1.16.2`
 - Current tracked gate decision: `allow_release`
 - FORCE_RELEASE: `false` (set `FORCE_RELEASE=true` or pass `-ForceRelease` to `scripts/release.ps1`; only manual acceptance fields are overridden and recorded as `human_override` in `artifacts/release/acceptance_gate.json`; validation, packaging, CI, blocking codes and rollback-contract checks still run)
 - Main path: `windows_loopback + v2_header + opus`

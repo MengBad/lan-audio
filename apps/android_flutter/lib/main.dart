@@ -21,7 +21,7 @@ import 'ui/pages/power_saving_guide_page.dart';
 import 'ui/pages/settings_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
-const String kAppVersion = '1.16.1';
+const String kAppVersion = '1.16.2';
 const String kUiBuildTag = 'UI build: audio-console-dark-v$kAppVersion';
 const bool kUseBackgroundPlaybackService = true;
 
@@ -1209,6 +1209,7 @@ class _MainShellState extends State<MainShell> {
           serverName: serverName,
           transportMode: transportMode,
         );
+        if (!mounted) return;
         setState(() {
           _recentConnectedHosts[host] = DateTime.now();
           _serviceTargetHost = host;
@@ -1221,7 +1222,9 @@ class _MainShellState extends State<MainShell> {
           wsPort: wsPort,
           serverName: serverName,
         );
+        if (!mounted) return;
       } catch (e) {
+        if (!mounted) return;
         setState(() {
           _status = '${tr('后台服务启动失败', 'service start failed')}: $e';
         });
@@ -1348,7 +1351,9 @@ class _MainShellState extends State<MainShell> {
         wsPort: wsPort,
         serverName: serverName,
       );
+      if (!mounted) return;
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _wsConnected = false;
         _status = '${tr('连接失败', 'connect failed')}: $e';
@@ -1600,6 +1605,7 @@ class _MainShellState extends State<MainShell> {
   Future<void> _toggleMicCapture() async {
     if (_micEnabled) {
       await _micService.stop();
+      if (!mounted) return;
       _micEnabled = false;
       setState(() {});
       return;
@@ -1649,9 +1655,11 @@ class _MainShellState extends State<MainShell> {
     if (host == null || host.isEmpty) {
       _micService.status = MicStatus.error;
       _micService.errorMessage = 'No server connected';
+      if (!mounted) return;
       setState(() {});
       return;
     }
+    if (!mounted) return;
     _micEnabled = true;
     setState(() {});
     try {
@@ -1661,6 +1669,7 @@ class _MainShellState extends State<MainShell> {
       _micService.status = MicStatus.error;
       _micService.errorMessage = 'Failed to start mic capture';
     }
+    if (!mounted) return;
     setState(() {});
   }
 
