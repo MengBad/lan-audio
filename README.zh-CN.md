@@ -1,4 +1,4 @@
-当前版本（短版本）：`1.16`
+当前版本（短版本）：`1.16.1`
 
 <p align="center">
   <h1 align="center">LAN Audio</h1>

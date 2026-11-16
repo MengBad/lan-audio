@@ -21,7 +21,7 @@ import 'ui/pages/power_saving_guide_page.dart';
 import 'ui/pages/settings_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
-const String kAppVersion = '1.16';
+const String kAppVersion = '1.16.1';
 const String kUiBuildTag = 'UI build: audio-console-dark-v$kAppVersion';
 const bool kUseBackgroundPlaybackService = true;
 

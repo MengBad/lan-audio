@@ -2,8 +2,8 @@
 
 ## Release State
 
-- Current version (short version): `1.16`
-- Latest release: `v1.16`
+- Current version (short version): `1.16.1`
+- Latest release: `v1.16.1`
 - Release gate: `allow_release`
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`

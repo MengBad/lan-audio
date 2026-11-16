@@ -21,7 +21,7 @@
 
 ---
 
-Current version: `1.16`
+Current version: `1.16.1`
 
 ## Overview
 

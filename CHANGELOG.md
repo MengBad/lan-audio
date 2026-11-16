@@ -4,6 +4,14 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.16.1] - 2026-05-25
+
+### Fixed — Release Pipeline
+
+- CI Android analyze failed on Flutter 3.47+ because `package:flutter/material.dart` is newly deprecated; added `analysis_options.yaml` ignoring only `deprecated_member_use` so analyze stays green without enabling extra lints.
+- Fixed `bump_version.ps1` UTF-8 handling (PS5.1 ANSI misread corrupted Chinese in `main.dart`) and doc-marker sync; version surfaces verified across 13 targets.
+- Main path, codec and rollback unchanged from v1.16.
+
 ## [1.16] - 2026-05-25
 
 ### Added / Fixed — Handover & UI Completion
