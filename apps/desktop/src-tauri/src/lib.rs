@@ -1101,8 +1101,8 @@ pub fn run() {
             export_support_bundle,
             get_connection_qr_svg,
             check_for_updates,
-            open_release_page
-            open_external_url,
+            open_release_page,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
