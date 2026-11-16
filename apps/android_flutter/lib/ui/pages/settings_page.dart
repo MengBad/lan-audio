@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../services/mic_capture_service.dart';
 import '../../widgets/capsule_button.dart';
 import '../audio_console_theme.dart';
+import '../../../main.dart' show kAppVersion;
+import '../mic_status_widget.dart';
 
 /// Settings tab page (index 2) with grouped card layout.
 ///
@@ -167,6 +169,12 @@ class SettingsPage extends StatelessWidget {
           runSpacing: AudioConsoleSpacing.xs,
           children: [
             CapsuleButton(
+              key: const Key('settings_codec_auto'),
+              label: tr('自动', 'Auto'),
+              selected: preferredCodec == null,
+              onTap: () => onPreferredCodecChanged(null),
+            ),
+            CapsuleButton(
               label: 'Opus (${tr('推荐', 'Recommended')})',
               selected: preferredCodec == 'opus',
               onTap: () => onPreferredCodecChanged('opus'),
@@ -284,6 +292,15 @@ class SettingsPage extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: AudioConsoleSpacing.xxs),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        key: const Key('settings_buffer_reset'),
+                        onPressed: () => onBufferMsChanged?.call(null),
+                        child: Text(tr('重置为默认', 'Reset to default')),
+                      ),
+                    ),
                   ],
                 )
               : const SizedBox.shrink(),
@@ -311,6 +328,39 @@ class SettingsPage extends StatelessWidget {
               onChanged: (value) => onSetEq(enabled: value),
               activeTrackColor: AudioConsoleColors.tealDim,
               activeThumbColor: AudioConsoleColors.teal,
+            ),
+          ],
+        ),
+
+        // EQ preset chips
+        const SizedBox(height: AudioConsoleSpacing.xs),
+        Wrap(
+          spacing: AudioConsoleSpacing.xs,
+          runSpacing: AudioConsoleSpacing.xs,
+          children: [
+            CapsuleButton(
+              key: const Key('eq_preset_flat'),
+              label: tr('平直', 'Flat'),
+              selected: false,
+              onTap: () => onApplyEqPreset('flat'),
+            ),
+            CapsuleButton(
+              key: const Key('eq_preset_bass'),
+              label: tr('低音增强', 'Bass'),
+              selected: false,
+              onTap: () => onApplyEqPreset('bass'),
+            ),
+            CapsuleButton(
+              key: const Key('eq_preset_vocal'),
+              label: tr('人声清晰', 'Vocal'),
+              selected: false,
+              onTap: () => onApplyEqPreset('vocal'),
+            ),
+            CapsuleButton(
+              key: const Key('eq_preset_bright'),
+              label: tr('高频亮丽', 'Bright'),
+              selected: false,
+              onTap: () => onApplyEqPreset('bright'),
             ),
           ],
         ),
@@ -430,75 +480,14 @@ class SettingsPage extends StatelessWidget {
   // ─── Microphone Section ───
 
   Widget _buildMicrophoneContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Mic enable/disable toggle
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              tr('麦克风反向通道', 'Mic Reverse Channel'),
-              style: AudioConsoleType.body(),
-            ),
-            Switch(
-              value: micEnabled,
-              onChanged: (_) => onToggleMic(),
-              activeTrackColor: AudioConsoleColors.tealDim,
-              activeThumbColor: AudioConsoleColors.teal,
-            ),
-          ],
-        ),
-
-        // Mic status info
-        if (micEnabled) ...[
-          const SizedBox(height: AudioConsoleSpacing.sm),
-          _buildMicStatusRow(
-            label: tr('目标主机', 'Target Host'),
-            value: serviceTargetHost ?? '--',
-          ),
-          const SizedBox(height: AudioConsoleSpacing.xxs),
-          _buildMicStatusRow(
-            label: tr('端口', 'Port'),
-            value: reverseChannelPort.toString(),
-          ),
-          const SizedBox(height: AudioConsoleSpacing.xxs),
-          _buildMicStatusRow(
-            label: tr('状态', 'Status'),
-            value: _micStatusLabel(micService.status),
-          ),
-        ],
-      ],
+    return MicStatusWidget(
+      service: micService,
+      host: serviceTargetHost,
+      reversePort: reverseChannelPort,
+      enabled: micEnabled,
+      onToggle: onToggleMic,
+      isZh: isZh,
     );
-  }
-
-  Widget _buildMicStatusRow({required String label, required String value}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
-        ),
-        Text(
-          value,
-          style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text),
-        ),
-      ],
-    );
-  }
-
-  String _micStatusLabel(MicStatus status) {
-    switch (status) {
-      case MicStatus.off:
-        return tr('关闭', 'Off');
-      case MicStatus.connecting:
-        return tr('连接中', 'Connecting');
-      case MicStatus.streaming:
-        return tr('传输中', 'Streaming');
-      case MicStatus.error:
-        return tr('错误', 'Error');
-    }
   }
 
   /// Builds the app settings content with language, theme, update, toggles, and debug info.
@@ -594,6 +583,15 @@ class SettingsPage extends StatelessWidget {
 
         const SizedBox(height: AudioConsoleSpacing.lg),
 
+        // ── Background playback guide ──
+        ListTile(
+          key: const Key('settings_background_playback'),
+          contentPadding: EdgeInsets.zero,
+          title: Text(tr('后台播放', 'Background Playback')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onOpenPowerSavingGuide,
+        ),
+
         // ── Check update button ──
         Center(
           child: updateCheckRunning
@@ -622,6 +620,17 @@ class SettingsPage extends StatelessWidget {
         ),
 
         const SizedBox(height: AudioConsoleSpacing.lg),
+
+        // ── Version ──
+        ListTile(
+          key: const Key('settings_version_row'),
+          contentPadding: EdgeInsets.zero,
+          title: Text(tr('版本', 'Version')),
+          trailing: Text(
+            kAppVersion,
+            style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
+          ),
+        ),
 
         // ── Expandable debug info card ──
         _buildDebugInfoCard(),

@@ -98,7 +98,7 @@ function Update-LineByRegexOrFail {
         [Parameter(Mandatory = $true)][string]$Replacement
     )
 
-    $raw = Get-Content -Raw $Path
+    $raw = [System.IO.File]::ReadAllText((Resolve-Path $Path), [System.Text.Encoding]::UTF8)
     $matched = [regex]::IsMatch($raw, $Pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
     if (-not $matched) {
         throw "Pattern not found in $Path"
@@ -120,9 +120,10 @@ function Update-DocVersionMarker {
         return
     }
 
-    $raw = Get-Content -Raw $Path
+    $raw = [System.IO.File]::ReadAllText((Resolve-Path $Path), [System.Text.Encoding]::UTF8)
     $bt = [char]96
-    $replacement = "- 当前版本（短版本）：$bt$ShortVersion$bt"
+    $replacementCn = "- 当前版本（短版本）：$bt$ShortVersion$bt"
+    $replacementEn = "- Current version (short version): $bt$ShortVersion$bt"
     $newRaw = [regex]::Replace($raw, '(?m)^- 当前版本（短版本）：`[^`]+`$', $replacement)
     $newRaw = [regex]::Replace($newRaw, '(?m)^Current version: `[^`]+`$', "Current version: $bt$ShortVersion$bt")
     if ($newRaw -ne $raw) {
@@ -178,7 +179,11 @@ else {
 }
 Write-Utf8NoBom -Path $localPropsPath -Content $localProps
 
+Update-LineByRegexOrFail -Path (Join-Path $repoRoot 'apps/android_flutter/lib/main.dart') -Pattern "const String kAppVersion = '[^']+';" -Replacement "const String kAppVersion = '$targetShort';"
+
 Update-DocVersionMarker -Path (Join-Path $repoRoot 'README.md') -ShortVersion $targetShort
+Update-DocVersionMarker -Path (Join-Path $repoRoot 'README.zh-CN.md') -ShortVersion $targetShort
+Update-DocVersionMarker -Path (Join-Path $repoRoot 'docs/roadmap.md') -ShortVersion $targetShort
 Update-DocVersionMarker -Path (Join-Path $repoRoot 'docs/todo.md') -ShortVersion $targetShort
 Update-DocVersionMarker -Path (Join-Path $repoRoot 'docs/RELEASE_POLICY.md') -ShortVersion $targetShort
 

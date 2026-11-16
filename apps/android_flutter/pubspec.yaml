@@ -1,7 +1,7 @@
 name: lan_audio_android
-description: LAN Audio 闁?stream Windows PC audio to Android over Wi-Fi or USB.
+description: Stream Windows PC audio to Android over Wi-Fi or USB.
 publish_to: "none"
-version: 1.15.0+3150
+version: 1.16.0+3160
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

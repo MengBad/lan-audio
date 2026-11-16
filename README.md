@@ -21,6 +21,8 @@
 
 ---
 
+Current version: `1.16`
+
 ## Overview
 
 LAN Audio captures system audio from a Windows PC via WASAPI Loopback and streams it in real-time to Android devices on the same local network. Supports Wi-Fi and USB (adb) connections with automatic mDNS discovery.
@@ -155,6 +157,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 | [Known Issues](docs/known_issues.md) | Known bugs and limitations |
 | [Roadmap](docs/roadmap.md) | Feature roadmap |
 | [Release Policy](docs/RELEASE_POLICY.md) | Versioning & release process |
+| [Maintenance Plan](docs/MAINTENANCE_PLAN.md) | Handover baseline, maintenance cadence, red lines |
 
 > For Chinese documentation, see [README.zh-CN.md](README.zh-CN.md)
 

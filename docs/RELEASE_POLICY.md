@@ -2,9 +2,10 @@
 
 ## Current Release State
 
-- Latest shipped release: `v1.7.2`
+- Latest shipped release: `v1.16`
+- Current version (short version): `1.16`
 - Current tracked gate decision: `allow_release`
-- FORCE_RELEASE: `false`
+- FORCE_RELEASE: `false` (set `FORCE_RELEASE=true` or pass `-ForceRelease` to `scripts/release.ps1`; only manual acceptance fields are overridden and recorded as `human_override` in `artifacts/release/acceptance_gate.json`; validation, packaging, CI, blocking codes and rollback-contract checks still run)
 - Main path: `windows_loopback + v2_header + opus`
 - Rollback path: `legacy_las1 + pcm16`
 
@@ -34,13 +35,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\validate_local.ps1
 
 This runs:
 
-1. `cargo fmt --all -- --check`
-2. `cargo check`
-3. `cargo test -p lan_audio_protocol -p lan_audio_server`
-4. `cargo check -p lan_audio_desktop`
-5. `flutter analyze`
-6. `flutter test`
-7. `android/gradlew.bat assembleDebug`
+1. `scripts/check_version_sync.ps1`
+2. `cargo fmt --all -- --check`
+3. `cargo check`
+4. `cargo test -p lan_audio_protocol -p lan_audio_server`
+5. `cargo check -p lan_audio_desktop`
+6. `flutter analyze`
+7. `flutter test`
+8. `android/gradlew.bat assembleDebug`
+
+Before tagging, `scripts/assert_release_gate.ps1` must also pass. Both checks run in CI (`.github/workflows/ci.yml`, job `version-sync`).
 
 ## Packaging
 
@@ -101,7 +105,7 @@ A release is allowed only when all of the following are true:
 - there are no critical bugs
 - there are no blocking failure codes
 
-## v1.7 Release Record
+## v1.7 Release Record (historical)
 
 `v1.7` is a standard release, not a FORCE_RELEASE.
 
@@ -176,11 +180,13 @@ This must produce evidence showing:
 
 Release notes should include:
 
-- current Protocol v2 status
+- current Protocol v2 / v3 status
+- codec status (opus default, pcm16 rollback, pcm24 capability-gated)
+- MediaSession / update-detection status and verified / unverified scope
 - default main path
 - rollback path
 - latency probe values
-- v1.7 feature list
+- shipped feature list for the tagged version
 - verified scope
 - known limitations
 - APK signing note

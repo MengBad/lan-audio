@@ -146,7 +146,31 @@ class PlayPage extends StatelessWidget {
               color: AudioConsoleColors.text,
             ),
           ),
+          const SizedBox(height: 6),
+          // Compact status chip + detail line from MainShell state.
+          Container(
+            key: const Key('play_status_chip'),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: AudioConsoleColors.surface2,
+              borderRadius: AudioConsoleRadius.button,
+              border: Border.all(color: AudioConsoleColors.border),
+            ),
+            child: Text(
+              statusChipLabel,
+              key: const Key('play_status_chip_label'),
+              textAlign: TextAlign.center,
+              style: AudioConsoleType.monoMeta(color: AudioConsoleColors.teal),
+            ),
+          ),
           const SizedBox(height: 4),
+          Text(
+            statusText,
+            key: const Key('play_status_text'),
+            textAlign: TextAlign.center,
+            style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
+          ),
+          const SizedBox(height: 8),
           // Server name — 13px gray (AudioConsoleColors.text2)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,

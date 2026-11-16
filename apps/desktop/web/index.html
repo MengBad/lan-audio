@@ -459,6 +459,8 @@
           <span id="statusHeadline"></span>
         </div>
         <div class="addr" id="addrValue"></div>
+        <div class="addr" id="recommendedConnectionRow" style="display:none;"></div>
+        <div class="usb-device-list" id="recentClientsList" style="display:none;"></div>
 
         <!-- QR + connection (only when running) -->
         <div class="qr-row" id="qrPanel">
@@ -559,9 +561,13 @@
             <div><span id="versionLabel">版本</span>: <span id="versionValue"></span></div>
             <div><span id="sessionLabel">会话</span>: <span id="sessionValue"></span></div>
             <div><span id="modeLabel">模式</span>: <span id="modeValue"></span></div>
+            <div id="v2StatusRow"><span id="v2StatusLabel"></span>: <span id="v2StatusValue"></span></div>
+            <div id="connStatusRow"><span id="connStatusLabel"></span>: <span id="connStatusValue"></span></div>
           </div>
 
           <!-- Capture metrics + state -->
+          <div class="debug-meta" id="modeProfileRow" style="display:none;"></div>
+
           <div class="debug-groups">
             <div>
               <div class="group-title" id="groupTx"></div>
@@ -682,6 +688,28 @@
           latencyLegendCurrent: '当前',
           healthStreamLabel: '推流',
           healthDevicesLabel: '设备',
+          recentClientsLabel: '最近设备',
+          protocolPath: '协议路径',
+          v2Status: 'V2 状态',
+          activeDataPlane: '当前数据面',
+          rollbackAvailable: '可回滚到 Legacy',
+          rollbackUnavailable: '无回滚路径',
+          modeProfile: '模式参数',
+          startBufferMs: '起始缓冲',
+          maxBufferMs: '最大缓冲',
+          batchFrames: '批量帧',
+          dropThresholdMs: '丢弃阈值',
+          preferredBackend: '首选后端',
+          connectionStatus: '连接状态',
+          grayModeOn: '灰度开启',
+          grayModeOff: '灰度关闭',
+          txPackets: '发送包',
+          txBytes: '发送字节',
+          activeSessions: '活跃会话',
+          captureFrames: '采集帧',
+          captureErrors: '采集错误',
+          captureSource: '采集源',
+          peakRms: '峰值RMS',
           logSummaryLabel: '运行日志',
           settingsSectionTitle: '推流设置',
           micCardTitle: '麦克风反向通道',
@@ -795,6 +823,28 @@
           latencyLegendCurrent: 'Now',
           healthStreamLabel: 'Stream',
           healthDevicesLabel: 'Devices',
+          recentClientsLabel: 'Recent devices',
+          protocolPath: 'Protocol path',
+          v2Status: 'V2 status',
+          activeDataPlane: 'Active data plane',
+          rollbackAvailable: 'Rollback to Legacy available',
+          rollbackUnavailable: 'No rollback path',
+          modeProfile: 'Mode profile',
+          startBufferMs: 'Start buffer',
+          maxBufferMs: 'Max buffer',
+          batchFrames: 'Batch frames',
+          dropThresholdMs: 'Drop threshold',
+          preferredBackend: 'Preferred backend',
+          connectionStatus: 'Connection',
+          grayModeOn: 'Gray on',
+          grayModeOff: 'Gray off',
+          txPackets: 'TX packets',
+          txBytes: 'TX bytes',
+          activeSessions: 'Active sessions',
+          captureFrames: 'Capture frames',
+          captureErrors: 'Capture errors',
+          captureSource: 'Capture source',
+          peakRms: 'Peak RMS',
           logSummaryLabel: 'Runtime logs',
           settingsSectionTitle: 'Streaming Settings',
           micCardTitle: 'Mic Reverse Channel',
@@ -943,6 +993,10 @@
         renderFirewallGuidance(text);
       }
 
+      function num(value) {
+        return (typeof value === 'number' && isFinite(value)) ? value : 0;
+      }
+
       function runtimeSnapshot(snapshot) {
         return snapshot?.service_snapshot || {};
       }
@@ -1086,6 +1140,8 @@
 
         document.getElementById('healthStreamLabel').textContent = t('healthStreamLabel');
         document.getElementById('healthDevicesLabel').textContent = t('healthDevicesLabel');
+        document.getElementById('v2StatusLabel').textContent = t('v2Status');
+        document.getElementById('connStatusLabel').textContent = t('connectionStatus');
         document.getElementById('logsSummary').textContent = t('logsSummary');
         document.getElementById('micCardTitle').textContent = t('micCardTitle');
 
@@ -1172,6 +1228,24 @@
         document.getElementById('healthDevicesValue').textContent =
           snapshot.connected_devices > 0 ? String(snapshot.connected_devices) : t('noDevice');
 
+        // Recommended connection (backend-provided)
+        const recRow = document.getElementById('recommendedConnectionRow');
+        const recommended = typeof snapshot.recommended_connection === 'string' ? snapshot.recommended_connection.trim() : '';
+        recRow.style.display = recommended ? 'block' : 'none';
+        recRow.textContent = recommended ? `${t('recommendedConnection')}: ${recommended}` : '';
+
+        // Recent clients (up to 4), one short line each
+        const clientsBox = document.getElementById('recentClientsList');
+        const clients = Array.isArray(snapshot.recent_clients) ? snapshot.recent_clients.slice(0, 4) : [];
+        clientsBox.innerHTML = '';
+        clientsBox.style.display = clients.length ? 'grid' : 'none';
+        clients.forEach((client) => {
+          const line = document.createElement('div');
+          line.className = 'usb-row';
+          line.textContent = String(client);
+          clientsBox.appendChild(line);
+        });
+
         // Debug-meta values
         document.getElementById('sessionValue').textContent =
           t(`session_${runtime.state}`) || runtime.state || snapshot.session_status || '';
@@ -1184,20 +1258,63 @@
         document.getElementById('protocolValue').textContent = `v${snapshot.protocol_version}`;
         document.getElementById('versionValue').textContent = snapshot.version || '';
 
+        // V2 protocol path / active data plane / rollback availability
+        const parts = [];
+        if (snapshot.protocol_path) parts.push(`${t('protocolPath')}: ${snapshot.protocol_path}`);
+        if (snapshot.active_data_plane) {
+          parts.push(`${t('activeDataPlane')}: ${dataPlaneName(snapshot.active_data_plane)}`);
+        }
+        parts.push(t(snapshot.rollback_available ? 'rollbackAvailable' : 'rollbackUnavailable'));
+        document.getElementById('v2StatusValue').textContent = parts.join(' · ');
+
+        // Connection status + gray mode
+        const connParts = [];
+        if (snapshot.connection_status) connParts.push(String(snapshot.connection_status));
+        connParts.push(t(snapshot.gray_mode ? 'grayModeOn' : 'grayModeOff'));
+        if (snapshot.loopback_v2_header_gray_enabled) connParts.push(t('v2Header'));
+        document.getElementById('connStatusValue').textContent = connParts.join(' · ');
+
+        // Mode profile summary (only when present)
+        const profile = snapshot.mode_profile && typeof snapshot.mode_profile === 'object'
+          ? snapshot.mode_profile : null;
+        const profileRow = document.getElementById('modeProfileRow');
+        if (profile) {
+          const pparts = [t('modeProfile')];
+          if (typeof profile.start_buffer_ms === 'number') pparts.push(`${t('startBufferMs')}: ${profile.start_buffer_ms}ms`);
+          if (typeof profile.max_buffer_ms === 'number') pparts.push(`${t('maxBufferMs')}: ${profile.max_buffer_ms}ms`);
+          if (typeof profile.batch_frames === 'number') pparts.push(`${t('batchFrames')}: ${profile.batch_frames}`);
+          if (typeof profile.drop_threshold_ms === 'number') pparts.push(`${t('dropThresholdMs')}: ${profile.drop_threshold_ms}ms`);
+          if (profile.preferred_backend) pparts.push(`${t('preferredBackend')}: ${profile.preferred_backend}`);
+          profileRow.textContent = pparts.join(' · ');
+          profileRow.style.display = 'block';
+        } else {
+          profileRow.textContent = '';
+          profileRow.style.display = 'none';
+        }
+
         // Debug groups (compact)
-        document.getElementById('debugTx').innerHTML =
-          `<div>${t('bufferedMs')}: ${runtimeMetrics.buffered_ms ?? 0}</div>` +
-          `<div>${t('captureUnderruns')}: ${runtimeMetrics.underrun ?? 0}</div>` +
-          `<div>${t('latePackets')}: ${runtimeMetrics.late_packets ?? 0}</div>` +
-          `<div>${t('droppedPackets')}: ${runtimeMetrics.dropped_packets ?? 0}</div>`;
-
-        document.getElementById('debugCapture').innerHTML =
-          `<div>${t('rttMs')}: ${runtimeMetrics.rtt_ms ?? 0}</div>` +
-          `<div>${t('reconnectCount')}: ${runtimeMetrics.reconnect_count ?? 0}</div>` +
-          `<div>${t('decodeErrors')}: ${runtimeMetrics.decode_errors ?? 0}</div>` +
-          `<div>${t('sinkWriteGap')}: ${runtimeMetrics.sink_write_gap_ms_p95 ?? 0}</div>`;
-
         const m = snapshot.metrics || {};
+
+        document.getElementById('debugTx').innerHTML =
+          `<div>${t('txPackets')}: ${num(m.tx_packets)}</div>` +
+          `<div>${t('txBytes')}: ${num(m.tx_bytes)}</div>` +
+          `<div>${t('activeSessions')}: ${num(m.active_sessions)}</div>` +
+          `<div>${t('bufferedMs')}: ${num(runtimeMetrics.buffered_ms)}</div>` +
+          `<div>${t('captureUnderruns')}: ${num(runtimeMetrics.underrun)}</div>` +
+          `<div>${t('latePackets')}: ${num(runtimeMetrics.late_packets)}</div>` +
+          `<div>${t('droppedPackets')}: ${num(runtimeMetrics.dropped_packets)}</div>`;
+
+        const captureLines = [
+          `<div>${t('captureFrames')}: ${num(m.capture_frames)}</div>`,
+          `<div>${t('captureErrors')}: ${num(m.capture_errors)}</div>`,
+          m.capture_source ? `<div>${t('captureSource')}: ${m.capture_source}</div>` : '',
+          typeof m.peak_rms === 'number' ? `<div>${t('peakRms')}: ${m.peak_rms}</div>` : '',
+          `<div>${t('rttMs')}: ${num(runtimeMetrics.rtt_ms)}</div>`,
+          `<div>${t('reconnectCount')}: ${num(runtimeMetrics.reconnect_count)}</div>`,
+          `<div>${t('decodeErrors')}: ${num(runtimeMetrics.decode_errors)}</div>`,
+          `<div>${t('sinkWriteGap')}: ${num(runtimeMetrics.sink_write_gap_ms_p95)}</div>`,
+        ];
+        document.getElementById('debugCapture').innerHTML = captureLines.join('');
         document.getElementById('debugState').innerHTML =
           `<div>${t('serviceStatus')}: ${snapshot.service_status}</div>` +
           `<div>${t('sessionStatus')}: ${runtime.state || snapshot.session_status || '-'}</div>` +
@@ -1254,12 +1371,11 @@
         // Loss indicator next to latency value
         const lossEl = document.getElementById('lossValue');
         if (lossEl) {
-          const dropped = runtimeMetrics.dropped_packets ?? 0;
-          const late = runtimeMetrics.late_packets ?? 0;
-          const totalPackets = runtimeMetrics.udp_packets ?? runtimeMetrics.total_packets ?? 0;
-          const totalLoss = dropped + late;
-          if (snapshot.service_status === 'running') {
-            const lossPct = totalPackets > 0 ? ((totalLoss / totalPackets) * 100) : 0;
+          const txPackets = num(m.tx_packets);
+          const totalLoss = num(runtimeMetrics.dropped_packets) + num(runtimeMetrics.late_packets);
+          // Show loss only when the backend actually sent packets.
+          if (snapshot.service_status === 'running' && txPackets > 0) {
+            const lossPct = (totalLoss / txPackets) * 100;
             lossEl.textContent = `${t('lossLabel')} ${lossPct.toFixed(1)}%`;
             lossEl.style.display = 'inline';
             if (lossPct <= 0) {
@@ -1271,6 +1387,7 @@
             }
           } else {
             lossEl.style.display = 'none';
+            lossEl.textContent = '';
           }
         }
 

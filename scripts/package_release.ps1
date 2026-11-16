@@ -8,6 +8,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$forceRelease = ($env:FORCE_RELEASE -eq 'true')
+if ($forceRelease) {
+    Write-Warning 'FORCE_RELEASE=true: manual acceptance fields are human-override; validation/artifact/rollback checks still run.'
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -88,6 +93,7 @@ function Assert-PackagingGate {
     }
 
     $blockingReasons = New-Object System.Collections.Generic.List[string]
+    $manualFields = @('rewrite_validate_passed', 'device_acceptance_passed', 'acceptance_json_present')
     foreach ($field in @(
         'validate_local_passed',
         'rewrite_validate_passed',
@@ -96,7 +102,12 @@ function Assert-PackagingGate {
         'rollback_verified'
     )) {
         if (-not [bool]$gate.$field) {
-            $blockingReasons.Add("$field=false")
+            if ($forceRelease -and ($manualFields -contains $field)) {
+                Write-Warning "FORCE_RELEASE: manual field '$field' is [human-override]."
+            }
+            else {
+                $blockingReasons.Add("$field=false")
+            }
         }
     }
     if ([int]$gate.known_blockers -gt 0) {

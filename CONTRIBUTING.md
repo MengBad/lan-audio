@@ -44,7 +44,8 @@ Thanks for helping improve LAN Audio. This project ships a Windows sender and an
 - Use one of these prefixes: `feat`, `fix`, `chore`, `refactor`, `docs`.
 - Format: `feat: short description`.
 - Keep each pull request focused on one change.
-- Run `scripts/validate_local.ps1` before opening a pull request.
+- Run `scripts/validate_local.ps1` before opening a pull request (it includes `scripts/check_version_sync.ps1`).
+- Read `docs/MAINTENANCE_PLAN.md` for the current maintenance priorities and red lines.
 - Do not remove or hide the rollback path.
 
 ## Architecture

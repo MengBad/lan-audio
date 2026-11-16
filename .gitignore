@@ -4,6 +4,8 @@
 
 # Flutter / Dart
 .dart_tool/
+.flutter/
+.flutter_tool_state
 .packages
 .pub/
 build/
@@ -12,13 +14,19 @@ build/
 node_modules/
 dist/
 
+# Local stray content (not part of this product)
+.superpowers/
+.tmp/
+LAN Audio/
+docs/anima_project_overview.md
+docs/anima_evolution_plan.md
+
 # IDE & AI tools
 .vscode/
 .idea/
 .claude/
 .kiro/
 .impeccable.md
-AGENTS.md
 
 # OS
 .DS_Store
@@ -41,15 +49,16 @@ ui_fix_*.png
 v18_ui_check.png
 
 # Internal planning & AI prompts
-docs/todo.md
-docs/roadmap.md
 docs/roadmap-v1.4.md
 docs/codex-*.md
 docs/code_review_*.md
 docs/android_visual_regression.md
 
 # Generated validation artifacts
-artifacts/
+artifacts/*
+!artifacts/release/
+!artifacts/release/acceptance_gate.json
+!artifacts/release/device_acceptance.json
 
 # Android
 apps/android_flutter/android/.gradle/

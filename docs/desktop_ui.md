@@ -114,13 +114,13 @@ When expanded, group metrics by user-friendly categories:
 
 Raw engineering labels may remain available, but the visible label should be readable. Example: `tx_packets` is displayed as `Sent packets`.
 
-Latency revalidation is exported outside the UI by `scripts/export_latency_probe.ps1`. The script consumes desktop diagnostics or Android snapshot JSON and writes `artifacts/latency/latency_probe_latest.json` with per-mode latency proxy results for `low_latency`, `balanced`, and `high_quality`.
+Latency revalidation is exported outside the UI by `scripts/export_latency_probe.ps1` (manual step; the desktop UI does not call the script directly). The script consumes desktop diagnostics or Android snapshot JSON and writes `artifacts/latency/latency_probe_latest.json` with per-mode latency proxy results for `low_latency`, `balanced`, and `high_quality`.
 
 ## USB Device Refresh
 
 - ADB device discovery should not interrupt normal streaming UX.
 - The desktop UI may refresh ADB devices on manual demand, and can do a low-frequency background refresh while USB mode is active.
-- Windows GUI builds must launch `adb` without a visible console window.
+- Windows GUI builds should launch `adb` without a visible console window. Status: not implemented in the current desktop process layer (no `CREATE_NO_WINDOW` usage in `apps/desktop`); kept as a known gap, not claimed as shipped.
 
 ## Release Packaging
 
@@ -147,10 +147,10 @@ Language defaults should follow the system locale (`zh*` -> Chinese, otherwise E
 
 ## TODO
 
-- QR code connection entry
-- Richer session detail
-- Per-device disconnect command for multi-client sessions
-- More guided USB tethering help
-- Firewall help text
+- [x] QR code connection entry (landed in v1.15)
+- [x] Richer session detail — active/recent device list, recommended connection, protocol path, mode profile, gray mode rendered from snapshot (2026-05-25 UI completion)
+- [ ] Per-device disconnect command for multi-client sessions (needs stable per-client command contract)
+- [ ] More guided USB tethering help
+- [x] Firewall help text (renderFirewallGuidance)
 - Structured diagnostics export (desktop JSON snapshot export is available; Android bundle still pending)
 - Keep feeding real diagnostics snapshots into `scripts/export_latency_probe.ps1` before release sign-off

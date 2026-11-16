@@ -28,6 +28,10 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $repoRoot
 
 try {
+    Invoke-Step -Name 'Version sync check' -Action {
+        powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts/check_version_sync.ps1')
+    }
+
     if (-not $SkipCargoFmt) {
         Invoke-Step -Name 'cargo fmt --all -- --check' -Action {
             cargo fmt --all -- --check

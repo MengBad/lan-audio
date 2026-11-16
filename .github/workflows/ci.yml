@@ -12,7 +12,9 @@ on:
       - 'apps/android_flutter/**'
       - 'scripts/**'
       - 'README.md'
+      - 'AGENTS.md'
       - 'docs/**'
+      - 'artifacts/release/**'
       - '.cargo/**'
       - '.github/workflows/ci.yml'
   pull_request:
@@ -24,11 +26,25 @@ on:
       - 'apps/android_flutter/**'
       - 'scripts/**'
       - 'README.md'
+      - 'AGENTS.md'
       - 'docs/**'
+      - 'artifacts/release/**'
       - '.cargo/**'
       - '.github/workflows/ci.yml'
 
 jobs:
+  version-sync:
+    name: Version sync + release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify version surfaces
+        shell: pwsh
+        run: pwsh -File ./scripts/check_version_sync.ps1
+      - name: Verify release gate contract
+        shell: pwsh
+        run: pwsh -File ./scripts/assert_release_gate.ps1
+
   rust-core:
     name: Rust check + test
     runs-on: ubuntu-latest

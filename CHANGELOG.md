@@ -4,6 +4,43 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.16] - 2026-05-25
+
+### Added / Fixed — Handover & UI Completion
+
+- Windows desktop UI: loss-rate denominator corrected to `metrics.tx_packets`; renders recent devices, recommended connection, V2 protocol path, active data plane, rollback availability, mode profile, gray mode and expanded diagnostics. i18n zh/en tables aligned (133/133).
+- Android UI: PlayPage renders connection status chip/detail; SettingsPage wires background-playback guide, four EQ presets, MicStatusWidget level bar, version row, Auto codec chip and buffer-reset button. Added widget tests.
+- Governance: release gate is artifact-driven; `check_version_sync.ps1` guards 13 version surfaces; `FORCE_RELEASE` now records `human_override`; CI adds a version-sync job; agent rules de-duplicated; architecture/known-issues/maintenance docs refreshed.
+- Version surfaces synchronized to `1.16` (Android versionCode 3160).
+
+### Notes
+
+- Main path unchanged: `windows_loopback + v2_header + opus`. Rollback `legacy_las1 + pcm16` retained.
+- Protocol v2/v3 wire format unchanged; no codec/capture/playback-path changes.
+
+## [1.15] - 2026-05-25
+
+### Changed — UI Redesign
+
+- Android production entry redesigned to a 3-tab `IndexedStack`: `PlayPage` / `ConnectPage` / `SettingsPage`. `MorePage` is no longer mounted; `MoreServerData` remains the shared server contract in `more_page.dart`.
+- Windows desktop web UI consolidated into a single-page layout (`apps/desktop/web/index.html`).
+- `buildAudioConsoleTheme()` remains the production Android theme; `LatencyChartWidget` remains mounted on `PlayPage`.
+
+### Notes
+
+- Main path unchanged: `windows_loopback + v2_header + opus`. Rollback `legacy_las1 + pcm16` retained.
+- Protocol v2/v3 wire format unchanged. No codec, capture, or playback-path change in this release.
+
+## [1.14] - 2026-05-20
+
+### Added — UX Polish
+
+- Custom buffer slider, audio-focus toggle, network quality indicator, packet-loss color coding, Bluetooth warning, auto-connect, connection snackbar notifications, and `dontkillmyapp` guidance.
+
+### Notes
+
+- Main path unchanged: `windows_loopback + v2_header + opus`. Rollback `legacy_las1 + pcm16` retained.
+
 ## [1.13] - 2026-05-18
 
 ### Added — Ultra Low Latency Mode

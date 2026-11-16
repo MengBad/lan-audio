@@ -1,0 +1,42 @@
+{
+  "contract_version": 1,
+  "acceptance_decision": "passed",
+  "test_matrix": {
+    "usb_synthetic": {
+      "status": "passed",
+      "silence_fill_delta_max_per_5s": 7,
+      "underrun_delta": 0,
+      "jitter_buffer_avg_ms": 202,
+      "jitter_buffer_min_ms": 120,
+      "jitter_buffer_max_ms": 280,
+      "tested_at": "2026-04-22",
+      "device": "5391d451",
+      "duration_sec": 120,
+      "transport": "usb",
+      "audio_source": "synthetic",
+      "mode": "balanced"
+    },
+    "wifi_windows_loopback": {
+      "status": "passed",
+      "silence_fill_delta_max_per_5s": 15,
+      "underrun_delta": 0,
+      "tested_at": "2026-04-22",
+      "device": "5391d451",
+      "duration_sec": 120,
+      "transport": "wifi",
+      "audio_source": "windows_loopback",
+      "mode": "balanced"
+    }
+  },
+  "device_info": {
+    "model": "24129PN74C",
+    "android_version": "16",
+    "serial": "5391d451",
+    "app_version": "debug-2026-04-22"
+  },
+  "notes": [
+    "USB jitter buffer pre-charge fix: startBufferMs 15->160, maxBufferMs 30->320 for balanced USB.",
+    "underrun_delta=0 confirmed across both scenarios for full 2-minute runs.",
+    "WiFi silence_fill mostly 0-8/5s with occasional spikes to 15."
+  ]
+}

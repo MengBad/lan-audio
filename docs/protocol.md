@@ -30,7 +30,7 @@
 
 ## Release Update (`2026-04-24`)
 
-- `v1.4` has been tagged and released under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed.
+- `v1.4` was tagged under `FORCE_RELEASE=true`; release-tracking docs keep the remaining checklist items visible as human override instead of silently calling them passed. As of `v1.15`, the flag is implemented in `scripts/package_release.ps1` / `scripts/release.ps1` (env `FORCE_RELEASE=true` or `-ForceRelease`): it marks manual acceptance as `[human-override]` and never skips validation, packaging, CI, or rollback-contract checks.
 - Post-release regression fixes keep the Protocol v2 contract stable: no data-plane header fields, control messages, mode enums, or rollback semantics were changed.
 - Android stable snapshot export now includes the already-computed `rx_frames_per_sec` and `audio_track_write_frames_per_sec` UI metrics so the console can show real receive cadence without changing protocol meaning.
 - Release decision is currently `allow_release`, sourced from `artifacts/release/acceptance_gate.json`.

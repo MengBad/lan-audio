@@ -75,7 +75,7 @@ jobs:
       - name: Gate release by acceptance contract
         shell: pwsh
         run: |
-          ./scripts/assert_release_gate.ps1
+          pwsh -File ./scripts/assert_release_gate.ps1
 
   windows-exe:
     needs: resolve
@@ -275,6 +275,11 @@ jobs:
             echo "## LAN Audio ${TAG}"
             echo
             echo "- Main path: \`windows_loopback + v2_header + opus\`"
+            echo "- Protocol v2/v3 status: v2_header is the default data plane; v3 (Hi-Res PCM24 fragmentation) is capability-gated and off by default"
+            echo "- Codec: opus (default), pcm16 (rollback), pcm24 (v3 capability-gated, off by default)"
+            echo "- Verified scope: see CHANGELOG.md and artifacts/release/device_acceptance.json"
+            echo "- Unverified scope: real-device long-run samples for the current UI build; see docs/MAINTENANCE_PLAN.md"
+            echo "- MediaSession / update detection: shipped; update check is silent background, no auto-download"
             echo "- Rollback path: \`legacy_las1 + pcm16\` (permanently retained; \`--force-rollback\` or UI safe mode)"
             echo
 
@@ -309,6 +314,12 @@ jobs:
                 [ -z "$line" ] && continue
                 echo "- $line"
               done <<< "$known_limitations_input"
+              echo
+            fi
+
+            if grep -q '"human_override"' artifacts/release/acceptance_gate.json 2>/dev/null; then
+              echo "## Human Override"
+              echo "- [human-override] this release was published with manual acceptance items confirmed by a human; see artifacts/release/acceptance_gate.json"
               echo
             fi
 

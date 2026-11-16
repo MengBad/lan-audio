@@ -166,7 +166,7 @@ impl LanAudioService {
             let mdns_cfg = MdnsServiceConfig {
                 server_name: self.cfg.server_name.clone(),
                 ws_port: self.cfg.ws_bind.port(),
-                version: "1.7".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
                 mode: audio_mode_txt(self.current_audio_mode()).to_string(),
             };
             handles.push(tokio::spawn(async move {

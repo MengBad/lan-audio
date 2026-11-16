@@ -1,3 +1,5 @@
+当前版本（短版本）：`1.16`
+
 <p align="center">
   <h1 align="center">LAN Audio</h1>
   <p align="center">
@@ -154,6 +156,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Clean
 | [已知问题](docs/known_issues.md) | 已知 Bug 与限制 |
 | [路线图](docs/roadmap.md) | 功能路线图 |
 | [发布策略](docs/RELEASE_POLICY.md) | 版本号与发布流程 |
+| [维护计划](docs/MAINTENANCE_PLAN.md) | 接手基线、维护节奏、不可动红线 |
 
 > 英文文档请参阅 [README.md](README.md)
 
