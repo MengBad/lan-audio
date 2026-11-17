@@ -70,6 +70,19 @@ impl CaptureSourceState {
     }
 }
 
+/// Additive health signal for capture-device hotplug events.
+///
+/// Sources that cannot observe device changes report [`Self::None`]; the
+/// Windows loopback source sets a flag when WASAPI reports an invalidated
+/// endpoint or when the default render endpoint changes. This signal is
+/// observation only: the capture source never restarts the main path itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceChangeStatus {
+    None,
+    DeviceRemoved,
+    DefaultDeviceChanged,
+}
+
 /// Media format metadata associated with each frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioFormat {
@@ -213,6 +226,14 @@ pub trait AudioCaptureSource: Send {
     fn device_name(&self) -> Option<String> {
         None
     }
+
+    /// Optional, additive hotplug signal. Default sources are always no-op.
+    fn device_change_status(&self) -> DeviceChangeStatus {
+        DeviceChangeStatus::None
+    }
+
+    /// Clear an observed hotplug signal after the caller has reported it.
+    fn clear_device_change_status(&self) {}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -390,6 +411,14 @@ mod tests {
         assert_eq!(source.state(), CaptureSourceState::Started);
         source.stop().await.expect("stop");
         assert_eq!(source.state(), CaptureSourceState::Stopped);
+    }
+
+    #[test]
+    fn default_device_change_status_is_none() {
+        let source = SyntheticAudioSource::silence(AudioFormat::default());
+        assert_eq!(source.device_change_status(), DeviceChangeStatus::None);
+        source.clear_device_change_status();
+        assert_eq!(source.device_change_status(), DeviceChangeStatus::None);
     }
 
     #[test]

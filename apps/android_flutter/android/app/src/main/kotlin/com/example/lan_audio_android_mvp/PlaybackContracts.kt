@@ -21,6 +21,7 @@ object PlaybackActions {
     const val EXTRA_START_BUFFER_MS = "start_buffer_ms"
     const val EXTRA_MAX_BUFFER_MS = "max_buffer_ms"
     const val EXTRA_PING_INTERVAL_MS = "ping_interval_ms"
+    const val EXTRA_EVENT_SYNC_ENABLED = "event_sync_enabled"
     const val EXTRA_AUDIO_MODE = "audio_mode"
     const val EXTRA_REASON = "reason"
     const val EXTRA_PREFERRED_CODEC = "preferred_codec"
@@ -67,6 +68,8 @@ data class PlaybackOptions(
     val frameDurationMs: Int = 10,
     val resetBufferOnSwitch: Boolean = true,
     val pingIntervalMs: Int = 1000,
+    // Opt-in event-sync strategy: request bounded retransmission on UDP seq gaps.
+    val eventSyncEnabled: Boolean = false,
 )
 
 data class PlaybackEqSettings(
@@ -333,6 +336,7 @@ data class PlaybackSnapshot(
     val reconnectAttempts: Int = 0,
     val reconnectDelayMs: Int = 0,
     val metrics: PlaybackMetrics = PlaybackMetrics(),
+    val eventSyncEnabled: Boolean = false,
     val recentLog: String = "",
     val error: Map<String, String>? = null,
 ) {
@@ -387,6 +391,7 @@ data class PlaybackSnapshot(
             "loudnessNormalizationEnabled" to loudnessNormalizationEnabled,
             "reconnectAttempts" to reconnectAttempts,
             "reconnectDelayMs" to reconnectDelayMs,
+            "event_sync_enabled" to eventSyncEnabled,
             "metrics" to mapOf(
                 "sampleRate" to metrics.sampleRate,
                 "channels" to metrics.channels,

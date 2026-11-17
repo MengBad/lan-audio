@@ -52,6 +52,8 @@ class SettingsPage extends StatelessWidget {
     required this.onAutoConnectChanged,
     this.audioFocusExclusive = false,
     this.onAudioFocusChanged,
+    this.eventSyncEnabled = false,
+    this.onEventSyncChanged,
     // Debug
     required this.debugData,
   });
@@ -97,6 +99,10 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<bool> onAutoConnectChanged;
   final bool audioFocusExclusive;
   final ValueChanged<bool>? onAudioFocusChanged;
+
+  // ── Event sync (opt-in) ──
+  final bool eventSyncEnabled;
+  final ValueChanged<bool>? onEventSyncChanged;
 
   // ── Debug ──
   /// Key-value pairs for the debug info card.
@@ -190,6 +196,31 @@ class SettingsPage extends StatelessWidget {
               onTap: () => onPreferredCodecChanged('aac'),
             ),
           ],
+        ),
+
+        const SizedBox(height: AudioConsoleSpacing.md),
+
+        // ── Event sync strategy (opt-in) ──
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                tr('事件同步补包', 'Event-sync retransmission'),
+                style: AudioConsoleType.body(),
+              ),
+            ),
+            Switch(
+              key: const Key('settings_event_sync'),
+              value: eventSyncEnabled,
+              onChanged: onEventSyncChanged,
+            ),
+          ],
+        ),
+        Text(
+          tr('默认关闭；开启后按序号请求补包',
+              'Off by default; requests bounded seq recovery when enabled'),
+          style: AudioConsoleType.monoMeta(color: AudioConsoleColors.text2),
         ),
 
         const SizedBox(height: AudioConsoleSpacing.xl),

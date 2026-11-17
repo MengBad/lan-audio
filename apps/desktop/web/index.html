@@ -375,6 +375,10 @@
       }
       .usb-block-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
       .usb-row { font-size: 11px; color: var(--muted); margin-bottom: 1px; }
+      .control-row { display:flex; align-items:center; gap:8px; font-size:12px; margin-top:6px; }
+      .control-row .label { color: var(--muted); }
+      .volume-slider { flex:1; min-width:80px; accent-color: var(--accent); }
+      .volume-value { min-width:48px; text-align:right; font-variant-numeric: tabular-nums; }
       .usb-row strong { color: var(--text); font-weight: 500; }
       .usb-device-list { display: grid; gap: 3px; margin-top: 4px; }
       .usb-device { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
@@ -507,6 +511,18 @@
         <div class="usb-row" style="font-size:10px;color:var(--muted);margin-top:4px;" id="micHelpText">
           需要安装 VB-Cable 虚拟音频设备。<a href="#" id="micHelpLink" style="color:var(--accent);">下载 VB-Cable</a>
         </div>
+        <div class="usb-row"><span class="label" id="remoteControlLabel"></span>: <strong id="remoteControlValue"></strong></div>
+      </div>
+
+      <!-- Android volume (reverse channel) -->
+      <div class="card is-hidden" id="volumeCard">
+        <div class="section-title">🔊 <span id="volumeCardTitle"></span></div>
+        <div class="control-row">
+          <span class="label" id="androidVolumeLabel"></span>
+          <input class="volume-slider" id="androidVolumeRange" type="range" min="0" max="100" step="1" />
+          <span class="volume-value" id="androidVolumeValue">--%</span>
+          <button type="button" id="androidVolumeApplyBtn"></button>
+        </div>
       </div>
 
       <!-- Settings (inline) -->
@@ -563,6 +579,9 @@
             <div><span id="modeLabel">模式</span>: <span id="modeValue"></span></div>
             <div id="v2StatusRow"><span id="v2StatusLabel"></span>: <span id="v2StatusValue"></span></div>
             <div id="connStatusRow"><span id="connStatusLabel"></span>: <span id="connStatusValue"></span></div>
+            <!-- TODO: jitter/event-sync status row — backend does not expose these fields in DesktopSnapshot/DesktopMetrics yet (apps/desktop/src-tauri/src/lib.rs:44, apps/desktop/src-tauri/src/lib.rs:101).
+                 Once exposed, render with textContent here; do not interpolate backend strings into innerHTML. -->
+            <!-- TODO: retransmission counters row — backend does not expose retransmit/retry counters in DesktopSnapshot/DesktopMetrics yet (apps/desktop/src-tauri/src/lib.rs:44, apps/desktop/src-tauri/src/lib.rs:101). -->
           </div>
 
           <!-- Capture metrics + state -->
@@ -740,7 +759,14 @@
           usbForward: 'Forward 端口',
           usbStateOn: 'USB 已连接 · {serial}',
           usbStateOff: '未启用(Wi-Fi)',
-          usbNoDevices: '未检测到 adb 在线设备'
+          usbNoDevices: '未检测到 adb 在线设备',
+          volumeCardTitle: '手机音量',
+          androidVolume: '音量',
+          volumeApply: '设置',
+          volumeApplied: '已设置音量: {pct}%',
+          remoteControl: '手机媒体控制',
+          remoteControlAvailable: '可用(MediaSession)',
+          remoteControlUnavailable: '未连接时不可用'
         },
         en: {
           title: 'LAN Audio',
@@ -875,7 +901,14 @@
           usbForward: 'Forward',
           usbStateOn: 'USB · {serial}',
           usbStateOff: 'Disabled (Wi-Fi)',
-          usbNoDevices: 'No online adb devices'
+          usbNoDevices: 'No online adb devices',
+          volumeCardTitle: 'Phone Volume',
+          androidVolume: 'Volume',
+          volumeApply: 'Apply',
+          volumeApplied: 'Volume set to {pct}%',
+          remoteControl: 'Phone Media Controls',
+          remoteControlAvailable: 'Available (MediaSession)',
+          remoteControlUnavailable: 'Unavailable until connected'
         }
       };
 
@@ -886,6 +919,8 @@
         adbDevices: [],
         lastAdbRefreshAt: 0,
         qrKey: '',
+        volumeSetpoint: null,
+        lastVolumeSetpointAt: 0,
       };
 
       function t(key) {
@@ -1144,6 +1179,10 @@
         document.getElementById('connStatusLabel').textContent = t('connectionStatus');
         document.getElementById('logsSummary').textContent = t('logsSummary');
         document.getElementById('micCardTitle').textContent = t('micCardTitle');
+        document.getElementById('volumeCardTitle').textContent = t('volumeCardTitle');
+        document.getElementById('androidVolumeLabel').textContent = t('androidVolume');
+        document.getElementById('androidVolumeApplyBtn').textContent = t('volumeApply');
+        document.getElementById('remoteControlLabel').textContent = t('remoteControl');
 
         // Localize <select> option labels
         const audioSel = document.getElementById('audioSourceSelect');
@@ -1364,6 +1403,22 @@
           micHelpText.style.display = 'none';
         }
 
+        // Android volume: show backend-reported value; allow opt-in command when service is running
+        const volumeCard = document.getElementById('volumeCard');
+        volumeCard.classList.toggle('is-hidden', state.busy ? !state.snapshot : false);
+        const volumeRange = document.getElementById('androidVolumeRange');
+        const volumeValue = document.getElementById('androidVolumeValue');
+        const reportedVolume = Math.max(0, Math.min(100, Number(snapshot.android_volume_pct) || 0));
+        if (state.volumeSetpoint === null || Date.now() - state.lastVolumeSetpointAt > 2000) {
+          volumeRange.value = String(reportedVolume);
+        }
+        volumeValue.textContent = `${state.volumeSetpoint ?? reportedVolume}%`;
+
+        // media session / remote control availability is derived from the connected device count
+        const rcValue = document.getElementById('remoteControlValue');
+        const hasRemoteControl = snapshot.service_status === 'running' && snapshot.connected_devices > 0;
+        rcValue.textContent = t(hasRemoteControl ? 'remoteControlAvailable' : 'remoteControlUnavailable');
+
         // Latency chart only when service is running
         const latencyCard = document.getElementById('latencyCard');
         latencyCard.classList.toggle('is-hidden', snapshot.service_status !== 'running');
@@ -1397,6 +1452,8 @@
         document.getElementById('codecSelect').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
+        document.getElementById('androidVolumeRange').disabled = disabled || snapshot.service_status !== 'running';
+        document.getElementById('androidVolumeApplyBtn').disabled = disabled || snapshot.service_status !== 'running';
         document.getElementById('safeModeBtn').disabled = disabled;
         document.getElementById('copyAddrBtn').disabled = disabled || !snapshot.connect_address;
         document.getElementById('usbRefreshBtn').disabled = disabled;
@@ -1469,6 +1526,22 @@
             capture_dump_wav: document.getElementById('dumpToggle').checked,
           }
         });
+      }
+
+      async function applyAndroidVolume() {
+        if (!state.snapshot) return;
+        const pct = Math.max(0, Math.min(100, Number(document.getElementById('androidVolumeRange').value) || 0));
+        state.volumeSetpoint = pct;
+        state.lastVolumeSetpointAt = Date.now();
+        // Tauri command args may be normalized to camelCase; send both keys so the existing snake_case backend command binds on either convention.
+        await call('set_android_volume', { volume_pct: pct, volumePct: pct });
+        const headline = document.getElementById('statusHeadline');
+        const original = headline.textContent;
+        headline.textContent = trf('volumeApplied', { pct });
+        setTimeout(() => {
+          if (state.snapshot) headline.textContent = buildHeadline(state.snapshot);
+          else headline.textContent = original;
+        }, 1600);
       }
 
       async function toggleSafeMode() {
@@ -1552,6 +1625,7 @@
         document.getElementById('fallbackToggle').addEventListener('change', () => applySettings());
         document.getElementById('dumpToggle').addEventListener('change', () => applySettings());
 
+        document.getElementById('androidVolumeApplyBtn').addEventListener('click', applyAndroidVolume);
         document.getElementById('safeModeBtn').addEventListener('click', toggleSafeMode);
         document.getElementById('copyAddrBtn').addEventListener('click', copyAddress);
         document.getElementById('exportDiagBtn').addEventListener('click', exportDiagnostics);

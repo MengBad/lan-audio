@@ -21,7 +21,7 @@ import 'ui/pages/power_saving_guide_page.dart';
 import 'ui/pages/settings_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
-const String kAppVersion = '1.16.2';
+const String kAppVersion = '1.17';
 const String kUiBuildTag = 'UI build: audio-console-dark-v$kAppVersion';
 const bool kUseBackgroundPlaybackService = true;
 
@@ -281,6 +281,9 @@ class _MainShellState extends State<MainShell> {
   bool _isBluetoothOutput = false;
   int? _customBufferMs;
   bool _audioFocusExclusive = false;
+  bool _eventSyncEnabled = false;
+  final Set<int> _pendingRetransmissionSeqs = <int>{};
+  int? _lastRetransmitSeq;
   bool _lastWsConnectedForSnackbar = false;
 
   @override
@@ -711,12 +714,21 @@ class _MainShellState extends State<MainShell> {
     });
     if (value != null) {
       _backgroundService
-          .setOptions(startBufferMs: value, maxBufferMs: value * 3, pingIntervalMs: 1000)
+          .setOptions(
+              startBufferMs: value,
+              maxBufferMs: value * 3,
+              pingIntervalMs: 1000,
+              eventSyncEnabled: _eventSyncEnabled)
           .catchError((_) {});
     } else {
       // Reset to mode default
       _backgroundService
-          .setOptions(startBufferMs: 60, maxBufferMs: 300, pingIntervalMs: 1000)
+          .setOptions(
+            startBufferMs: 60,
+            maxBufferMs: 300,
+            pingIntervalMs: 1000,
+            eventSyncEnabled: _eventSyncEnabled,
+          )
           .catchError((_) {});
     }
   }
@@ -725,6 +737,17 @@ class _MainShellState extends State<MainShell> {
     setState(() {
       _audioFocusExclusive = value;
     });
+  }
+
+  void _setEventSyncEnabled(bool value) {
+    setState(() {
+      _eventSyncEnabled = value;
+      if (!value) {
+        _pendingRetransmissionSeqs.clear();
+        _lastRetransmitSeq = null;
+      }
+    });
+    _backgroundService.setEventSyncEnabled(value).catchError((_) {});
   }
 
   Future<void> _maybeShowFirstUseHint() async {
@@ -1280,6 +1303,7 @@ class _MainShellState extends State<MainShell> {
           'supports_low_latency': true,
           'supports_high_quality': true,
           'supports_native_audio_track': true,
+          'supports_retransmission': _eventSyncEnabled,
         },
       };
       ws.add(jsonEncode(hello));
@@ -1305,6 +1329,8 @@ class _MainShellState extends State<MainShell> {
               _currentAudioMode = _audioModeFromWire(
                 decoded['mode']?.toString() ?? 'balanced',
               );
+            } else if (type == 'retransmission_not_found') {
+              // Bounded hint only: re-sent packets still arrive over UDP.
             }
           }
           setState(() {
@@ -1501,6 +1527,31 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  List<int> _gapSeqs(int previous, int current) {
+    final distance = (current - previous) & 0xFFFFFFFF;
+    if (distance <= 1 || distance > 64) return const <int>[];
+    final count = distance > 8 ? 8 : distance - 1;
+    return List<int>.generate(
+      count,
+      (i) => (previous + 1 + i) & 0xFFFFFFFF,
+      growable: false,
+    );
+  }
+
+  void _requestRetransmissions(List<int> seqs) {
+    if (!_eventSyncEnabled || seqs.isEmpty || _ws == null) return;
+    final batch = <int>[];
+    for (final seq in seqs) {
+      if (batch.length >= 8) break;
+      if (_pendingRetransmissionSeqs.add(seq)) batch.add(seq);
+    }
+    if (batch.isEmpty) return;
+    _ws!.add(jsonEncode({
+      'type': 'retransmission_request',
+      'seqs': batch,
+    }));
+  }
+
   void _handleUdpPacket(Uint8List bytes) {
     final packet = LasPacket.parse(bytes);
     if (packet == null) {
@@ -1520,7 +1571,12 @@ class _MainShellState extends State<MainShell> {
       final expected = (_lastSeq! + 1) & 0xFFFFFFFF;
       if (packet.sequence != expected) {
         _udpLoss += (packet.sequence - expected) & 0xFFFFFFFF;
+        if (_eventSyncEnabled && _lastSeq != _lastRetransmitSeq) {
+          _lastRetransmitSeq = _lastSeq;
+          _requestRetransmissions(_gapSeqs(_lastSeq!, packet.sequence));
+        }
       }
+      _pendingRetransmissionSeqs.remove(packet.sequence);
     }
     _lastSeq = packet.sequence;
 
@@ -1584,6 +1640,13 @@ class _MainShellState extends State<MainShell> {
 
   Future<dynamic> _handlePlatformCall(MethodCall call) async {
     switch (call.method) {
+      case 'setRemoteVolumePct':
+        final args = call.arguments as Map<dynamic, dynamic>?;
+        final pct = (args?['volume_pct'] as num?)?.toInt();
+        if (pct != null) {
+          await _backgroundService.setRemoteVolumePct(pct.clamp(0, 100));
+        }
+        break;
       case 'volumeChanged':
         final args = call.arguments as Map<dynamic, dynamic>?;
         final pct = args == null ? 50 : (args['volume_pct'] as int?) ?? 50;
@@ -1950,6 +2013,8 @@ class _MainShellState extends State<MainShell> {
                 onAutoConnectChanged: _setAutoConnectEnabled,
                 audioFocusExclusive: _audioFocusExclusive,
                 onAudioFocusChanged: _setAudioFocusExclusive,
+                eventSyncEnabled: _eventSyncEnabled,
+                onEventSyncChanged: _setEventSyncEnabled,
                 debugData: _buildDebugData(),
               ),
             ],
@@ -2098,6 +2163,7 @@ class _MainShellState extends State<MainShell> {
       'late': '$_uiLate',
       'floorHold': '$_uiFloorHoldCount',
       'jitterP95': '${_uiJitterP95Ms ?? '-'} ms',
+      'eventSync': _eventSyncEnabled ? 'on' : 'off',
       'udpBytes': '$_uiUdpBytes',
       'lastSeq': '${_uiLastSeq ?? '-'}',
       'audioTrackLatency': '${_uiAudioTrackLatencyMs ?? '-'} ms',

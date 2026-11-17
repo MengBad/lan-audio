@@ -1,4 +1,4 @@
-﻿package com.example.lan_audio_android_mvp
+package com.example.lan_audio_android_mvp
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -538,9 +538,10 @@ class MainActivity : FlutterActivity() {
                 val startBufferMs = (args["startBufferMs"] as? Number)?.toInt() ?: 60
                 val maxBufferMs = (args["maxBufferMs"] as? Number)?.toInt() ?: 300
                 val pingIntervalMs = (args["pingIntervalMs"] as? Number)?.toInt() ?: 1000
+                val eventSyncEnabled = args["eventSyncEnabled"] == true
                 Log.i(
                     logTag,
-                    "MethodChannel setOptions received startBufferMs=$startBufferMs maxBufferMs=$maxBufferMs pingIntervalMs=$pingIntervalMs"
+                    "MethodChannel setOptions received startBufferMs=$startBufferMs maxBufferMs=$maxBufferMs pingIntervalMs=$pingIntervalMs eventSync=$eventSyncEnabled"
                 )
                 PlaybackForegroundService.setOptions(
                     applicationContext,
@@ -548,6 +549,7 @@ class MainActivity : FlutterActivity() {
                         startBufferMs = startBufferMs,
                         maxBufferMs = maxBufferMs,
                         pingIntervalMs = pingIntervalMs,
+                        eventSyncEnabled = eventSyncEnabled,
                     ),
                 )
                 result.success(null)
@@ -598,6 +600,26 @@ class MainActivity : FlutterActivity() {
                 val enabled = args["enabled"] == true
                 Log.i(logTag, "MethodChannel setLoudnessNormalization received enabled=$enabled")
                 PlaybackForegroundService.setLoudnessNormalization(applicationContext, enabled)
+                result.success(null)
+            }
+
+            "setRemoteVolumePct" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val pct = (args["volume_pct"] as? Number)?.toInt()?.coerceIn(0, 100) ?: -1
+                if (pct >= 0) {
+                    controlChannelService?.reportVolumeChange(pct)
+                }
+                result.success(null)
+            }
+
+            "setEventSyncEnabled" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val enabled = args["enabled"] == true
+                val intent = Intent(applicationContext, PlaybackForegroundService::class.java).apply {
+                    action = PlaybackActions.ACTION_SET_OPTIONS
+                    putExtra(PlaybackActions.EXTRA_EVENT_SYNC_ENABLED, enabled)
+                }
+                applicationContext.startService(intent)
                 result.success(null)
             }
 
@@ -667,6 +689,11 @@ class MainActivity : FlutterActivity() {
             controlPort = 7879,
             onVolumeChanged = { volumePct ->
                 Log.i(logTag, "Volume changed from control channel: $volumePct%")
+                try {
+                    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    val target = (volumePct.coerceIn(0, 100) * max / 100)
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                } catch (_: Exception) {}
                 try {
                     platformChannel.invokeMethod("volumeChanged", mapOf("volume_pct" to volumePct))
                 } catch (_: Exception) {}

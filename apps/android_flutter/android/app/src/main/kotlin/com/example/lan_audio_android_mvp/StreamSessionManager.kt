@@ -55,6 +55,12 @@ class StreamSessionManager(
          * that has not been migrated yet.
          */
         fun provideWatermark(): WatermarkSample? = null
+
+        /** Called when a UDP sequence gap is observed (event-sync strategy). */
+        fun onUdpSequenceGap(previous: Int, current: Int) = Unit
+
+        /** Called when the server says cached re-sends are unavailable. */
+        fun onRetransmissionNotFound(seqs: List<Int>) = Unit
     }
 
     /** Snapshot of client buffer/jitter state used by Phase 3 reports. */
@@ -80,6 +86,8 @@ class StreamSessionManager(
     private var connectedClients: Int = 0
     private val recentRttMs = ArrayDeque<Int>()
     private val preferredSampleRate: Int = AudioTrackController.preferredStreamSampleRate()
+    private val pendingRetransmissionSeqs = ConcurrentHashMap.newKeySet<Int>()
+    @Volatile private var lastRawSequence: Int? = null
 
     @Volatile
     private var running = false
@@ -119,6 +127,31 @@ class StreamSessionManager(
         okHttpClient.dispatcher.executorService.shutdown()
         okHttpClient.connectionPool.evictAll()
         wsReady = false
+    }
+
+    fun sendRetransmissionRequest(seqs: List<Int>): Boolean {
+        if (!running || !wsReady || seqs.isEmpty()) return false
+        val batch = ArrayList<Int>(minOf(seqs.size, 8))
+        for (seq in seqs) {
+            if (batch.size >= 8) break
+            val normalized = (seq.toLong() and 0xFFFFFFFFL).toInt()
+            if (pendingRetransmissionSeqs.add(normalized)) batch.add(normalized)
+        }
+        if (batch.isEmpty()) return false
+        val message = JSONObject(mapOf(
+            "type" to "retransmission_request",
+            "seqs" to batch,
+        ))
+        return webSocket?.send(message.toString()) ?: false
+    }
+
+    fun clearPendingRetransmission(seq: Int) {
+        pendingRetransmissionSeqs.remove((seq.toLong() and 0xFFFFFFFFL).toInt())
+    }
+
+    fun clearPendingRetransmissions() {
+        pendingRetransmissionSeqs.clear()
+        lastRawSequence = null
     }
 
     fun setAudioMode(
@@ -174,6 +207,11 @@ class StreamSessionManager(
                         socket.receive(packet)
                         val raw = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
                         val las = LasPacketParser.parse(raw) ?: continue
+                        val previous = lastRawSequence
+                        if (previous != null && !las.hasDiscontinuity) {
+                            callback.onUdpSequenceGap(previous, las.sequence)
+                        }
+                        lastRawSequence = las.sequence
                         callback.onUdpPacket(las)
                     } catch (_: SocketTimeoutException) {
                         continue
@@ -227,6 +265,11 @@ class StreamSessionManager(
                             val raw = ByteArray(frameLen)
                             input.readFully(raw)
                             val las = LasPacketParser.parse(raw) ?: continue
+                            val previous = lastRawSequence
+                            if (previous != null && !las.hasDiscontinuity) {
+                                callback.onUdpSequenceGap(previous, las.sequence)
+                            }
+                            lastRawSequence = las.sequence
                             callback.onUdpPacket(las)
                         } catch (_: SocketTimeoutException) {
                             continue
@@ -391,6 +434,26 @@ class StreamSessionManager(
                             "client_left" -> {
                                 connectedClients = (connectedClients - 1).coerceAtLeast(0)
                                 callback.onClientCountUpdated(connectedClients)
+                            }
+                            "retransmission_request" -> {
+                                // Client-to-server tag; ignored if echoed by an older server.
+                            }
+                            "retransmission_data" -> {
+                                // Additive servers re-send the original UDP frame; no WS payload parsing.
+                            }
+                            "retransmission_not_found" -> {
+                                val seqs = msg.optJSONArray("seqs")
+                                val missing = ArrayList<Int>()
+                                if (seqs != null) {
+                                    for (i in 0 until seqs.length()) {
+                                        val seq = seqs.optInt(i, -1)
+                                        if (seq >= 0) {
+                                            clearPendingRetransmission(seq)
+                                            missing.add(seq)
+                                        }
+                                    }
+                                }
+                                callback.onRetransmissionNotFound(missing)
                             }
                             "error" -> {
                                 callback.onError(

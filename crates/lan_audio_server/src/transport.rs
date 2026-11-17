@@ -52,6 +52,8 @@ pub struct BroadcastTransport {
     metrics: Arc<Metrics>,
     registry: ClientRegistry,
     capture_helper: UdpTransport,
+    /// AudioRelay-style bounded retransmission cache: seq -> (wifi target, wire bytes).
+    frame_cache: Arc<std::sync::Mutex<std::collections::HashMap<u32, (SocketAddr, Vec<u8>)>>>,
 }
 
 #[derive(Debug)]
@@ -473,12 +475,31 @@ impl BroadcastTransport {
             cfg: Arc::clone(&cfg),
             current_audio_mode: Arc::new(StdMutex::new(cfg.current_audio_mode)),
         };
+        let (retransmit_tx, mut retransmit_rx) = mpsc::unbounded_channel::<(Uuid, Vec<u32>)>();
+        let registry = registry.with_retransmit_tx(retransmit_tx);
+        let frame_cache: Arc<StdMutex<std::collections::HashMap<u32, (SocketAddr, Vec<u8>)>>> =
+            Arc::new(StdMutex::new(std::collections::HashMap::new()));
+        let drain_socket = Arc::clone(&socket);
+        let drain_cache = Arc::clone(&frame_cache);
+        tokio::spawn(async move {
+            while let Some((_client_id, seqs)) = retransmit_rx.recv().await {
+                for seq in seqs {
+                    let entry = drain_cache.lock().ok().and_then(|g| g.get(&seq).cloned());
+                    if let Some((target, bytes)) = entry {
+                        if let Err(err) = drain_socket.send_to(&bytes, target).await {
+                            warn!(seq, error = %err, "retransmission resend failed");
+                        }
+                    }
+                }
+            }
+        });
         Ok(Self {
             socket,
             tcp_listener,
             metrics,
             registry,
             capture_helper,
+            frame_cache,
         })
     }
 
@@ -758,9 +779,31 @@ impl BroadcastTransport {
         for wire in wire_frames {
             let plane = self.sender_for_client(&wire.client);
             let frame_len = wire.wire_bytes.len();
+            // AudioRelay-style retransmission cache (WiFi only, bounded to 64 frames).
+            if let ClientTransportSnapshot::Wifi(addr) = &wire.client.transport {
+                if let Ok(mut cache) = self.frame_cache.lock() {
+                    if cache.len() >= 64 {
+                        if let Some(oldest) = cache.keys().min().copied() {
+                            cache.remove(&oldest);
+                        }
+                    }
+                    cache.insert(wire.packet.sequence, (*addr, wire.wire_bytes.clone()));
+                }
+            }
             let dataplane_frame = DataPlaneEncodedFrame::new(wire.wire_bytes);
             match plane.send_frame(&dataplane_frame).await {
                 Ok(()) => {
+                    // AudioRelay-style retransmission cache (WiFi only, bounded).
+                    if let ClientTransportSnapshot::Wifi(addr) = &wire.client.transport {
+                        if let Ok(mut cache) = self.frame_cache.lock() {
+                            if cache.len() >= 64 {
+                                if let Some(oldest) = cache.keys().min().copied() {
+                                    cache.remove(&oldest);
+                                }
+                            }
+                            cache.insert(wire.packet.sequence, (*addr, wire.wire_bytes.clone()));
+                        }
+                    }
                     self.metrics.inc_packets(frame_len);
                     tx_stats.observe(
                         &wire.packet,

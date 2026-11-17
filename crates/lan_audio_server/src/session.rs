@@ -50,6 +50,7 @@ pub struct ClientRegistry {
     /// every tick. Using a single-slot std Mutex (cheap, lock-free reads on
     /// the watchdog thread are not a goal — drains happen at ~2 Hz).
     latest_watermark: WatermarkSlot,
+    retransmit_tx: Option<mpsc::UnboundedSender<(Uuid, Vec<u32>)>>,
 }
 
 struct ClientRegistryInner {
@@ -442,6 +443,13 @@ impl SessionServer {
                                 continue;
                             }
 
+                            if let Ok(ClientControlMessage::RetransmissionRequest { seqs }) =
+                                serde_json::from_str::<ClientControlMessage>(&text)
+                            {
+                                self.registry.request_retransmission(session_id, seqs);
+                                continue;
+                            }
+
                             if v2_session {
                                 match serde_json::from_str::<ControlMessageV2>(&text) {
                                     Ok(ControlMessageV2::SetAudioMode(SetAudioMode { mode, reason, preferred_sample_rate, preferred_codec })) => {
@@ -547,7 +555,21 @@ impl ClientRegistry {
             })),
             metrics,
             latest_watermark: Arc::new(std::sync::Mutex::new(None)),
+            retransmit_tx: None,
         }
+    }
+    pub fn with_retransmit_tx(mut self, tx: mpsc::UnboundedSender<(Uuid, Vec<u32>)>) -> Self {
+        self.retransmit_tx = Some(tx);
+        self
+    }
+    pub fn request_retransmission(&self, client_id: Uuid, seqs: Vec<u32>) -> bool {
+        if let Some(tx) = &self.retransmit_tx {
+            if seqs.is_empty() || seqs.len() > 32 {
+                return false;
+            }
+            return tx.send((client_id, seqs)).is_ok();
+        }
+        false
     }
 
     /// Phase 3: store the most recently received watermark observation. The

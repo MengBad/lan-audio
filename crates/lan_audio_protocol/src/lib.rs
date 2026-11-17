@@ -344,6 +344,13 @@ pub enum ClientControlMessage {
     /// own jitter buffer + Audio ring buffer state. Older servers simply
     /// ignore unknown tags.
     ClientWatermark(WatermarkReport),
+    /// AudioRelay-style bounded retransmission request. The client detects
+    /// gaps by UDP sequence and asks the server to re-send those wire frames
+    /// over the existing UDP data plane (payload is NOT carried in JSON).
+    /// Additive: old servers ignore the unknown tag.
+    RetransmissionRequest {
+        seqs: Vec<u32>,
+    },
 }
 
 /// Buffer-level snapshot reported by the playback client to drive the server's
@@ -382,6 +389,10 @@ pub enum ServerControlMessage {
     ServerError {
         code: String,
         message: String,
+    },
+    /// Optional hint that requested sequences are no longer in the cache.
+    RetransmissionNotFound {
+        seqs: Vec<u32>,
     },
 }
 

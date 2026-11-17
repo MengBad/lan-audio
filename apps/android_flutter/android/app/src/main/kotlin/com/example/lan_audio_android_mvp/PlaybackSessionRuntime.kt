@@ -320,6 +320,7 @@ class PlaybackSessionRuntime(
                         ),
                         transportMode = if (currentTransportHint == TransportHint.Usb) "usb" else "wifi",
                         negotiatedCapabilities = capabilities,
+                        eventSyncEnabled = options.eventSyncEnabled,
                         recentLog = "hello_ack_v2",
                     )
                 }
@@ -390,6 +391,22 @@ class PlaybackSessionRuntime(
                     null
                 }
             }
+
+            override fun onUdpSequenceGap(previous: Int, current: Int) {
+                if (generation != streamGeneration || !options.eventSyncEnabled) return
+                val distance = (current.toLong() - previous.toLong()) and 0xFFFFFFFFL
+                if (distance <= 1L || distance > 64L) return
+                val count = minOf(distance, 8L).toInt()
+                val gaps = List(count) { ((previous.toLong() + 1L + it) and 0xFFFFFFFFL).toInt() }
+                if (gaps.isNotEmpty()) streamManager?.sendRetransmissionRequest(gaps)
+            }
+
+            override fun onRetransmissionNotFound(seqs: List<Int>) {
+                if (generation != streamGeneration) return
+                for (seq in seqs) {
+                    streamManager?.clearPendingRetransmission(seq)
+                }
+            }
         })
         streamManager?.start()
     }
@@ -434,6 +451,10 @@ class PlaybackSessionRuntime(
         return currentTarget != null
     }
 
+    fun setEventSyncEnabled(enabled: Boolean) {
+        setOptions(options.copy(eventSyncEnabled = enabled))
+    }
+
     fun setOptions(next: PlaybackOptions) {
         val snapshot = stateStore.current()
         Log.i(
@@ -441,6 +462,8 @@ class PlaybackSessionRuntime(
             "setOptions startBufferMs=${next.startBufferMs} maxBufferMs=${next.maxBufferMs} pingIntervalMs=${next.pingIntervalMs} serviceState=${snapshot.serviceState} playbackState=${snapshot.playbackState}"
         )
         options = next
+        if (!next.eventSyncEnabled) streamManager?.clearPendingRetransmissions()
+        stateStore.update { it.copy(eventSyncEnabled = next.eventSyncEnabled) }
         jitterBuffer.reconfigure(options.startBufferMs, options.maxBufferMs, options.dropThresholdMs)
         withPlaybackSinkLock {
             playbackSink.setQueueSoftCapFrames(msToFrames(next.audioQueueSoftCapMs))
@@ -643,6 +666,7 @@ class PlaybackSessionRuntime(
             }
         }
         lastSeq = playbackPacket.sequence.toLong() and 0xFFFFFFFFL
+        streamManager?.clearPendingRetransmission(playbackPacket.sequence)
         jitterBuffer.push(playbackPacket)
 
         val stats = jitterBuffer.stats

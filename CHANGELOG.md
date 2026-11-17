@@ -4,6 +4,20 @@ All notable changes to LAN Audio are documented in this file.
 
 The format follows Keep a Changelog, and this project uses `v<major.minor>` release tags.
 
+## [1.17] - 2026-05-25
+
+### Added — AudioRelay-inspired resilience (reverse-engineered 0.27.5 Windows sample)
+
+- **Bounded retransmission**: client detects UDP sequence gaps and requests up to 8 missing frames over the existing WebSocket control channel (`retransmission_request`); server re-sends cached wire frames over the original UDP path from a bounded 64-frame cache. Optional `retransmission_not_found` hint; additive and backward-compatible.
+- **Event-sync buffering option**: opt-in (default off) strategy flag reported in stable snapshot and exposed in Android settings; old behavior unchanged when off.
+- **Device hotplug + network recovery**: Windows capture polls the default render endpoint and reports `DeviceRemoved` on `AUDCLNT_E_DEVICE_INVALIDATED` without silently changing the main path; discovery rebinds and refreshes mDNS on network address changes.
+- **Reverse volume sync**: phone-side `volume_pct` now applies to Android `STREAM_MUSIC` while preserving the existing Flutter notification; desktop renders and can apply Android volume via the existing `set_android_volume` command.
+- **Reverse-engineering record**: `docs/audiorelay_reverse_engineering.md` documents the static analysis of AudioRelay 0.27.5 (semantics ported, not code).
+
+### Notes
+
+- Main path `windows_loopback + v2_header + opus` and rollback `legacy_las1 + pcm16` unchanged. Protocol v2/v3 wire format unchanged; only additive JSON control tags.
+- Known unverified: real-device long-run on the current UI build; USB direct 10min; full IMMNotificationClient callback variant (polling used instead, needs a Cargo feature change).
 ## [1.16.2] - 2026-05-25
 
 ### Fixed — Final Release Candidate

@@ -27,6 +27,7 @@ class PlaybackServiceSnapshot {
     required this.reconnectAttempts,
     required this.reconnectDelayMs,
     required this.metrics,
+    this.eventSyncEnabled = false,
   });
 
   final String transport;
@@ -52,6 +53,9 @@ class PlaybackServiceSnapshot {
   final int reconnectAttempts;
   final int reconnectDelayMs;
   final Map<String, dynamic> metrics;
+
+  /// Opt-in event-sync/jitter-buffer strategy. Default off for compatibility.
+  final bool eventSyncEnabled;
 
   // Jitter helpers derived from metrics
   List<int> get jitterHistoryUs {
@@ -136,6 +140,8 @@ class PlaybackServiceSnapshot {
             (key, value) => MapEntry('$key', value),
           ) ??
           const <String, dynamic>{},
+      eventSyncEnabled: normalized['event_sync_enabled'] == true ||
+          normalized['eventSyncEnabled'] == true,
     );
   }
 
@@ -164,6 +170,7 @@ class PlaybackServiceSnapshot {
       'reconnect_attempts': reconnectAttempts,
       'reconnect_delay_ms': reconnectDelayMs,
       'metrics': metrics,
+      'event_sync_enabled': eventSyncEnabled,
     };
   }
 }
@@ -216,6 +223,7 @@ class BackgroundPlaybackService {
     required int startBufferMs,
     required int maxBufferMs,
     required int pingIntervalMs,
+    bool eventSyncEnabled = false,
   }) async {
     await _methodChannel.invokeMethod<void>('setOptions', <String, dynamic>{
       'startBufferMs': startBufferMs,
@@ -247,6 +255,18 @@ class BackgroundPlaybackService {
       'lowDb': lowDb,
       'midDb': midDb,
       'highDb': highDb,
+    });
+  }
+
+  Future<void> setRemoteVolumePct(int volumePct) async {
+    await _methodChannel.invokeMethod<void>('setRemoteVolumePct', <String, dynamic>{
+      'volume_pct': volumePct,
+    });
+  }
+
+  Future<void> setEventSyncEnabled(bool enabled) async {
+    await _methodChannel.invokeMethod<void>('setEventSyncEnabled', <String, dynamic>{
+      'enabled': enabled,
     });
   }
 

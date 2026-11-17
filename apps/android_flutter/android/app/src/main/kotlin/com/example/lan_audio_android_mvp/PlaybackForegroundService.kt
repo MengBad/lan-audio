@@ -175,11 +175,13 @@ class PlaybackForegroundService : MediaSessionService() {
                 val startBufferMs = intent.getIntExtra(PlaybackActions.EXTRA_START_BUFFER_MS, 60)
                 val maxBufferMs = intent.getIntExtra(PlaybackActions.EXTRA_MAX_BUFFER_MS, 300)
                 val pingIntervalMs = intent.getIntExtra(PlaybackActions.EXTRA_PING_INTERVAL_MS, 1000)
+                val eventSyncEnabled = intent.getBooleanExtra(PlaybackActions.EXTRA_EVENT_SYNC_ENABLED, false)
                 sessionController.setOptions(
                     PlaybackOptions(
                         startBufferMs = startBufferMs,
                         maxBufferMs = maxBufferMs,
                         pingIntervalMs = pingIntervalMs,
+                        eventSyncEnabled = eventSyncEnabled,
                     ),
                 )
             }
