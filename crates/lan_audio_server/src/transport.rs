@@ -793,17 +793,6 @@ impl BroadcastTransport {
             let dataplane_frame = DataPlaneEncodedFrame::new(wire.wire_bytes);
             match plane.send_frame(&dataplane_frame).await {
                 Ok(()) => {
-                    // AudioRelay-style retransmission cache (WiFi only, bounded).
-                    if let ClientTransportSnapshot::Wifi(addr) = &wire.client.transport {
-                        if let Ok(mut cache) = self.frame_cache.lock() {
-                            if cache.len() >= 64 {
-                                if let Some(oldest) = cache.keys().min().copied() {
-                                    cache.remove(&oldest);
-                                }
-                            }
-                            cache.insert(wire.packet.sequence, (*addr, wire.wire_bytes.clone()));
-                        }
-                    }
                     self.metrics.inc_packets(frame_len);
                     tx_stats.observe(
                         &wire.packet,

@@ -10,8 +10,7 @@ use lan_audio_protocol::{REVERSE_CONTROL_PORT, REVERSE_TCP_PORT};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tokio::time::{sleep, Duration as TokioDuration};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -36,13 +35,22 @@ pub async fn run_discovery_broadcast(
     cfg: DiscoveryConfig,
     mut shutdown: broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let mut bound = bind_discovery_socket(&cfg).await?;
-    log_broadcast_binding(&bound);
+    let socket = UdpSocket::bind(cfg.bind_addr)
+        .await
+        .with_context(|| format!("bind discovery socket: {}", cfg.bind_addr))?;
+    socket.set_broadcast(true)?;
+    let targets = discovery_targets(cfg.broadcast_addr);
+    let bind = socket.local_addr().unwrap_or(cfg.bind_addr);
+    let targets_text = targets
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
 
     info!(
-        bind = %bound.bind,
+        bind = %bind,
         broadcast = %cfg.broadcast_addr,
-        targets = %bound.targets_text,
+        targets = %targets_text,
         "discovery broadcaster started"
     );
 
@@ -65,16 +73,10 @@ pub async fn run_discovery_broadcast(
                 };
                 match serde_json::to_vec(&beacon) {
                     Ok(payload) => {
-                        let mut send_failed = false;
-                        for target in &bound.targets {
-                            if let Err(err) = bound.socket.send_to(&payload, target).await {
-                                send_failed = true;
+                        for target in &targets {
+                            if let Err(err) = socket.send_to(&payload, target).await {
                                 warn!(error = %err, target = %target, "failed sending discovery beacon");
                             }
-                        }
-                        if send_failed {
-                            warn!("discovery broadcast send failed; refreshing interface binding");
-                            bound = rebind_discovery_socket(&cfg).await;
                         }
                     }
                     Err(err) => warn!(error = %err, "failed serialize discovery beacon"),
@@ -99,12 +101,22 @@ pub async fn run_mdns_registration(
         return Ok(());
     }
 
-    let service = mdns_service_info(cfg, service_type, &instance_name, &host_name, &host_ips)
-        .context("create mDNS service info")?;
-    let service_fullname = service.get_fullname().to_string();
+    let txt = [
+        ("version".to_string(), cfg.version.clone()),
+        ("mode".to_string(), cfg.mode.clone()),
+    ];
+    let service = ServiceInfo::new(
+        service_type,
+        &instance_name,
+        &host_name,
+        host_ips.as_slice(),
+        cfg.ws_port,
+        txt.as_slice(),
+    )
+    .context("create mDNS service info")?;
     let daemon = ServiceDaemon::new().context("create mDNS service daemon")?;
     daemon
-        .register(service.clone())
+        .register(service)
         .context("register LAN Audio mDNS service")?;
 
     info!(
@@ -115,151 +127,10 @@ pub async fn run_mdns_registration(
         "mDNS service registered"
     );
 
-    let mut registered = Some((daemon, service, service_fullname));
-    loop {
-        let refreshed = tokio::select! {
-            _ = shutdown.recv() => break,
-            _ = sleep(TokioDuration::from_secs(30)) => {
-                refresh_mdns_registration(&mut registered, cfg, service_type, &instance_name, &host_name)
-            }
-        };
-        let _ = refreshed;
-    }
-
+    let _ = shutdown.recv().await;
     info!("mDNS service stopping");
-    if let Some((daemon, _, fullname)) = registered.take() {
-        let _ = daemon.unregister(&fullname);
-        daemon.shutdown().context("shutdown mDNS service daemon")?;
-    }
+    daemon.shutdown().context("shutdown mDNS service daemon")?;
     Ok(())
-}
-
-struct BoundDiscovery {
-    socket: UdpSocket,
-    bind: SocketAddr,
-    targets: Vec<SocketAddr>,
-    targets_text: String,
-}
-
-async fn bind_discovery_socket(cfg: &DiscoveryConfig) -> anyhow::Result<BoundDiscovery> {
-    let socket = UdpSocket::bind(cfg.bind_addr)
-        .await
-        .with_context(|| format!("bind discovery socket: {}", cfg.bind_addr))?;
-    socket.set_broadcast(true)?;
-    Ok(bound_discovery(socket, cfg))
-}
-
-fn bound_discovery(socket: UdpSocket, cfg: &DiscoveryConfig) -> BoundDiscovery {
-    let bind = socket.local_addr().unwrap_or(cfg.bind_addr);
-    let targets = discovery_targets(cfg.broadcast_addr);
-    let targets_text = targets
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    BoundDiscovery {
-        socket,
-        bind,
-        targets,
-        targets_text,
-    }
-}
-
-fn log_broadcast_binding(bound: &BoundDiscovery) {
-    debug!(
-        bind = %bound.bind,
-        targets = %bound.targets_text,
-        "discovery broadcast binding refreshed"
-    );
-}
-
-async fn rebind_discovery_socket(cfg: &DiscoveryConfig) -> BoundDiscovery {
-    let mut backoff = TokioDuration::from_millis(100);
-    loop {
-        sleep(backoff).await;
-        match bind_discovery_socket(cfg).await {
-            Ok(bound) => {
-                log_broadcast_binding(&bound);
-                return bound;
-            }
-            Err(err) => {
-                warn!(error = %err, "discovery broadcast rebind failed; retrying");
-                backoff = backoff.saturating_mul(2).min(TokioDuration::from_secs(5));
-            }
-        }
-    }
-}
-
-fn mdns_service_info(
-    cfg: &MdnsServiceConfig,
-    service_type: &str,
-    instance_name: &str,
-    host_name: &str,
-    host_ips: &[IpAddr],
-) -> anyhow::Result<ServiceInfo> {
-    let txt = [
-        ("version".to_string(), cfg.version.clone()),
-        ("mode".to_string(), cfg.mode.clone()),
-    ];
-    ServiceInfo::new(
-        service_type,
-        instance_name,
-        host_name,
-        host_ips,
-        cfg.ws_port,
-        txt.as_slice(),
-    )
-    .context("create mDNS service info")
-}
-
-fn refresh_mdns_registration(
-    registered: &mut Option<(ServiceDaemon, ServiceInfo, String)>,
-    cfg: &MdnsServiceConfig,
-    service_type: &str,
-    instance_name: &str,
-    host_name: &str,
-) -> bool {
-    let host_ips = local_ipv4_addrs();
-    if host_ips.is_empty() {
-        warn!("mDNS refresh skipped: no non-loopback IPv4 address");
-        return false;
-    }
-
-    let refreshed = match mdns_service_info(cfg, service_type, instance_name, host_name, &host_ips)
-    {
-        Ok(service) => service,
-        Err(err) => {
-            warn!(error = %err, "mDNS refresh service info failed");
-            return false;
-        }
-    };
-
-    let current: BTreeSet<IpAddr> = registered
-        .as_ref()
-        .map(|(_, service, _)| service.get_addresses().iter().copied().collect())
-        .unwrap_or_default();
-    let desired: BTreeSet<IpAddr> = host_ips.iter().copied().collect();
-    if current == desired {
-        return false;
-    }
-
-    let fullname = refreshed.get_fullname().to_string();
-    let (daemon, _, _) = match registered.take() {
-        Some(existing) => existing,
-        None => return false,
-    };
-    // ServiceDaemon::register re-announces the same fullname with updated addresses.
-    match daemon.register(refreshed.clone()) {
-        Ok(()) => {
-            info!(targets = ?host_ips, "mDNS registration refreshed for interface change");
-            *registered = Some((daemon, refreshed, fullname));
-            true
-        }
-        Err(err) => {
-            warn!(error = %err, "mDNS re-register failed; keeping daemon for next refresh");
-            false
-        }
-    }
 }
 
 fn now_ms() -> u64 {

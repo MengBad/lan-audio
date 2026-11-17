@@ -2,57 +2,24 @@ use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::task::yield_now;
 use tracing::{debug, info, warn};
-use windows::core::Interface;
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, EDataFlow, ERole, IAudioCaptureClient, IAudioClient, IMMDevice,
-    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
-const HOTPLUG_CHECK_INTERVAL: Duration = Duration::from_secs(2);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum HotplugCode {
-    None = 0,
-    DeviceRemoved = 1,
-    DefaultDeviceChanged = 2,
-}
-
-impl From<u8> for HotplugCode {
-    fn from(value: u8) -> Self {
-        match value {
-            1 => Self::DeviceRemoved,
-            2 => Self::DefaultDeviceChanged,
-            _ => Self::None,
-        }
-    }
-}
-
-impl From<HotplugCode> for DeviceChangeStatus {
-    fn from(value: HotplugCode) -> Self {
-        match value {
-            HotplugCode::None => Self::None,
-            HotplugCode::DeviceRemoved => Self::DeviceRemoved,
-            HotplugCode::DefaultDeviceChanged => Self::DefaultDeviceChanged,
-        }
-    }
-}
-
 use super::pcm_accumulator::{PacketKind, PcmFrameAccumulator};
 use super::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
-    CaptureSourceState, DeviceChangeStatus, SampleFormat,
+    CaptureSourceState, SampleFormat,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,9 +253,6 @@ pub struct WindowsLoopbackCapture {
     source_buffer_frames: u32,
     debug_wav: Option<PcmDebugWavWriter>,
     capture_stats: CaptureStatsWindow,
-    device_change_status: Arc<AtomicU8>,
-    active_device_id: Arc<RwLock<Option<String>>>,
-    default_check_at: Instant,
 }
 
 unsafe impl Send for WindowsLoopbackCapture {}
@@ -323,9 +287,6 @@ impl WindowsLoopbackCapture {
             source_buffer_frames: 0,
             debug_wav,
             capture_stats: CaptureStatsWindow::new(),
-            device_change_status: Arc::new(AtomicU8::new(0)),
-            active_device_id: Arc::new(RwLock::new(None)),
-            default_check_at: Instant::now() + HOTPLUG_CHECK_INTERVAL,
         })
     }
 
@@ -333,29 +294,6 @@ impl WindowsLoopbackCapture {
         self.state = CaptureSourceState::Failed;
         self.recent_error = Some(err.clone());
         err
-    }
-
-    fn publish_hotplug_status(&mut self) {
-        let status = self.hotplug_status();
-        if status != DeviceChangeStatus::None {
-            debug!(?status, "capture hotplug status pending");
-        }
-    }
-
-    fn hotplug_status(&self) -> DeviceChangeStatus {
-        DeviceChangeStatus::from(HotplugCode::from(
-            self.device_change_status.load(Ordering::Acquire),
-        ))
-    }
-
-    fn mark_device_removed(&mut self) {
-        self.device_change_status
-            .store(HotplugCode::DeviceRemoved as u8, Ordering::Release);
-    }
-
-    fn mark_default_device_changed(&mut self) {
-        self.device_change_status
-            .store(HotplugCode::DefaultDeviceChanged as u8, Ordering::Release);
     }
 
     fn resolve_default_output_device(&mut self) -> Result<IMMDevice, CaptureError> {
@@ -383,9 +321,6 @@ impl WindowsLoopbackCapture {
                 self.set_failed(CaptureError::DeviceActivationFailed(e.to_string()))
             })?;
             self.device_name = Some(id_text.clone());
-            if let Ok(mut active) = self.active_device_id.write() {
-                *active = Some(id_text.clone());
-            }
             // TODO(wasapi): query friendly display name via property store.
 
             CoTaskMemFree(Some(id.0 as _));
@@ -581,37 +516,6 @@ impl WindowsLoopbackCapture {
         Ok(())
     }
 
-    fn check_device_hotplug(&mut self) {
-        if !self.state_is_started() || Instant::now() < self.default_check_at {
-            return;
-        }
-        self.default_check_at = Instant::now() + HOTPLUG_CHECK_INTERVAL;
-        unsafe {
-            if let Ok(enumerator) =
-                CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
-            {
-                let default_device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok();
-                let default_id = default_device
-                    .as_ref()
-                    .and_then(|device| device.GetId().ok());
-                let default_text = default_id.as_ref().and_then(|id| id.to_string().ok());
-                let _ = default_id.as_ref().map(|id| CoTaskMemFree(Some(id.0 as _)));
-
-                match (default_text.as_deref(), self.active_device_id.read().ok()) {
-                    (Some(current), Ok(active)) if active.as_deref() != Some(current) => {
-                        self.mark_default_device_changed();
-                    }
-                    (None, _) => self.mark_device_removed(),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    fn state_is_started(&self) -> bool {
-        self.state == CaptureSourceState::Started
-    }
-
     fn fill_accumulator_from_packets(&mut self) -> Result<PacketReadStatus, CaptureError> {
         let capture = self.capture_client.clone().ok_or_else(|| {
             self.set_failed(CaptureError::ReadBufferFailed(
@@ -630,15 +534,9 @@ impl WindowsLoopbackCapture {
 
         unsafe {
             loop {
-                let packet_frames = capture.GetNextPacketSize().map_err(|e| {
-                    if e.code() == AUDCLNT_E_DEVICE_INVALIDATED {
-                        warn!(error = %e, "WASAPI device invalidated during capture");
-                        self.mark_device_removed();
-                        self.publish_hotplug_status();
-                        return Ok(PacketReadStatus::NoPacket);
-                    }
-                    self.set_failed(CaptureError::ReadBufferFailed(e.to_string()))
-                })?;
+                let packet_frames = capture
+                    .GetNextPacketSize()
+                    .map_err(|e| self.set_failed(CaptureError::ReadBufferFailed(e.to_string())))?;
 
                 if packet_frames == 0 {
                     break;
@@ -651,15 +549,7 @@ impl WindowsLoopbackCapture {
 
                 capture
                     .GetBuffer(&mut data_ptr, &mut num_frames, &mut flags, None, None)
-                    .map_err(|e| {
-                        if e.code() == AUDCLNT_E_DEVICE_INVALIDATED {
-                            warn!(error = %e, "WASAPI device invalidated during buffer read");
-                            self.mark_device_removed();
-                            self.publish_hotplug_status();
-                            return Ok(PacketReadStatus::NoPacket);
-                        }
-                        self.set_failed(CaptureError::ReadBufferFailed(e.to_string()))
-                    })?;
+                    .map_err(|e| self.set_failed(CaptureError::ReadBufferFailed(e.to_string())))?;
 
                 let is_silence = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
                 let channels = fmt.channels as usize;
@@ -791,9 +681,6 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
             return Err(CaptureError::NotStarted);
         }
 
-        self.check_device_hotplug();
-        self.publish_hotplug_status();
-
         // On Windows the default timer granularity is often about 15.6ms, so
         // `sleep(1ms)`/`sleep(2ms)` can stretch a 10-iteration poll loop into
         // roughly 150ms and collapse playout to ~6fps. Keep polling within one
@@ -867,14 +754,6 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
 
     fn device_name(&self) -> Option<String> {
         self.device_name.clone()
-    }
-
-    fn device_change_status(&self) -> DeviceChangeStatus {
-        self.hotplug_status()
-    }
-
-    fn clear_device_change_status(&self) {
-        self.device_change_status.store(0u8, Ordering::Release);
     }
 }
 

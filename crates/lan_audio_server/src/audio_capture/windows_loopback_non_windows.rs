@@ -1,8 +1,8 @@
-use async_trait::async_trait;
+﻿use async_trait::async_trait;
 
 use super::{
     AudioCaptureSource, AudioFormat, AudioFrame, CaptureDebugDumpConfig, CaptureError,
-    CaptureSourceState, DeviceChangeStatus,
+    CaptureSourceState,
 };
 
 /// Non-Windows placeholder implementation.
@@ -53,12 +53,6 @@ impl AudioCaptureSource for WindowsLoopbackCapture {
     fn source_name(&self) -> &'static str {
         "windows_loopback"
     }
-
-    fn device_change_status(&self) -> DeviceChangeStatus {
-        DeviceChangeStatus::None
-    }
-
-    fn clear_device_change_status(&self) {}
 }
 
 #[cfg(test)]
@@ -77,15 +71,5 @@ mod tests {
         )
         .expect_err("must be unsupported");
         assert!(matches!(err, CaptureError::UnsupportedPlatform(_)));
-    }
-
-    #[test]
-    fn non_windows_hotplug_status_is_noop() {
-        let source = WindowsLoopbackCapture {
-            state: CaptureSourceState::Created,
-        };
-        assert_eq!(source.device_change_status(), DeviceChangeStatus::None);
-        source.clear_device_change_status();
-        assert_eq!(source.device_change_status(), DeviceChangeStatus::None);
     }
 }
