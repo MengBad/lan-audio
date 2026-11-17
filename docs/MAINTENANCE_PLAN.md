@@ -156,3 +156,9 @@ cargo run -p lan_audio_server --bin desktop_headless -- --no-adaptive-runtime
 - 桌面 Rust：`commands.rs`/`state.rs`/`orchestrator.rs` 为死代码（`lib.rs` 未 mod 声明），真实逻辑在 lib.rs；三文件与运行实现已漂移，后续应删除或接入，避免误改。
 - 门控证据：`artifacts/release/acceptance_gate.json` 的 artifact-presence 字段为历史值；本机无 v1.16.1 本地产物，最终 APK/EXE 由 GitHub Actions 云端产出。真机长稳样本仍是 2026-04-22 debug 构建，**当前 UI 构建未做长稳验证**。
 - 发布按"人工判定 + CI 编译门控"执行：编译/CI/门控契约全过；真机长稳与 USB direct 10min 仍列为未验证。
+## 11. v1.17 逆向补全与发布（2026-05-25）
+
+- 逆向 AudioRelay 0.27.5 Windows 样本（静态解包 + .NET 元数据），规格见 `docs/audiorelay_reverse_engineering.md`。
+- 已发布落地：有界丢包重传（UDP seq 缺口→WS 请求→服务端 64 帧缓存重发，默认关的 event-sync 缓冲）、手机音量反向同步到 AudioManager、桌面音量渲染与远程控制显示。
+- **未纳入本版**：Windows 设备热插拔（MMDevice polling/mDNS 重绑）因本地无 MSVC linker 无法编译验证，CI 报编译错误后已从 v1.16.2 回退，留作后续 PR 在可编译环境完善；CHANGELOG 中相关描述需按此事实理解。
+- 全部本地门控、flutter 46 tests、CI（43988207602）全绿；Release v1.17 四平台产物已发布。
