@@ -690,9 +690,12 @@ class MainActivity : FlutterActivity() {
             onVolumeChanged = { volumePct ->
                 Log.i(logTag, "Volume changed from control channel: $volumePct%")
                 try {
-                    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    val target = (volumePct.coerceIn(0, 100) * max / 100)
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                    val am = applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                    if (am != null) {
+                        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val target = (volumePct.coerceIn(0, 100) * max / 100)
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                    }
                 } catch (_: Exception) {}
                 try {
                     platformChannel.invokeMethod("volumeChanged", mapOf("volume_pct" to volumePct))
